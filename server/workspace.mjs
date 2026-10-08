@@ -80,6 +80,9 @@ export class Workspace {
     /** 이 프로세스가 쓴 (문서, 판) — 이력 감시가 내 저장을 다시 알리지 않게. 그 줄을 한 번 보면 지운다 @type {Set<string>} */
     this.ownWrites = new Set();
     this.pcConfigFile = opts.pcConfigFile || defaultPcConfigFile();
+    /** 폴더 나무 (상대 경로 → 문서가 아닌 파일 수) @type {Record<string, { files: number }>} */
+    this.folders = { '': { files: 0 } };
+    this.folderSig = '';
   }
 
   // ------------------------------------------------------------ 시작
@@ -130,6 +133,7 @@ export class Workspace {
   // ------------------------------------------------------------ 훑기
   async scan() {
     const found = new Map();
+    const tally = core.folderTally();
     const walk = async (dir, depth) => {
       if (depth > 12 || found.size >= this.config.maxDocs) return;
       let ents = [];
@@ -137,9 +141,11 @@ export class Workspace {
       for (const e of ents) {
         if (e.isSymbolicLink()) continue;
         const abs = path.join(dir, e.name);
-        if (e.isDirectory()) { if (core.walkable(e.name)) await walk(abs, depth + 1); continue; }
+        if (e.isDirectory()) { if (core.walkable(e.name)) { tally.dir(this.rel(abs)); await walk(abs, depth + 1); } continue; }
         const rel = this.rel(abs);
-        if (!this.isDoc(rel)) continue;
+        const isDoc = this.isDoc(rel);
+        if (e.isFile()) tally.file(rel, isDoc);
+        if (!isDoc) continue;
         const st = await fs.stat(abs).catch(() => null);
         if (!st) continue;
         const prev = this.docs.get(rel);
@@ -147,8 +153,12 @@ export class Workspace {
       }
     };
     await walk(this.root, 0);
-    const changed = found.size !== this.docs.size || [...found.keys()].some((k) => !this.docs.has(k));
+    const folders = tally.result();
+    const sig = Object.keys(folders).sort().join('|');
+    const changed = found.size !== this.docs.size || [...found.keys()].some((k) => !this.docs.has(k)) || sig !== this.folderSig;
     this.docs = found;
+    this.folders = folders;
+    this.folderSig = sig;
     return changed;
   }
 
@@ -392,7 +402,7 @@ export class Workspace {
     /** @type {Map<string, { title: string, size?: number, mtimeMs?: number }>} */
     const info = new Map();
     for (const [id, d] of this.docs) info.set(id, { title: await this.titleOf(id), size: d.size, mtimeMs: d.mtimeMs });
-    return core.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI);
+    return core.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI, { folders: this.folders, rootName: path.basename(this.root) });
   }
 
   // ------------------------------------------------------------ 피드백

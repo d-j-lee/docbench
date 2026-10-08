@@ -25,6 +25,13 @@ export interface Manifest {
   render?: RenderRules;
   /** 화면 문구 중 AI 쪽 이름. 예: "Claude" */
   assistantName?: string;
+  /**
+   * 작업 폴더의 실제 폴더 구조 (상대 경로 → 그 폴더 바로 아래 문서가 아닌 파일 수). '' = 맨 위.
+   * 있으면 왼쪽 목록을 탐색기처럼 폴더 나무로 그리고, 문서가 없는 폴더도 흐리게 보여 준다.
+   */
+  folders?: Record<string, { files: number }>;
+  /** 작업 폴더 이름 (나무 맨 위) */
+  rootName?: string;
 }
 
 export interface DocGroup {
@@ -126,7 +133,8 @@ export interface ChangeEntry {
 }
 
 export interface DocEvent {
-  type: 'doc' | 'manifest' | 'changes' | 'feedback' | 'request';
+  /** runs = Claude 작업(요청·상태·로그)이 바뀜, runner = 실행기가 켜지거나 꺼짐 */
+  type: 'doc' | 'manifest' | 'changes' | 'feedback' | 'request' | 'runs' | 'runner';
   id?: string;
 }
 
@@ -143,6 +151,10 @@ export interface DocSource {
   subscribe?(cb: (ev: DocEvent) => void): Unsubscribe;
   /** 화면이 지금 보고 있는 문서(없으면 null). 폴링하는 어댑터가 이 문서를 더 자주 확인하는 데 쓴다 */
   focus?(id: string | null): void;
+  /** 이 문서를 마지막으로 디스크·저장소와 맞춰 본 시각(ms). 실시간 감시면 비운다 */
+  checkedAt?(id: string): number | undefined;
+  /** 지금 바로 디스크와 맞춰 본다(바깥 편집이면 이력에 남기고 doc 이벤트). 바뀌었으면 true */
+  refresh?(id: string): Promise<boolean>;
 }
 
 // ---------------------------------------------------------------- 피드백
@@ -250,6 +262,13 @@ export interface ViewState {
   groups?: Record<string, boolean>;
   panel?: { scope?: 'doc' | 'all'; filter?: PanelFilter; open?: boolean };
   map?: { open?: Record<string, boolean>; filters?: Record<string, unknown> };
+  /** Claude 작업 창: 고른 모델·노력·방식, 열림 */
+  /** chosen = 이름 맞추기 안내를 접은 표시, runner = 내가 고른 실행기 id (이름이 다른 실행기를 내 것으로 쓸 때) */
+  runs?: { model?: string; effort?: RunEffort | ''; mode?: RunMode; open?: boolean; chosen?: string; runner?: string };
+  /** 변경 표시(더한 글·지운 글)를 문서 위에 그릴지 */
+  showChanges?: boolean;
+  /** 왼쪽 문서 목록: 폴더 나무 / config.json 의 모음 */
+  railView?: 'folder' | 'groups';
 }
 
 export type PanelFilter = 'active' | 'owner' | 'assistant' | 'closed';
@@ -265,7 +284,9 @@ export type Action =
   | 'feedback.update'
   | 'feedback.delete'
   | 'assistant.propose'
-  | 'assistant.notify';
+  | 'assistant.notify'
+  /** 백그라운드 Claude 작업(넘기기·제안)을 시작 */
+  | 'assistant.run';
 
 export interface Identity {
   me(): Promise<Person>;
@@ -306,6 +327,102 @@ export interface DocBenchAdapters {
   assistant?: Assistant;
   notifier?: Notifier;
   platform?: Platform;
+  /** 백그라운드 Claude 작업 — 서버(docbench serve·대시보드)는 직접, 단일 HTML 은 이 PC 의 실행기(docbench runner)가 띄운다 */
+  runs?: RunsAdapter;
+}
+
+// ---------------------------------------------------------------- Claude 작업 (백그라운드 실행)
+
+/** handoff = Claude 차례 피드백을 처리(고침·제안·답·질문·보류), propose = 고르게 한 피드백에 수정 제안만 */
+export type RunKind = 'handoff' | 'propose';
+/** auto = Claude 가 판단해 바로 고치기도 한다, propose = 고치지 않고 제안만 올린다 */
+export type RunMode = 'auto' | 'propose';
+export type RunEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type RunState = 'queued' | 'running' | 'done' | 'failed' | 'canceled';
+
+export interface RunStartInput {
+  kind: RunKind;
+  feedbackIds: string[];
+  /** 'opus' 'sonnet' 같은 별칭이나 전체 모델 이름. 비우면 Claude Code 기본값 */
+  model?: string;
+  effort?: RunEffort;
+  mode?: RunMode;
+}
+
+export interface RunRequest extends RunStartInput {
+  id: string;
+  at: string;
+  by?: Person;
+  /** 이 요청을 실행할 실행기 id (폴더를 함께 쓰는 다른 PC 의 실행기가 집어 가지 않게) */
+  runner: string;
+}
+
+export interface RunSummary { edited: number; proposed: number; answered: number; asked: number; declined: number; skipped: number; failed: number }
+
+export interface RunStatus extends RunRequest {
+  state: RunState;
+  startedAt?: string;
+  endedAt?: string;
+  /** 지금 하는 일 (실행 중일 때만) */
+  progress?: { phase: 'starting' | 'thinking' | 'reading' | 'writing' | 'applying'; tokens?: number; at: string };
+  summary?: RunSummary;
+  /** 처리한 피드백의 문서 */
+  docs?: string[];
+  error?: string;
+  usage?: { model?: string; durationMs?: number; turns?: number; inputTokens?: number; outputTokens?: number; costUsd?: number; limit?: { window: string; utilization?: number; resetsAt?: number } };
+}
+
+/** 작업 로그 한 줄. k = 화면 사전의 'run.log.<k>' (값은 v), text = Claude 가 쓴 글 */
+export interface RunLogLine {
+  at: string;
+  k: string;
+  v?: Record<string, string | number | undefined>;
+  text?: string;
+  ref?: { docId?: string; feedbackId?: string; section?: string };
+}
+
+export interface RunnerInfo {
+  id: string;
+  /** 'runner' = 단일 HTML 용 실행기, 'server' = docbench serve·대시보드 */
+  kind: 'runner' | 'server';
+  user: string;
+  host: string;
+  pid: number;
+  version: string;
+  protocol: number;
+  startedAt: string;
+  seenAt: string;
+  claude: { ok: boolean; version?: string; problem?: string; reason?: 'no-claude' | 'old-claude' };
+  models: string[];
+  efforts: RunEffort[];
+  busy?: string | null;
+  queue?: number;
+}
+
+export interface RunsAvailability {
+  available: boolean;
+  /**
+   * no-runner = 실행기가 꺼져 있음, not-mine = 켜진 실행기가 내 이름과 다름(저절로 맡기지 않음 — 내 PC 의 것이면 고른다),
+   * no-claude = claude 를 못 찾음, old-claude = 안전 실행 플래그가 없는 판, read-only = 폴더에 쓸 수 없음
+   */
+  reason?: 'no-runner' | 'not-mine' | 'no-claude' | 'old-claude' | 'read-only' | 'disabled';
+  message?: string;
+  runner?: RunnerInfo;
+  /** 폴더를 함께 쓰는 다른 실행기들 (여럿이면 고른다) */
+  others?: RunnerInfo[];
+}
+
+export interface RunsAdapter {
+  status(): Promise<RunsAvailability>;
+  start(input: RunStartInput): Promise<RunStatus>;
+  cancel(id: string): Promise<void>;
+  list(limit?: number): Promise<RunStatus[]>;
+  /** from = 지난번 next (처음 0). 완성된 줄만 준다 */
+  log(id: string, from: number): Promise<{ lines: RunLogLine[]; next: number }>;
+  /** 여럿일 때 쓸 실행기를 고른다 (폴더 어댑터) */
+  choose?(runnerId: string): void;
+  /** 실행기가 없을 때 보여 줄 설치 안내의 재료 (단일 HTML — 받을 CLI 주소·지문) */
+  setup?: { version: string; cliUrl: string; sha256: string; folderName: string };
 }
 
 // ---------------------------------------------------------------- 폴더 지도

@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import iconv from 'iconv-lite';
 import { decodeBytes, encodeText, restoreEol, EncodingReadOnlyError, type LegacyCodec } from '../../src/core/textcodec';
 import { sha256Hex } from '../../src/adapters/folder';
-import { pcSettingsFor, mergeGitignore, mergeConfig } from '../../src/core/workspace';
+import { pcSettingsFor, mergeGitignore, mergeConfig, DOT_GITIGNORE } from '../../src/core/workspace';
 
 const u8 = (...parts: (number[] | string)[]) => new Uint8Array(parts.flatMap((p) => (typeof p === 'string' ? [...Buffer.from(p, 'utf8')] : p)));
 const cp949: LegacyCodec = {
@@ -98,7 +98,9 @@ describe('PC 설정·.gitignore', () => {
     expect([c.user, c.assistant, c.notify.command, c.notify.message, c.warnings?.length]).toEqual(['', null, ['ok'], 'm', 3]);
   });
   it('mergeGitignore: 빠진 줄만 덧붙이고 사람이 더한 줄은 그대로', () => {
-    expect(mergeGitignore('blobs/\nmine/')).toBe('blobs/\nmine/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\n');
-    expect(mergeGitignore('blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\n')).toBeNull();
+    expect(mergeGitignore('blobs/\nmine/')).toBe('blobs/\nmine/\nviewstate/\ninbox/\nlocks/\nruns/\nrunners/\nstate.json\n*.tmp\n');
+    // 0.2.0 이 만든 .gitignore 에는 Claude 작업 폴더(runs/·runners/)만 더한다
+    expect(mergeGitignore('blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\n')).toBe('blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\nruns/\nrunners/\n');
+    expect(mergeGitignore(DOT_GITIGNORE)).toBeNull();
   });
 });

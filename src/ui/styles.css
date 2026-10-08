@@ -106,7 +106,11 @@
 .docbench .db-toggle { display: none; }
 
 /* ---------- 3단 골격 ---------- */
-.docbench .db-shell { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: var(--db-rail) minmax(0, 1fr) var(--db-panel); }
+.docbench .db-shell { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: var(--db-rail) minmax(0, 1fr) var(--db-panel); grid-template-rows: minmax(0, 1fr) auto; }
+.docbench .db-rail { grid-column: 1; grid-row: 1 / span 2; }
+.docbench .db-main { grid-column: 2; grid-row: 1; }
+.docbench .db-panel { grid-column: 3; grid-row: 1 / span 2; }
+.docbench .db-dock { grid-column: 2; grid-row: 2; }
 .docbench .db-rail, .docbench .db-main, .docbench .db-panel { min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .docbench .db-rail { background: var(--db-surface); border-right: 1px solid var(--db-line); padding: 12px 10px 40px; }
 .docbench .db-panel { background: var(--db-surface); border-left: 1px solid var(--db-line); display: flex; flex-direction: column; overflow: hidden; }
@@ -123,11 +127,12 @@
 }
 @container docbench (max-width: 760px) {
   .docbench .db-shell { grid-template-columns: minmax(0, 1fr); }
+  .docbench .db-main, .docbench .db-dock { grid-column: 1; }
   .docbench .db-rail { position: absolute; inset: 0 auto 0 0; width: min(300px, 88%); z-index: 8; box-shadow: var(--db-shadow); transform: translateX(-105%); transition: transform .18s; }
   .docbench.rail-open .db-rail { transform: none; }
   .docbench.rail-open .db-scrim { display: block; position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.22); }
   .docbench .db-toggle.nav { display: inline-flex; }
-  .docbench .db-brand small, .docbench .db-clock.plan, .docbench .db-clock .lbl, .docbench .db-pill .lbl, .docbench .db-bar .db-send { display: none; }
+  .docbench .db-brand small, .docbench .db-clock.plan, .docbench .db-clock .lbl, .docbench .db-pill .lbl, .docbench .db-bar .db-send, .docbench .db-claude .clk { display: none; }
   .docbench .db-bar { gap: 6px; padding-inline: 10px; }
   .docbench .db-page { padding-left: 4px; }
   .docbench .db-main { padding-inline: 16px; }
@@ -404,7 +409,13 @@
 .docbench .db-logi .when { font: 11.5px var(--db-font-mono); color: var(--db-ink-3); }
 
 /* ---------- 알림 ---------- */
-.docbench .db-toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--db-ink); color: var(--db-surface); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 20; box-shadow: var(--db-shadow); max-width: calc(100% - 32px); }
+.docbench .db-toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; background: var(--db-ink); color: var(--db-surface); padding: 7px 8px 7px 14px; border-radius: 9px; font-size: 13px; line-height: 1.5; z-index: 20; box-shadow: var(--db-shadow); max-width: min(680px, calc(100% - 32px)); }
+.docbench .db-toast .m { flex: 1; min-width: 0; }
+.docbench .db-toast .db-btn { background: transparent; color: var(--db-surface); border-color: color-mix(in srgb, var(--db-surface) 45%, transparent); }
+.docbench .db-toast-x { flex: none; border: 0; background: none; color: inherit; opacity: .7; width: 22px; height: 22px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+.docbench .db-toast-x:hover { opacity: 1; background: color-mix(in srgb, var(--db-surface) 15%, transparent); }
+.docbench .db-toast-x svg { width: 10px; height: 10px; }
+.docbench.dock-open .db-toast { bottom: auto; top: calc(var(--db-bar) + 12px); }
 .docbench .db-loading { color: var(--db-ink-3); padding: 40px 0; text-align: center; }
 
 /* ---------------------------------------------------------------- 서버 없는 단일 HTML: 폴더 열기 화면 */
@@ -427,3 +438,171 @@
   .docbench .db-start { padding: 20px 16px 16px; }
   .docbench .db-start-acts .db-btn { flex: 1 1 100%; justify-content: center; }
 }
+
+/* ---------------------------------------------------------------- 레일: 도구 · 폴더 나무 */
+.docbench .db-rail-h { display: flex; align-items: center; gap: 6px; padding: 2px 8px 4px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; color: var(--db-ink-3); }
+.docbench .db-rail-h .ic svg { width: 13px; height: 13px; display: block; }
+.docbench .db-rail-h span:not(.ic) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--db-ink-2); letter-spacing: 0; font-size: 12.5px; }
+.docbench .db-rail-h small { font-weight: 500; letter-spacing: 0; }
+.docbench .db-tools { display: flex; flex-direction: column; gap: 1px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--db-line); }
+.docbench .db-tool { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; border-radius: 7px; padding: 5px 8px; text-align: left; font-size: 13px; color: var(--db-ink-2); line-height: 1.35; }
+.docbench .db-tool .ic { flex: none; width: 22px; height: 22px; border-radius: 6px; background: var(--db-sunk); color: var(--db-ink-2); display: inline-flex; align-items: center; justify-content: center; }
+.docbench .db-tool .ic svg { width: 13px; height: 13px; }
+.docbench .db-tool[data-tool="claude"] .ic { background: var(--db-go-soft); color: var(--db-go); }
+.docbench .db-tool .t { flex: 1; min-width: 0; }
+.docbench .db-tool:hover { background: var(--db-sunk); color: var(--db-ink); }
+.docbench .db-tool[aria-pressed="true"] { background: var(--db-go-soft); color: var(--db-ink); font-weight: 600; }
+.docbench .db-dot.off { background: var(--db-sunk); color: var(--db-ink-3); font-family: var(--db-font-body); }
+.docbench .db-docs .db-rail-h { padding-bottom: 6px; }
+.docbench .db-ftree { display: flex; flex-direction: column; gap: 1px; }
+.docbench .db-dir, .docbench .db-ftree .db-nav, .docbench .db-docs .db-grp-list .db-nav { padding-left: calc(6px + var(--d, 0) * 14px); }
+.docbench .db-dir { display: flex; align-items: center; gap: 5px; width: 100%; border: 0; background: none; border-radius: 7px; padding-top: 4px; padding-bottom: 4px; padding-right: 8px; text-align: left; font-size: 13px; color: var(--db-ink-2); line-height: 1.35; }
+.docbench .db-dir:hover { background: var(--db-sunk); color: var(--db-ink); }
+.docbench .db-dir .car { flex: none; width: 10px; font-size: 9px; color: var(--db-ink-3); text-align: center; }
+.docbench .db-dir .ic, .docbench .db-nav .ic { flex: none; display: inline-flex; color: var(--db-ink-3); }
+.docbench .db-dir .ic svg, .docbench .db-nav .ic svg { width: 14px; height: 14px; }
+.docbench .db-dir .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.docbench .db-dir small { flex: none; font: 11px var(--db-font-mono); color: var(--db-ink-3); }
+.docbench .db-dir.empty { color: var(--db-ink-3); }
+.docbench .db-dir.empty .t { font-weight: 400; }
+.docbench .db-dir.empty small { font-family: var(--db-font-body); }
+.docbench .db-nav .t { display: flex; flex-direction: column; }
+.docbench .db-nav .t > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docbench .db-nav .t small { font: 10.5px/1.35 var(--db-font-mono); color: var(--db-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; }
+.docbench .db-ftree .db-nav .ic { margin-left: 15px; }
+.docbench .db-ftree .db-outline { margin-left: calc(26px + var(--d, 0) * 14px); }
+
+/* ---------------------------------------------------------------- 상단 바: Claude 단추 */
+.docbench .db-claude { gap: 6px; }
+.docbench .db-claude .ic svg { width: 12px; height: 12px; display: block; color: var(--db-go); }
+.docbench .db-claude[aria-pressed="true"] { background: var(--db-go-soft); border-color: var(--db-go); }
+.docbench .db-claude.running, .docbench .db-claude.queued { border-color: var(--db-go); color: var(--db-go); }
+.docbench .db-claude.off { color: var(--db-ink-3); }
+.docbench .db-claude.off .ic svg { color: var(--db-ink-3); }
+.docbench .db-claude .clk { font: 11.5px var(--db-font-mono); font-variant-numeric: tabular-nums; color: var(--db-ink-3); }
+.docbench .db-spin { display: inline-block; flex: none; width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--db-line-2); border-top-color: var(--db-go); animation: db-spin .8s linear infinite; vertical-align: -2px; }
+.docbench .db-spin.sm { width: 10px; height: 10px; border-width: 2px; }
+.docbench .db-busy::before { content: none; }
+.docbench .db-busy { gap: 5px; }
+
+/* ---------------------------------------------------------------- Claude 작업 창 */
+.docbench .db-dock { display: flex; flex-direction: column; height: min(400px, 52vh); min-height: 220px; border-top: 1px solid var(--db-line-2); background: var(--db-surface); box-shadow: 0 -6px 18px rgba(0, 0, 0, .06); z-index: 3; }
+.docbench .db-dock-h { position: relative; flex: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 7px 44px 7px 14px; border-bottom: 1px solid var(--db-line); }
+.docbench .db-dock-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.docbench .db-dock-title b { font: 700 14px/1.3 var(--db-font-display); white-space: nowrap; }
+.docbench .db-dock-ic { display: inline-flex; color: var(--db-go); }
+.docbench .db-dock-ic svg { width: 14px; height: 14px; }
+.docbench .db-dock-ic.warn { color: var(--db-wait); }
+.docbench .db-dock-state { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--db-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.docbench .db-dock-state i { width: 7px; height: 7px; border-radius: 50%; background: var(--db-ink-3); flex: none; }
+.docbench .db-dock-state.ok i { background: var(--db-go); }
+.docbench .db-dock-state.bad { color: var(--db-wait); }
+.docbench .db-dock-state.bad i { background: var(--db-wait); }
+.docbench .db-dock-opts { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-left: auto; align-items: center; }
+.docbench .db-dock-opt { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--db-ink-3); }
+.docbench .db-dock-opt select { border: 1px solid var(--db-line-2); border-radius: 6px; background: var(--db-bg); padding: 1px 4px; font-size: 12.5px; color: var(--db-ink); }
+.docbench .db-dock-x { position: absolute; right: 8px; top: 6px; padding: 4px 6px; }
+.docbench .db-dock-b { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 10px 10px 14px; overflow: auto; }
+.docbench .db-dock-card { border: 1px solid var(--db-line); border-radius: 9px; padding: 9px 12px; background: var(--db-bg); display: flex; flex-direction: column; gap: 6px; font-size: 13px; line-height: 1.55; }
+.docbench .db-dock-card p { margin: 0; }
+.docbench .db-dock-card.compose { border-color: var(--db-go); background: color-mix(in srgb, var(--db-go-soft) 55%, var(--db-surface)); }
+.docbench .db-dock-card.setup { border-color: color-mix(in srgb, var(--db-wait) 45%, var(--db-line)); background: color-mix(in srgb, var(--db-wait-soft) 45%, var(--db-surface)); }
+.docbench .db-dock-card.stale { flex-direction: row; align-items: center; gap: 8px; border-color: color-mix(in srgb, var(--db-wait) 45%, var(--db-line)); }
+.docbench .db-dock-card.stale > span:nth-child(2) { flex: 1; }
+.docbench .db-dock-card.hint { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px; font-size: 12.5px; }
+.docbench .db-dock-card-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.docbench .db-steps { margin: 0; padding-left: 1.3em; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; }
+.docbench .db-dock-prompt { width: 100%; border: 1px solid var(--db-line-2); border-radius: 7px; padding: 6px 8px; font: 12px/1.5 var(--db-font-mono); background: var(--db-surface); resize: vertical; color: var(--db-ink); }
+.docbench .db-cmd { font: 12px var(--db-font-mono); background: var(--db-sunk); border-radius: 5px; padding: 2px 7px; word-break: break-all; }
+.docbench .db-dock-cols { flex: 1; min-height: 120px; display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); gap: 10px; }
+@container docbench (max-width: 900px) { .docbench .db-dock-cols { grid-template-columns: minmax(0, 1fr); } .docbench .db-runs { max-height: 92px; } }
+.docbench .db-runs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; overflow: auto; min-height: 0; }
+.docbench .db-runs li { margin: 0; }
+.docbench .db-run { display: flex; gap: 8px; width: 100%; border: 1px solid var(--db-line); background: var(--db-surface); border-radius: 8px; padding: 6px 8px; text-align: left; font-size: 12.5px; line-height: 1.4; color: var(--db-ink-2); }
+.docbench .db-run:hover { border-color: var(--db-line-2); }
+.docbench .db-run.sel { border-color: var(--db-go); box-shadow: 0 0 0 1px var(--db-go); color: var(--db-ink); }
+.docbench .db-run-ic { flex: none; width: 16px; height: 16px; margin-top: 1px; display: inline-flex; align-items: center; justify-content: center; color: var(--db-ink-3); }
+.docbench .db-run-ic svg { width: 13px; height: 13px; }
+.docbench .db-run-ic.running { border-radius: 50%; border: 2px solid var(--db-line-2); border-top-color: var(--db-go); animation: db-spin .8s linear infinite; width: 13px; height: 13px; margin-top: 2px; }
+.docbench .db-run-ic.done { color: var(--db-go); }
+.docbench .db-run-ic.failed { color: var(--db-bad); }
+.docbench .db-run-t { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.docbench .db-run-t b { font-weight: 600; color: var(--db-ink); }
+.docbench .db-run-t small { color: var(--db-ink-3); font-size: 11.5px; }
+.docbench .db-chips-s { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 2px; }
+.docbench .db-chip-s { font-size: 10.5px; border-radius: 4px; padding: 0 5px; background: var(--db-sunk); color: var(--db-ink-2); }
+.docbench .db-chip-s.edited { background: var(--db-go-soft); color: var(--db-go); }
+.docbench .db-chip-s.proposed { background: var(--db-chg-soft); color: var(--db-chg); }
+.docbench .db-chip-s.asked { background: var(--db-wait-soft); color: var(--db-wait); }
+.docbench .db-chip-s.failed { background: var(--db-bad-soft); color: var(--db-bad); }
+.docbench .db-runlog-wrap { min-height: 0; display: flex; flex-direction: column; border: 1px solid var(--db-line); border-radius: 9px; background: var(--db-bg); overflow: hidden; }
+.docbench .db-runlog-h { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 10px; border-bottom: 1px solid var(--db-line); background: var(--db-surface); }
+.docbench .db-runlog-h:empty { display: none; }
+.docbench .db-runlog-t { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; font-size: 12.5px; }
+.docbench .db-run-st { font-size: 11.5px; font-weight: 600; border-radius: 4px; padding: 0 6px; background: var(--db-sunk); color: var(--db-ink-2); }
+.docbench .db-run-st.running, .docbench .db-run-st.queued { background: var(--db-go-soft); color: var(--db-go); }
+.docbench .db-run-st.done { background: var(--db-go-soft); color: var(--db-go); }
+.docbench .db-run-st.failed { background: var(--db-bad-soft); color: var(--db-bad); }
+.docbench .db-run-clock { font: 11.5px var(--db-font-mono); color: var(--db-ink-3); font-variant-numeric: tabular-nums; }
+.docbench .db-run-phase { font-size: 12px; color: var(--db-go); }
+.docbench .db-runlog { flex: 1; min-height: 0; overflow: auto; padding: 6px 10px 10px; font-size: 12.5px; line-height: 1.5; display: flex; flex-direction: column; gap: 2px; }
+.docbench .db-ll { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; color: var(--db-ink-2); }
+.docbench .db-ll time { flex: none; font: 11px var(--db-font-mono); color: var(--db-ink-3); font-variant-numeric: tabular-nums; }
+.docbench .db-ll .m { flex: 1; min-width: 0; white-space: pre-wrap; }
+.docbench .db-ll q { flex-basis: 100%; quotes: none; margin-left: 58px; padding-left: 8px; border-left: 2px solid var(--db-line-2); color: var(--db-ink-2); font-size: 12px; }
+.docbench .db-ll.say .m { color: var(--db-ink); }
+.docbench .db-ll.good .m { color: var(--db-go); font-weight: 500; }
+.docbench .db-ll.accent .m { color: var(--db-chg); font-weight: 500; }
+.docbench .db-ll.owner .m { color: var(--db-wait); font-weight: 500; }
+.docbench .db-ll.warn .m { color: var(--db-wait); }
+.docbench .db-ll.bad .m, .docbench .db-ll.error { color: var(--db-bad); }
+.docbench .db-ll.muted .m { color: var(--db-ink-3); }
+.docbench .db-ll .db-btn { padding: 0 6px; font-size: 11.5px; }
+
+/* ---------------------------------------------------------------- 문서: 최신 표시 · Claude 처리 중 · 바뀐 글 */
+.docbench .db-fresh { color: var(--db-ink-3); }
+.docbench .db-fresh.live { color: var(--db-go); }
+.docbench .db-refresh { padding: 0 6px; font-size: 11.5px; color: var(--db-ink-3); }
+.docbench .db-refresh:hover { color: var(--db-ink); }
+.docbench .db-busybar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0; padding: 7px 12px; border-radius: 8px; background: var(--db-go-soft); color: var(--db-ink); font-size: 13px; }
+.docbench .db-banner { justify-content: space-between; }
+.docbench .db-banner-t { flex: 1 1 100%; min-width: 0; }
+.docbench .db-banner-t .db-hint { margin-top: 2px; }
+.docbench .db-banner-a { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.docbench .db-banner-a .db-btn svg { width: 12px; height: 12px; }
+.docbench .db-sec[data-changed="changed"] > .db-sec-head::after, .docbench .db-sec[data-changed="new"] > .db-sec-head::after, .docbench .db-sec[data-changed="big"] > .db-sec-head::after { content: ""; position: absolute; left: -9px; top: 0; bottom: 0; width: 3px; border-radius: 2px; background: var(--db-chg); opacity: .55; }
+.docbench .db-sec[data-changed] { --chg-bar: 1; }
+.docbench .db-sec[data-changed="new"] > .db-sec-body, .docbench .db-sec[data-changed="big"] > .db-sec-body { box-shadow: inset 3px 0 0 color-mix(in srgb, var(--db-chg) 55%, transparent); padding-left: 10px; margin-left: -13px; }
+.docbench .db-md ins.db-chg-ins { text-decoration: none; background: color-mix(in srgb, var(--db-go) 22%, transparent); box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--db-go) 70%, transparent); border-radius: 2px; color: inherit; }
+.docbench .db-md del.db-chg-del { text-decoration: line-through; text-decoration-color: var(--db-bad); color: var(--db-bad); background: color-mix(in srgb, var(--db-bad) 10%, transparent); border-radius: 2px; font-size: .92em; margin: 0 .15em; user-select: none; }
+.docbench .db-md:not(.db-show-chg) ins.db-chg-ins { background: none; box-shadow: none; }
+.docbench .db-badge.chg { cursor: help; }
+
+/* ---------------------------------------------------------------- 마우스를 올리면: 피드백 미리보기 · 카드 → 본문 밝히기 */
+.docbench .db-pop { position: absolute; z-index: 30; max-width: calc(100% - 16px); background: var(--db-surface); color: var(--db-ink); border: 1px solid var(--db-line-2); border-radius: 10px; box-shadow: var(--db-shadow); padding: 9px 11px; font-size: 13px; line-height: 1.55; }
+.docbench .db-pop-b { display: flex; flex-direction: column; gap: 8px; }
+.docbench .db-pop-fb { display: flex; flex-direction: column; gap: 4px; padding-left: 8px; border-left: 3px solid var(--db-line-2); }
+.docbench .db-pop-fb.t-assistant { border-left-color: var(--db-go); }
+.docbench .db-pop-fb.t-owner { border-left-color: var(--db-wait); }
+.docbench .db-pop-h { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 11.5px; color: var(--db-ink-3); }
+.docbench .db-pop-h .db-turnlbl { margin-left: 0; }
+.docbench .db-pop-body { white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; }
+.docbench .db-pop-last { font-size: 12px; color: var(--db-ink-2); background: var(--db-sunk); border-radius: 6px; padding: 3px 7px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.docbench .db-pop-last.assistant { background: var(--db-go-soft); }
+.docbench .db-pop-prop { font-size: 12px; font-weight: 600; color: var(--db-chg); }
+.docbench .db-pop-q.del { text-decoration: line-through; color: var(--db-bad); white-space: pre-wrap; max-height: 9em; overflow: auto; }
+.docbench .db-pop-who { font-size: 12.5px; }
+.docbench mark.db-fbq.hl { background: color-mix(in srgb, var(--db-go) 22%, transparent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--db-go) 35%, transparent); border-radius: 2px; }
+.docbench mark.db-fbq.owner.hl { background: color-mix(in srgb, var(--db-wait) 22%, transparent); }
+.docbench .db-sec.db-fb-hl > .db-sec-head { background: color-mix(in srgb, var(--db-go-soft) 70%, transparent); border-radius: 6px; }
+.docbench .db-card[data-id] { transition: box-shadow .12s; }
+.docbench .db-card[data-id]:hover { box-shadow: 0 0 0 1px var(--db-line-2); }
+
+/* ---------------------------------------------------------------- 단일 HTML: 이름 안내 */
+.docbench .db-start label.db-start-name { gap: 6px; }
+.docbench .db-start label.db-start-name .l { font-weight: 600; color: var(--db-ink-2); }
+.docbench .db-start label .db-start-note { display: block; font-weight: 400; font-size: 13px; line-height: 1.55; color: var(--db-ink); background: var(--db-wait-soft); border-left: 3px solid var(--db-wait); border-radius: 6px; padding: 7px 10px; }
+.docbench .db-start label .db-start-note b { color: var(--db-ink); font-weight: 650; }
+.docbench .db-start label .db-start-note small { color: var(--db-ink-2); font-size: 12px; }
+.docbench .db-railview { margin: 0 8px 8px; display: flex; }
+.docbench .db-railview button { flex: 1; padding: 2px 8px; font-size: 12px; }

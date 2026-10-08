@@ -3,7 +3,7 @@
  * 기본 대상은 같은 저장소의 로컬 작업 폴더 서버(`docbench serve`)지만,
  * 사내 대시보드 백엔드가 같은 계약을 구현하면 그대로 쓸 수 있다.
  */
-import { DocConflictError, DocReadOnlyError, FeedbackConflictError, type DocBenchAdapters, type DocEvent, type Feedback, type Person, type ProposeRequest, type ViewState } from '../types';
+import { DocConflictError, DocReadOnlyError, FeedbackConflictError, type DocBenchAdapters, type DocEvent, type Feedback, type Person, type ProposeRequest, type RunLogLine, type RunsAvailability, type RunStatus, type ViewState } from '../types';
 import { normalizeFeedback } from '../core/feedback';
 
 export interface RestOptions {
@@ -25,7 +25,7 @@ interface Session {
   permissions: string[];
   assistant?: { name: string } | null;
   notify?: { label?: string } | null;
-  features?: { base?: boolean; versions?: boolean; inventory?: boolean; changes?: boolean };
+  features?: { base?: boolean; versions?: boolean; inventory?: boolean; changes?: boolean; runs?: boolean };
 }
 
 export class HttpError extends Error {
@@ -89,7 +89,7 @@ export function createRestAdapters(o: RestOptions = {}): DocBenchAdapters & { re
       mode = 'live';
       let opened = false;
       es.onopen = () => { if (opened) void catchUp(true); opened = true; };   // 서버 재시작 뒤 다시 이어지면 전부 다시 읽는다
-      for (const t of ['doc', 'manifest', 'feedback', 'changes', 'request'] as const) es.addEventListener(t, (ev) => {
+      for (const t of ['doc', 'manifest', 'feedback', 'changes', 'request', 'runs', 'runner'] as const) es.addEventListener(t, (ev) => {
         let d: any = {};
         try { d = JSON.parse((ev as MessageEvent).data || '{}'); } catch { /* 빈 이벤트 */ }
         fire({ type: t, id: d.id });
@@ -130,6 +130,15 @@ export function createRestAdapters(o: RestOptions = {}): DocBenchAdapters & { re
       changes: (limit) => call<{ items: any[] }>('GET', '/changes', undefined, { limit: limit ? String(limit) : undefined }).then((r) => r.items),
       inventory: async () => { try { return await call('GET', '/inventory'); } catch (e) { if (e instanceof HttpError && e.status === 404) return null; throw e; } },
       subscribe: (cb) => on((e) => { if (e.type !== 'feedback') cb(e); }),
+      // 서버는 파일을 바로 감시한다 — "확인 n초 전" 대신 실시간
+      refresh: async (id) => { await call('GET', '/doc', undefined, { id }); return false; },
+    },
+    runs: {
+      status: () => call<RunsAvailability>('GET', '/runs/status'),
+      start: (input) => call<RunStatus>('POST', '/runs', input),
+      cancel: (id) => call<void>('POST', '/runs/' + encodeURIComponent(id) + '/cancel'),
+      list: (limit) => call<{ items: RunStatus[] }>('GET', '/runs', undefined, { limit: limit ? String(limit) : undefined }).then((r) => r.items),
+      log: (id, from) => call<{ lines: RunLogLine[]; next: number }>('GET', '/runs/' + encodeURIComponent(id) + '/log', undefined, { from: String(from || 0) }),
     },
     feedback: {
       subscribe(cb, onErr) {
@@ -192,6 +201,7 @@ export async function trimBySession(ad: DocBenchAdapters & { ready: Promise<Sess
   if (!s.assistant) delete out.assistant;
   else out.assistant = { ...ad.assistant!, name: assistantName || s.assistant.name };
   if (!s.notify) delete out.notifier;
+  if (!s.features?.runs) delete out.runs;
   if (s.features && s.features.base === false) out.docs = { ...out.docs, loadBase: undefined };
   return out;
 }

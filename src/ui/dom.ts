@@ -32,13 +32,29 @@ export const $$ = <T extends Element = HTMLElement>(sel: string, root: ParentNod
 
 export const CARET = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-export function icon(name: 'caret' | 'close' | 'edit' | 'chat' | 'spark'): string {
+export type IconName = 'caret' | 'close' | 'edit' | 'chat' | 'spark' | 'folder' | 'folderOpen' | 'doc' | 'history' | 'map' | 'refresh' | 'copy' | 'check' | 'stop' | 'clock' | 'warn' | 'eye';
+
+export function icon(name: IconName): string {
+  const s = (d: string, vb = '0 0 14 14') => `<svg viewBox="${vb}" aria-hidden="true">${d}</svg>`;
+  const st = 'fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"';
   switch (name) {
     case 'caret': return CARET;
     case 'close': return '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>';
     case 'edit': return '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2.5 11.5l.6-2.6 6.4-6.4 2 2-6.4 6.4z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
     case 'chat': return '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M2 3.5h10v6H6l-3 2.2V9.5H2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>';
     case 'spark': return '<svg viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1.5l1.3 3.7 3.7 1.3-3.7 1.3L7 11.5 5.7 7.8 2 6.5l3.7-1.3z" fill="currentColor"/></svg>';
+    case 'folder': return s(`<path d="M1.8 3.5h3.6l1.2 1.4h5.6v6.6H1.8z" ${st}/>`);
+    case 'folderOpen': return s(`<path d="M1.8 11.5V3.5h3.6l1.2 1.4h4.6v1.6M1.8 11.5l1.6-4.8h9l-1.6 4.8z" ${st}/>`);
+    case 'doc': return s(`<path d="M3.2 1.8h5l2.6 2.6v7.8H3.2zM8.2 1.8v2.6h2.6M5 7.2h4M5 9.4h4" ${st}/>`);
+    case 'history': return s(`<path d="M2.2 7a4.8 4.8 0 1 0 1.4-3.4M2 2.2v2.4h2.4M7 4.4V7l1.8 1.2" ${st}/>`);
+    case 'map': return s(`<path d="M1.8 3.2l3.4-1.2 3.6 1.2 3.4-1.2v8.8l-3.4 1.2-3.6-1.2-3.4 1.2zM5.2 2v8.8M8.8 3.2V12" ${st}/>`);
+    case 'refresh': return s(`<path d="M11.6 6.2A4.7 4.7 0 0 0 3 4.4M2.4 7.8A4.7 4.7 0 0 0 11 9.6M3 1.8v2.6h2.6M11 12.2V9.6H8.4" ${st}/>`);
+    case 'copy': return s(`<path d="M4.6 4.6h7v7.6h-7zM2.4 9.4V1.8h7" ${st}/>`);
+    case 'check': return s(`<path d="M2.6 7.4l2.8 2.8 6-6.4" ${st}/>`);
+    case 'stop': return s(`<rect x="3.2" y="3.2" width="7.6" height="7.6" rx="1.2" fill="currentColor"/>`);
+    case 'clock': return s(`<circle cx="7" cy="7" r="5.2" ${st}/><path d="M7 4v3.2l2 1.2" ${st}/>`);
+    case 'warn': return s(`<path d="M7 1.8l5.6 10H1.4zM7 5.6v3M7 10.2v.1" ${st}/>`);
+    case 'eye': return s(`<path d="M1.2 7S3.2 3 7 3s5.8 4 5.8 4-2 4-5.8 4S1.2 7 1.2 7z" ${st}/><circle cx="7" cy="7" r="1.6" ${st}/>`);
   }
 }
 

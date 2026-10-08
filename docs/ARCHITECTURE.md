@@ -4,7 +4,7 @@
 
 ```
 ┌ src/ui ─────────────────────────────────────────────┐
-│ App ─ DocView(접기·앵커·개요) ─ Editor ─ Panel ─ Dialogs │  화면. 어댑터 인터페이스만 안다
+│ App ─ DocView(접기·앵커·개요·바뀐 글) ─ Editor ─ Panel ─ RunDock ─ Hover ─ Dialogs │  화면. 어댑터 인터페이스만 안다
 └───────────────▲─────────────────────────────────────┘
                 │ DocBenchAdapters (src/types.ts)
 ┌ src/adapters ─┴─────────────────────────────────────┐
@@ -14,6 +14,7 @@
 ┌ src/core ─────┴──── DOM 없음 · 서버/CLI 와 공유(dist/core.mjs) ┐
 │ source(섹션 키·범위) selectors(문구 앵커) feedback diff prompt │
 │ textcodec(바이트↔글) workspace(작업 폴더 규약: 설정·glob·매니페스트·이력) │
+│ runs(Claude 작업 규약: 요청·상태·로그 모양, 프롬프트, 결과 검사, 실행기 고르기) │
 └───────────────────────────────────────────────────────┘
 ```
 
@@ -23,7 +24,8 @@
 
 ```
 단일 HTML(release/docbench.html) ─ standalone.ts ─ folder 어댑터 ─ File System Access API ─┐
-대시보드 패널 ─ <doc-bench> ─ rest 어댑터 ─ HTTP ─ server/ (Workspace) ──────────────────────┼─ 같은 작업 폴더(.md + .docbench/)
+    └ Claude 작업: 요청 파일 ─▶ 이 PC 의 실행기 docbench runner (RunEngine) ─ claude -p ────┤
+대시보드 패널 ─ <doc-bench> ─ rest 어댑터 ─ HTTP ─ server/ (Workspace + RunEngine) ─────────┼─ 같은 작업 폴더(.md + .docbench/)
 터미널의 Claude Code ─ bin/docbench.mjs (Workspace) ───────────────────────────────────────┘
 ```
 
@@ -36,7 +38,8 @@
 | `viewState` | 접기·깊이·마지막으로 본 판 (사람별) | 없으면 브라우저에만 |
 | `identity` | 나, 권한(`doc.edit` `feedback.*` `assistant.*`) | 없으면 전부 허용 |
 | `assistant` | 섹션 + 피드백 → 수정 제안 | 없으면 버튼 숨김 |
-| `notifier` | "AI 에게 넘기기" | 없으면 버튼 숨김 |
+| `notifier` | "AI 에게 넘기기" 요청함 (터미널의 Claude Code 가 읽는다) | 없으면 `runs` 가 있을 때만 버튼 |
+| `runs` | Claude 작업: 상태(실행기·Claude Code 판)·시작·취소·목록·로그 | 없으면 Claude 작업 창 없음(예전 `assistant`·`notifier` 로) |
 | `platform` | 복사·내려받기 | 선택 |
 
 ## 불변식: 섹션 키
@@ -83,7 +86,40 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 
 **마지막으로 본 뒤** — 보기 상태에 문서별 `lastSeen`(판)을 둔다. 다시 열 때 그 판 본문(`loadVersion`)과 비교해 바뀐 섹션에 표시하고 "이 변경 이후 차이"를 보여 준다. 로컬 서버는 본 적 있는 판 본문을 `.docbench/blobs/` 에 둔다.
 
+**밖에서 고친 것 따라가기** — 도구 밖(에디터·터미널의 Claude·동기화)에서 고쳐도 화면이 최신인지 보이게:
+문서 머리에 "최신 · n초 전 확인"(서버는 "실시간 반영")과 **다시 읽기**(디스크와 지금 맞춰 보고 바깥 편집이면 이력에 남김), 다른 문서가 바뀌면 왼쪽 목록에 "바뀜",
+단일 HTML 은 창으로 돌아오면(`focus`) 바로 확인한다. 편집하는 동안 바뀌면 내 글은 지키고 — 다른 섹션만 바뀌었으면 저장 때 최신 판에 끼우고,
+같은 섹션이면 그쪽 글과 내 글의 차이를 보여 주고 "그쪽 글로 바꾸고 이어서 / 내 글 지키기"를 고르게 한다.
+
+**바뀐 글 표시** (`ui/track.ts`) — "마지막으로 본 뒤" 바뀐 섹션마다 자기 본문(하위 섹션 제외)을 예전 판과 낱말 단위로 비교해,
+더한 글은 `<ins>`(초록), 지운 글은 `<del>`(취소선)으로 그 자리에 그린다. 바뀐 곳 사이의 짧은 같은 글(문장부호·한두 글자)은 묶어
+"(최대 5회)" → "— 최대 3회, …" 처럼 구절 단위로 보인다(글자 하나씩 지우고 더한 표시는 읽기 어렵다). 60% 넘게 바뀌면 "크게 바뀜"으로 섹션만 표시.
+지운 글은 `.db-noindex` 라 피드백 문구 찾기·찾기에서 빠진다. 누가·언제는 이력(`changes`)에서 "본 판 → 지금 판"으로 이어지는 기록을 거슬러 찾는다
+(Claude·바깥 편집·사람 이름 + 피드백 수). 위쪽 줄에 이전/다음 바뀐 곳, 표시 끄기, 줄 단위 차이, "확인"(본 판으로).
+
 **AI 제안** — 패널이 섹션 원문 + 피드백으로 `assistant.propose` 를 부른다. 응답은 `{ after, rationale }` 하나(`core/prompt.ts` 의 스키마, 머리줄이 사라지면 거부). 제안은 피드백의 `proposal` 로 저장되고 사람 차례가 된다. 적용 때 섹션이 `before` 와 같으면 바로 저장, 다르면 편집기에 제안을 넣어 사람이 확인한다.
+`runs` 어댑터가 있으면 카드의 "Claude 제안"은 아래 Claude 작업(종류 `propose`)으로 간다 — 모델·노력을 고르고 진행이 보인다. `assistant.propose` 는 REST 계약을 위해 남는다.
+
+## Claude 작업 (`server/runs.mjs` · `src/core/runs.ts` · `src/ui/runs.ts`)
+
+화면이 넘긴 피드백을 Claude 가 백그라운드에서 처리한다. 화면 ↔ 실행 엔진은 **작업 폴더의 파일**로만 주고받는다(서버 모드는 REST 가 같은 파일을 쓴다):
+
+| 파일 (`.docbench/`) | 쓰는 쪽 | 내용 |
+|---|---|---|
+| `runs/<id>.req.json` | 화면(단일 HTML)·서버 | 요청: 종류(handoff·propose)·피드백 id·모델·노력·방식(Claude 판단·제안만)·**실행기 id** |
+| `runs/<id>.json` | 엔진만 | 상태: queued·running(진행 단계·토큰)·done·failed·canceled, 요약(고침·제안·답·질문·보류·건너뜀·실패), 사용량(5시간 한도 몫 포함) |
+| `runs/<id>.log.jsonl` | 엔진만 (덧붙임) | 로그 줄 `{at, k, v, text, ref}` — 화면 사전 `run.log.<k>` 로 그린다 |
+| `runs/<id>.cancel` | 누구나 | 취소 요청 |
+| `runners/<id>.json` | 엔진만 (4초마다) | 심장 박동: 사용자·PC·pid·판·Claude Code 판과 안전 플래그 확인 결과. 20초 소식이 없으면 꺼진 것 |
+
+- **엔진**(`RunEngine`)은 서버(`docbench serve`, 대시보드 처리기 — id `server:<사용자>@<PC>`)와 실행기(`docbench runner` — `runner:…`) 둘 다다. 자기 id 앞으로 온 요청만 집어 **한 번에 하나씩** 돌린다(폴더를 함께 쓰는 다른 PC 의 실행기가 집어 가지 않게).
+- **실행**: 문서 폴더 밖(이 PC 의 설정 폴더 아래 `work/`)에서 `claude -p --restricted --safe-mode --permission-mode dontAsk --tools Read,Grep,Glob --add-dir <문서 폴더> --strict-mcp-config --no-session-persistence --output-format stream-json --verbose --json-schema <RUN_SCHEMA> [--model] [--effort]`, 프롬프트는 표준입력. 시작할 때 `claude --version`·`--help` 로 판과 필요한 플래그(`REQUIRED_CLAUDE_FLAGS`)를 확인하고, 없으면 실행하지 않는다(`old-claude`). Windows 의 npm 설치본(`claude.cmd`)은 그 옆 `cli.js` 를 node 로 부른다.
+- **프롬프트**(`buildRunPrompt`): 항목마다 피드백·인용·대화·지금 섹션 글·허용 처리(`edit propose answer ask decline` 중 — 설정으로 막힌 문서는 고치기 없음, 6만 자 넘는 섹션은 답·질문·보류만)·문서 파일 경로. 사람·문서에서 온 글은 `<<< >>>` 경계 안의 데이터로 다룬다.
+- **결과 검사**(`planRun`): 모르는 피드백 id 는 버리고, 허용되지 않은 처리는 질문으로, 고친 글은 `checkSectionText`(CLI `doc write` 와 같은 규칙: 같은 단계 제목 줄, 제목 그대로, 하위 섹션 보존)를 통과해야 한다. 고친 글이 비었거나 모양이 틀리면 **반영하지 않고 실패로**(피드백은 Claude 차례 그대로 — "바꿨습니다" 회신이 실제로 반영되지 않은 채 사람에게 가지 않게). 같은 섹션을 두 번 고치면 둘째부터 제안으로, 글이 그대로면 답으로.
+- **반영**(엔진): 고치기는 지금 판을 다시 읽어 — 그 섹션이 Claude 가 본 그대로면 지금 판에 끼워 `Workspace.writeDoc`(판 비교·잠금·인코딩 보존·이력 `by: Claude`·`feedbackIds`), 사람이 그 사이 같은 섹션을 고쳤으면 **덮지 않고 제안으로**. 피드백 회신·상태는 판 비교로(충돌이면 다시 읽어 세 번까지). 그 사이 사람이 닫거나 넘긴 피드백은 건너뛴다.
+- **로그**: stream-json 줄을 `streamEventToLog`(시작·Claude 의 말·읽음·찾음·막음·결과 정리)로 옮기고, 반영 줄은 문서·섹션·피드백으로 이어진다(화면의 "보기"). `DOCBENCH_RUN_DEBUG=1` 이면 Claude 의 결과를 `runs/<id>.out.json` 에 그대로 남긴다(문제 살펴보기용).
+- **정리**: 최근 60개 작업만 남긴다. 실행기가 다시 켜지면 돌던 작업은 실패로, 줄 서 있던 요청은 다시 줄에.
+- **화면**(`RunDock`): 아래 창 — 모델·노력·방식 고르기(보기 상태에 기억), 넘기기 준비 카드, 작업 목록, 실시간 로그(돌고 있는 동안 1초마다 당김), 취소, 끝나면 알림. 실행기가 없으면 설치 안내(Claude Code 에 붙여 넣을 문구: CLI 파일 주소·SHA-256·폴더 이름 — 빌드가 같은 판으로 채운다), 실행기의 로그인 이름과 화면 이름이 다르면 맞추자고 한다.
 
 ## 로컬 서버 (`server/`)
 
@@ -106,6 +142,7 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 | `feedback/<id>.json` | 피드백 한 건 = 파일 하나 (충돌 적고 diff 읽기 쉬움) | 팀이 정함 |
 | `changes.jsonl` | 저장 이력, 한 줄 = 한 번 | 팀이 정함 |
 | `blobs/` `state.json` `viewstate/` `inbox/` | 캐시·개인 상태·요청함 | ✘ (`.docbench/.gitignore`) |
+| `runs/` `runners/` | Claude 작업 요청·상태·로그, 실행기 심장 박동 | ✘ (`.docbench/.gitignore`) |
 
 ## 서버 없는 단일 HTML (`src/standalone.ts` · `src/adapters/folder*.ts`)
 
@@ -120,7 +157,8 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 - **처음 열기**: 처음 보는 문서들의 판은 잠금·쓰기 한 번에 적는다(문서마다 잠그면 300개에 17초 — 실측).
 - **JSON 파일**: 메모장·PowerShell 5.1 이 붙이는 BOM 을 떼고 읽는다(서버도 같게 — `core.parseJsonText`).
 - **쓰기**: `createWritable()` 은 임시(.crswap) 파일에 쓰고 닫을 때 바꿔 끼운다.
-- **없는 것**: AI 제안(헤드리스 `claude -p`), git 기준본, 넘기기 명령 — "넘기기"는 요청함 파일만 남긴다(`queued`).
+- **Claude 작업**: 페이지는 PC 프로그램을 켤 수 없으므로 이 PC 의 실행기(`docbench runner`)가 요청 파일을 받아 claude 를 띄운다. 실행기 없이는 "넘기기"가 요청함 파일만 남기고(`queued`) 터미널의 Claude Code 로 처리한다.
+- **없는 것**: git 기준본, 넘기기 명령(`notify.command`).
 - **CSP**: 파일 안에 `connect-src 'none'`·`img-src data: blob:`·referrer 없음 — DocBench 가 문서를 어디로도 보내지 않는 데 더해, 페이지 안에서 요청·그림으로 새는 길도 막는다. 문서 속 바깥 주소 그림은 보이지 않는다. 새 창 이동은 CSP 로 못 막는다(문서 속 스크립트는 DOMPurify 가 지운다).
 - **이름·기억**: 쓰려면 이름이 필요하다(작성자·보기 상태의 주인). `file://` 로 열면 고른 폴더를 기억하지 않는다(다른 로컬 HTML 이 꺼내 쓸 수 있어서).
 - `file://` 은 보안 문맥이라 쓰기가 된다. `http://사내호스트` 는 보안 문맥이 아니어서 읽기만 된다.
@@ -131,4 +169,7 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 - **호스트 CSS 차단막**: 작업대 안 요소를 `all: revert` 로 브라우저 기본값에 되돌린 뒤 작업대 규칙만 얹는다. 빌드가 `.docbench` 를 세 번 겹쳐 대시보드 전역 규칙보다 우선하게 한다(e2e 로 확인).
 - 배치는 **컨테이너 쿼리**(`container: docbench`)로 정한다 — 화면 폭이 아니라 *끼워진 패널 폭*에 반응한다. 1099px 이하면 피드백 패널이, 760px 이하면 목록이 서랍이 된다.
 - 단축키는 기본으로 작업대에 초점이 있을 때만(`shortcuts: 'scoped'`) — 대시보드의 다른 입력과 부딪히지 않는다.
+- **왼쪽 목록**: 위는 도구(Claude 작업·변경 이력·폴더 지도), 아래는 문서. 매니페스트에 `folders`(폴더 → 문서 아닌 파일 수, 훑기가 센다)가 있으면 탐색기처럼 폴더 나무로 — 폴더 먼저, 문서가 없는 폴더도 흐리게(누르면 폴더 지도의 그 폴더), 문서 제목 아래 파일 이름. config.json 에 모음(groups)을 적었으면 "모음 / 폴더"를 고른다.
+- **마우스를 올리면**(`ui/hover.ts`): 본문의 피드백 표시·섹션 옆 피드백 수 → 미리보기(누가·언제·차례·내용·마지막 답, Claude 처리 중), 바뀐 글·"바뀜" 표 → 누가·언제, 패널 카드 → 본문의 그 문구·섹션을 밝힌다.
+- **알림 한 줄**: 글 길이만큼(최대 12초) 두고 마우스를 올리면 멈춘다. 해야 할 일이 담긴 알림은 닫을 때까지, 버튼 하나를 달 수 있다.
 - 이벤트: `onEvent` 콜백과 `docbench:<type>` CustomEvent (`doc:saved`, `feedback:created` …).

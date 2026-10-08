@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DocBench REST
-  version: 0.1.0
+  version: 0.3.0
   description: |
     화면(createRestAdapters)과 저장소 서버 사이의 계약. 로컬 작업 폴더 서버(server/handler.mjs)가 구현하며,
     사내 백엔드가 같은 계약을 구현하면 화면을 그대로 붙일 수 있다.
@@ -52,6 +52,8 @@ components:
         docs: { type: object, additionalProperties: { $ref: '#/components/schemas/DocMeta' } }
         render: { type: object }
         assistantName: { type: string }
+        folders: { type: object, additionalProperties: { type: object, properties: { files: { type: integer } } }, description: "작업 폴더의 폴더 나무 — 상대 경로('' = 맨 위) → 바로 아래 문서가 아닌 파일 수. 있으면 화면이 탐색기처럼 그린다(선택)" }
+        rootName: { type: string, description: 작업 폴더 이름 (선택) }
       required: [schema, project, groups, docs]
     DocMeta:
       type: object
@@ -116,10 +118,59 @@ components:
         feedbackIds: { type: array, items: { type: string } }
         sections: { type: array, items: { type: string }, description: 바뀐·새 섹션 키 }
         removed: { type: array, items: { type: string }, description: 없어진 섹션 키 }
+    RunStartInput:
+      type: object
+      properties:
+        kind: { enum: [handoff, propose] }
+        feedbackIds: { type: array, items: { type: string }, minItems: 1, maxItems: 40, description: propose 는 한 건 }
+        model: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}$', description: "'opus' 'sonnet' 'haiku' 'fable' 같은 별칭이나 전체 이름. 비우면 Claude Code 기본" }
+        effort: { enum: [low, medium, high, xhigh, max] }
+        mode: { enum: [auto, propose], description: auto = Claude 가 판단(바로 고치기 포함), propose = 제안만 }
+      required: [kind, feedbackIds]
+    RunStatus:
+      type: object
+      description: src/types.ts RunStatus
+      properties:
+        id: { type: string }
+        kind: { enum: [handoff, propose] }
+        feedbackIds: { type: array, items: { type: string } }
+        model: { type: string }
+        effort: { type: string }
+        mode: { enum: [auto, propose] }
+        runner: { type: string, description: 이 요청을 실행할 엔진 id }
+        by: { $ref: '#/components/schemas/Person' }
+        at: { type: string }
+        state: { enum: [queued, running, done, failed, canceled] }
+        startedAt: { type: string }
+        endedAt: { type: string }
+        progress: { type: object, properties: { phase: { enum: [starting, thinking, reading, writing, applying] }, tokens: { type: integer }, at: { type: string } } }
+        summary: { type: object, properties: { edited: { type: integer }, proposed: { type: integer }, answered: { type: integer }, asked: { type: integer }, declined: { type: integer }, skipped: { type: integer }, failed: { type: integer } } }
+        docs: { type: array, items: { type: string } }
+        error: { type: string }
+        usage: { type: object, description: '모델·시간·토큰·(구독) 5시간 한도 몫 — Claude Code 가 알려 준 값' }
+      required: [id, kind, feedbackIds, runner, at, state]
+    RunLogLine:
+      type: object
+      properties:
+        at: { type: string }
+        k: { type: string, description: "화면 사전 run.log.<k> — start safe claude text read search list denied tool toolError output apply.edit apply.propose apply.answer apply.ask apply.decline skip applyFail summary done error canceled timeout warn" }
+        v: { type: object }
+        text: { type: string, description: Claude 가 쓴 글·회신 }
+        ref: { type: object, properties: { docId: { type: string }, feedbackId: { type: string }, section: { type: string } } }
+      required: [at, k]
+    RunsAvailability:
+      type: object
+      properties:
+        available: { type: boolean }
+        reason: { enum: [no-runner, not-mine, no-claude, old-claude, read-only, disabled], description: 'not-mine = 켜진 실행기가 내 이름과 달라 저절로 고르지 않음(단일 HTML)' }
+        message: { type: string }
+        runner: { type: object, description: 'src/types.ts RunnerInfo — id, kind, user, host, claude { ok, version, problem }, models, efforts, busy' }
+        others: { type: array, items: { type: object } }
+      required: [available]
     Error:
       type: object
       properties:
-        error: { enum: [CONFLICT, BUSY, NOT_FOUND, BAD_REQUEST, READ_ONLY, TOO_LARGE, CSRF, UNAUTHORIZED, HOST_NOT_ALLOWED, NO_ASSISTANT, SECTION_MOVED, INTERNAL] }
+        error: { enum: [CONFLICT, BUSY, NOT_FOUND, BAD_REQUEST, READ_ONLY, TOO_LARGE, CSRF, UNAUTHORIZED, HOST_NOT_ALLOWED, NO_ASSISTANT, SECTION_MOVED, UNAVAILABLE, INTERNAL] }
         message: { type: string }
         reason: { type: string }
         current: { description: 409 일 때 서버의 현재 값 (DocContent 또는 Feedback) }
@@ -139,10 +190,10 @@ paths:
                 type: object
                 properties:
                   me: { $ref: '#/components/schemas/Person' }
-                  permissions: { type: array, items: { enum: [doc.edit, feedback.create, feedback.update, feedback.delete, assistant.propose, assistant.notify] } }
+                  permissions: { type: array, items: { enum: [doc.edit, feedback.create, feedback.update, feedback.delete, assistant.propose, assistant.notify, assistant.run] } }
                   assistant: { type: [object, 'null'], properties: { name: { type: string } } }
                   notify: { type: [object, 'null'], properties: { label: { type: string } } }
-                  features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean } } }
+                  features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean }, runs: { type: boolean, description: 'Claude 작업(/runs) — 없거나 false 면 화면이 작업 창을 숨긴다. docbench serve 는 기본 켬(--no-claude 로 끔), 대시보드에 끼우는 처리기는 기본 끔(runs: true 로 켬)' } } }
   /manifest:
     get:
       summary: 문서 목록·그룹·표시 규칙
@@ -222,7 +273,8 @@ paths:
     get:
       summary: 변경 알림 (Server-Sent Events)
       description: |
-        event 이름 doc | manifest | feedback | changes | request, data 는 { type, id? } JSON.
+        event 이름 doc | manifest | feedback | changes | request | runs | runner, data 는 { type, id? } JSON.
+        runs = Claude 작업의 상태·로그가 바뀜(id = 작업), runner = 엔진이 켜지거나 Claude Code 확인 결과가 바뀜.
         25초마다 주석 줄로 연결 유지. EventSource 는 헤더를 못 달므로 토큰은 ?token=.
       responses: { '200': { description: text/event-stream } }
   /notify:
@@ -240,3 +292,40 @@ paths:
         '409': { description: 섹션을 찾지 못함 (SECTION_MOVED) }
         '413': { description: 섹션이 6만 자를 넘음 (TOO_LARGE) — 하위 섹션에 피드백을 달 것 }
         '501': { description: AI 연결 없음 (NO_ASSISTANT) }
+  /runs/status:
+    get:
+      summary: Claude 작업을 띄울 수 있는지 (선택 기능 — session.features.runs)
+      description: |
+        available 이 false 면 reason: no-claude(claude 를 못 찾음) · old-claude(안전 실행 플래그가 없는 판) · disabled(서버가 끔·엔진 시작 실패).
+        runner 는 이 서버의 엔진(kind server), others 는 같은 폴더의 다른 실행기(살아 있는 것).
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/RunsAvailability' } } } } }
+  /runs:
+    get:
+      summary: 최근 작업 (최근 것 먼저)
+      parameters: [{ name: limit, in: query, schema: { type: integer, default: 30 } }]
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/RunStatus' } } } } } } } }
+    post:
+      summary: 작업 시작 — Claude 차례 피드백을 넘기거나(handoff) 한 건에 제안(propose)
+      description: |
+        서버가 요청 파일(.docbench/runs/<id>.req.json)을 남기고 줄에 세운다. 한 번에 하나씩 돈다.
+        Claude 는 문서 폴더 밖에서 --restricted --safe-mode --permission-mode dontAsk --tools Read,Grep,Glob --add-dir <폴더> 로 실행되고,
+        반영(고침·제안·회신)은 서버가 판 비교로 한다. 진행은 /runs/{id}/log, 끝나면 SSE runs 이벤트.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RunStartInput' } } }
+      responses:
+        '202': { description: 줄에 섬, content: { application/json: { schema: { $ref: '#/components/schemas/RunStatus' } } } }
+        '400': { description: 잘못된 요청 (kind·피드백·모델 이름·노력) }
+        '422': { description: 읽기 전용 작업 폴더 }
+        '503': { description: 'UNAVAILABLE — claude 없음·옛 판·엔진 꺼짐 (message)' }
+  /runs/{id}/log:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, pattern: '^run-\d{8}-\d{6}-[a-z0-9]{1,8}$' } }]
+    get:
+      summary: 작업 로그 — from 바이트부터 완성된 줄만
+      parameters: [{ name: from, in: query, schema: { type: integer, default: 0 } }]
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: object, properties: { lines: { type: array, items: { $ref: '#/components/schemas/RunLogLine' } }, next: { type: integer, description: 다음에 줄 from } } } } } } }
+  /runs/{id}/cancel:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: 취소 (줄 서 있으면 빼고, 돌고 있으면 claude 를 멈춘다 — 반영 전이면 아무것도 바꾸지 않는다)
+      responses: { '204': { description: OK } }

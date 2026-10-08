@@ -15,3 +15,6 @@ interface Window {
 
 /** 빌드가 package.json 의 version 으로 바꿔 넣는다 */
 declare const __DOCBENCH_VERSION__: string;
+/** 단일 HTML 빌드만: 실행기 설치 안내에 넣는 CLI 파일 주소·SHA-256 */
+declare const __DOCBENCH_CLI_URL__: string;
+declare const __DOCBENCH_CLI_SHA256__: string;

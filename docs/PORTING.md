@@ -14,7 +14,7 @@
 | **B. 웹 컴포넌트 + 프록시** | `<doc-bench api="/docbench/api">` + `/docbench/api` → 4317 프록시 | 대시보드 안에 자연스럽게, 이벤트로 연동 | 프록시 설정 한 번 |
 | **C. 백엔드에 처리기 끼우기** (Node) | `app.use(handle)` 몇 줄 + 웹 컴포넌트 | 프로세스 하나, 같은 출처 | 대시보드 백엔드가 Node 일 때 |
 | **D. 계약만 구현** | 대시보드 백엔드가 `docs/openapi.yaml` 구현 | 저장소를 DB·사내 문서 시스템으로 | 일이 가장 많음 |
-| **E. 단일 HTML** | `release/docbench.html` 을 정적 파일로 내주고 `<iframe>` | 설치·서버 없음, Node 없어도 됨 | 몇 초 간격 확인, AI 제안 없음, 폴더를 사람이 한 번 고름, 엣지·크롬 + 보안 문맥(localhost·https·파일) |
+| **E. 단일 HTML** | `release/docbench.html` 을 정적 파일로 내주고 `<iframe>` | 설치·서버 없음 | 몇 초 간격 확인, Claude 작업은 PC 마다 실행기(Node), 폴더를 사람이 한 번 고름, 엣지·크롬 + 보안 문맥(localhost·https·파일) |
 
 **권장: 대시보드 백엔드가 Node 면 C, 아니면 B.** 둘 다 같은 출처라 CORS·토큰 고민이 줄고, 화면 이벤트(`docbench:doc:saved` 등)를 대시보드가 받아 터미널 패널과 엮을 수 있다.
 Node 를 못 깔거나 프로세스를 늘리기 싫으면 E. 오늘 바로 써 보려면 A 또는 `docbench.html` 을 그냥 열기. 모두 같은 `.docbench/` 를 쓰므로 나중에 방식을 바꿔도 피드백은 이어진다.
@@ -99,7 +99,7 @@ import { Workspace, createDocBenchHandler } from 'docbench/server';
 
 const ws = await new Workspace('D:/work/docs').init();
 await ws.reconcileAll();                      // 꺼져 있던 동안 바뀐 파일을 이력에 남긴다
-const docbench = createDocBenchHandler(ws, { base: '/docbench/api', ui: false });
+const docbench = createDocBenchHandler(ws, { base: '/docbench/api', ui: false /*, runs: true — Claude 작업(§6), 이 PC 사람 한 명이 쓸 때만 */ });
 
 app.use((req, res, next) => docbench(req, res) || next());   // Express
 // Fastify: fastify.addHook('onRequest', (req, reply, done) => docbench(req.raw, reply.raw) ? reply.hijack() : done());
@@ -157,9 +157,10 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 - 터미널을 자동으로 깨우려면 **이 PC 의 설정**(§2)의 `workspaces["<문서 폴더>"].notify.command` 에 명령을 적는다(서버 방식 A·B·C). 명령은 문서 폴더를 현재 폴더로, 서버 프로세스의 환경 변수를 물려받아 셸 없이 실행된다. 넘기기 때 그 명령이
   `DOCBENCH_REQUEST`(요청 파일 경로)·`DOCBENCH_ROOT` 환경변수를 받고 실행된다. **대시보드가 이미 Claude 터미널을 띄워 두고 입력을 밀어 넣을 수 있으면**
   그 API 를 부르는 작은 스크립트를 거는 것이 가장 자연스럽다 — 떠 있는 세션이 `/docbench-feedback` 을 받는다.
-- 단일 HTML(E)의 넘기기는 요청함 파일만 남긴다(명령 실행 없음).
+- 단일 HTML(E)의 넘기기는 이 PC 의 실행기가 켜져 있으면 Claude 작업으로(§6), 없으면 요청함 파일만 남긴다(명령 실행 없음 — 작업 창의 "터미널 Claude Code 로 직접"이 붙여 넣을 한 줄을 복사해 준다).
+- 대화하며 처리하고 싶으면 이 길(터미널), 맡겨 두고 결과만 보려면 Claude 작업(§6). 둘이 같은 피드백을 동시에 잡아도 판 비교로 한쪽만 반영된다.
 
-**무인 처리**(선택, 사람이 결과를 화면에서 검토하는 전제) — 이 PC 의 설정에:
+**무인 처리** — 이제는 §6 Claude 작업을 권한다(Claude 에게 읽기 도구만, 반영은 서버가 판 비교로). 아래 `notify.command` 로 도구를 다 가진 `claude -p` 를 띄우는 길은 신뢰하는 사람만 피드백을 다는 폴더에서만 — 이 PC 의 설정에:
 
 ```json
 "workspaces": { "D:/work/docs": { "notify": {
@@ -177,19 +178,34 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 플래그는 Claude Code CLI 문서 기준이다(code.claude.com/docs/en/cli-reference). `-p` 에서 스킬이 자동으로 쓰이는지는 환경에서 한 번 확인한다 — 안 되면 프롬프트에 스킬 순서를 직접 적는다.
 `--permission-prompts none` 은 v2.1.259 이상.
 
-## 6. AI 제안 켜기
+## 6. Claude 작업 켜기 (백그라운드 처리 · Claude 제안)
 
-화면의 **"Claude 제안"** 은 서버가 `claude -p` 를 헤드리스로 부른다. 구독 로그인(Max·Team 등)을 그대로 쓴다. 설정은 **이 PC 의 설정**(§2, 맨 위 또는 `workspaces` 아래)에:
+화면 아래 **"Claude 작업"** 창: 피드백을 넘기면(또는 카드의 "Claude 제안") Claude 가 백그라운드에서 처리하고 진행 로그가 실시간으로 보인다. 모델·노력·방식(Claude 판단 / 제안만)을 고른다.
+구독 로그인(Max·Team 등)을 그대로 쓴다 — API 키가 필요 없다.
+
+| 방식 | 누가 claude 를 띄우나 | 할 일 |
+|---|---|---|
+| A·B (`docbench serve`) | serve 가 직접 | 없음 — `claude` 가 PATH 에 있으면 켜진다(다른 곳이면 이 PC 의 설정 `assistant.command`). 끄려면 `--no-claude` |
+| C (처리기 끼우기) | 대시보드 서버 프로세스가 직접 | **기본 끔** — 이 PC 사람 한 명이 쓰는 대시보드면 `createDocBenchHandler(ws, { …, runs: true })` |
+| E (단일 HTML) | 이 PC 의 **실행기**(`docbench runner`) | 한 번 켜 둔다 — 화면의 Claude 작업 창이 Claude Code 에 붙여 넣을 설치 문구를 준다(CLI 파일 하나를 받아 지문 확인 → `runner --detach` → 원하면 `--startup on`) |
+
+단일 HTML 은 **화면 이름과 같은 사용자의 실행기만** 저절로 고른다(실행기의 사용자 = 이 PC 의 설정 `user`, 없으면 Windows 로그인 이름). 이름이 다르면 창이 "내 실행기 아님"으로 알리고, 내 것이면 한 번 고르면 기억한다 — 폴더를 함께 쓰는 동료의 실행기가 내 작업을 집어 가지 않게.
+| D (계약 구현) | 그 백엔드 | 선택 — `/runs*` 를 구현하면 창이 켜진다(`session.features.runs`). 없으면 창 없이 예전 "넘기기"·"AI 제안" |
+
+- **이 PC 사람 한 명이 쓰는 서버에서만 켠다.** 여러 사람이 붙는 공용 서버면 끈다 — 서버 PC 의 claude 가 그 계정으로 돈다.
+- 실행: 문서 폴더 밖에서 `claude -p --restricted --safe-mode --permission-mode dontAsk --tools Read,Grep,Glob --add-dir <문서 폴더> …`. Claude 는 문서 폴더 안을 **읽기만** 하고 고친 글을 정해진 모양으로 돌려준다. 반영은 서버·실행기가 판 비교로 한다(그 사이 사람이 고친 섹션은 덮지 않고 제안으로). 이유와 실측은 [SECURITY.md](SECURITY.md#ai-호출).
+- 필요한 Claude Code: `claude --help` 에 `--restricted`·`--safe-mode` 가 있는 판(2.1.293 에서 확인). 없으면 실행하지 않고 "업데이트 필요"를 띄운다.
+- 이 PC 의 설정(§2):
 
 ```json
-"assistant": { "command": "C:/Users/me/.local/bin/claude.exe", "timeoutSec": 180 }
+"assistant": { "command": "C:/Users/me/.local/bin/claude.exe", "timeoutSec": 900, "model": "sonnet" }
 ```
 
-- `claude` 가 PATH 에 있으면 `"command"` 를 빼도 된다. 네이티브 설치본은 `%USERPROFILE%\.local\bin\claude.exe`. npm 으로 설치한 `claude.cmd` 는 셸 없이 실행되지 않으므로 그 `.cmd` 를 열어 실제로 부르는 대상(exe 또는 `node …js`)을 배열로 적는다(npm 패키지 안 구조는 판마다 다를 수 있다).
-- 이 플래그 조합은 Claude Code 2.1.293(리눅스)에서 실제 호출로 확인했다 — `structured_output` 에 `{ after }` 가 온다. Windows 에서의 실제 호출은 아직 확인하지 못했다.
-- 서버가 넘기는 것은 **그 섹션 원문과 피드백뿐**이고, 도구를 모두 끈다(`--tools ""`) — 이 호출은 파일을 읽거나 고치지 못한다. 결과는 JSON 스키마로 받는다(`--json-schema`).
-- `--bare` 는 쓰지 않는다. bare 모드는 구독 로그인을 읽지 않고 `ANTHROPIC_API_KEY` 를 요구한다.
-- 모델을 고르려면 `"model": "sonnet"`. 추가 인자는 `"args": [...]`.
+  `command` 는 PATH 의 `claude` 면 빼도 된다(npm 설치본 `claude.cmd` 는 옆의 `cli.js` 를 node 로 부른다). `timeoutSec` 는 작업 하나의 상한(기본 900), `model` 은 화면에서 "기본"을 골랐을 때.
+- 실행기 명령: `docbench runner <폴더>`(앞에서, Ctrl+C 로 끔) · `--detach`(창 없이 뒤에서, 로그는 이 PC 의 설정 폴더 `logs/`) · `--status` · `--stop` · `--startup on|off`(Windows 로그인 때 자동). 실행기 하나 = 폴더 하나.
+- 문제를 살펴볼 때 `DOCBENCH_RUN_DEBUG=1` 로 켜면 Claude 의 결과를 `.docbench/runs/<id>.out.json` 에 그대로 남긴다.
+
+**예전 "AI 제안"**(`POST /assistant/propose`, 섹션 하나 → 제안 하나)은 REST 계약을 위해 남아 있다. 화면은 Claude 작업이 있으면 그 길을 쓴다. 이 길도 이제 문서 폴더 밖에서 `--restricted --safe-mode` 로 띄운다(0.2.0 은 문서 폴더 안에서 띄워 그 폴더의 훅이 실행될 수 있었다 — SECURITY.md).
 
 ## 7. 확인 목록
 
@@ -197,16 +213,21 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 |---|---|
 | 서버·화면 | `http://127.0.0.1:4317/` 에서 문서가 열리고 접기 상태가 새로고침 뒤에도 남는다 |
 | 인코딩 | 실제 업무 문서(CP949 의 똠·햏 같은 확장 음절, UTF-8 BOM, UTF-16, CRLF)를 한 섹션 고쳐 저장 → 다른 편집기에서 글자·줄바꿈이 그대로. 메모장에서 고친 문서도 한 번 |
-| 외부 편집 | 편집기로 문서를 고치면 화면에 "바뀐 섹션" 이 뜬다 (서버가 켜져 있을 때) |
+| 외부 편집 | 편집기로 문서를 고치면 화면에 바뀐 글이 표시된다(서버는 바로, 단일 HTML 은 몇 초·창으로 돌아오면 바로) |
 | CLI 왕복 | 화면 피드백 → `docbench fb list --waiting assistant` 에 보임 → `fb reply --resolve` → 화면 카드가 반영됨 |
 | Claude 가 고친 문서 | `docbench doc write …` 뒤 가만히 둔 화면이 새 글을 보여 준다 (서버 바로, 단일 HTML 몇 초) |
-| AI 제안 | 섹션 피드백 카드의 "Claude 제안" → 차이 → 적용 |
+| Claude 작업 | 피드백 → "Claude에게 넘기기" → 창에 "연결됨" → 모델·노력 골라 시작 → 로그가 흐르고 끝나면 문서에 바뀐 글(초록·취소선, 누가: Claude)과 카드 회신 |
+| Claude 제안 | 섹션 피드백 카드의 "Claude 제안" → 작업 창에 진행 → 카드에 제안 → 차이 → 적용 |
+| 도구 밖 수정 | 편집기·터미널에서 고친 뒤 화면으로 돌아오면 그 문서는 바로, 다른 문서는 목록에 "바뀜". 편집 중에 바뀌면 내 글이 지켜진다 |
 | 보안 | 다른 PC 에서 4317 이 안 열린다(기본 127.0.0.1). 프록시 뒤라면 `--token` |
 | 회귀 | `npm run check` |
 
 ## 8. 문제 풀이
 
 - **`claude 실행 파일을 찾지 못했습니다`**: `where claude` 로 경로를 찾아 이 PC 의 설정 `assistant.command` 에 `.exe` 전체 경로.
+- **Claude 작업 창이 "실행기 꺼짐"**(단일 HTML): `docbench runner --status "<폴더>"` 로 확인, `--detach` 로 켠다. 켰는데도 꺼짐이면 같은 폴더를 골랐는지(실행기는 그 폴더의 `.docbench/runners/` 에 4초마다 적는다), 로그(`%LOCALAPPDATA%\docbench\logs\`)를 본다.
+- **"Claude Code 업데이트 필요"**: `claude update` — `--restricted`·`--safe-mode` 가 없는 판. 1분 안에 다시 확인한다.
+- **작업이 "실패: 고친 글(text)이 비어 있습니다"**: 모델이 고친 글을 빼먹었다(작은 모델·낮은 노력에서 가끔 — 실측). 피드백은 Claude 차례로 남아 있으니 모델·노력을 올려 다시 넘긴다.
 - **제안·넘기기 명령이 안 돈다, `status` 에 "주의"**: 명령을 문서 폴더 `config.json` 에 적었다 → 이 PC 의 설정(`%LOCALAPPDATA%\docbench\config.json`)으로 옮긴다. `docbench status` 가 그 파일 위치를 보여 준다.
 - **저장이 계속 409**: 다른 프로그램(동기화 도구 등)이 저장 직후 파일을 다시 쓰는지 본다. `changes.jsonl` 의 `by: external` 줄이 단서.
 - **`EPERM`/`EBUSY`**: 편집기·백신·동기화 도구가 파일을 잡고 있다. 서버가 임시 파일 → 바꿔치기를 몇 번 재시도하고, 계속 막히면 그 파일에 직접 쓴다(원자성 대신 저장 성공을 택함 — 직전 판 본문은 `.docbench/blobs/` 에 있다). 그것도 막히면 오류.

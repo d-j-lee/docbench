@@ -25,8 +25,22 @@ const store = {
 let bench: DocBenchHandle | null = null;
 let adapters: FolderAdapters | null = null;
 
+/** 실행기 설치 안내에 넣을 CLI 주소·지문 — 빌드(scripts/build.mjs)가 같은 판의 release/docbench.mjs 로 채운다 */
+const runnerSetup = typeof __DOCBENCH_CLI_URL__ !== 'undefined' && __DOCBENCH_CLI_URL__
+  ? { version, cliUrl: __DOCBENCH_CLI_URL__, sha256: __DOCBENCH_CLI_SHA256__ }
+  : undefined;
+
 async function open(root: HTMLElement, fs: FsLike, name: string): Promise<void> {
-  adapters = await createFolderAdapters(fs, { userName: name || undefined, locale });
+  adapters = await createFolderAdapters(fs, { userName: name || undefined, locale, runnerSetup });
+  // 실행기(이 PC 로그인 이름)와 이름을 맞추자는 제안을 받아들이면: 이름을 바꿔 다시 연다
+  root.addEventListener('docbench:rename', (e) => {
+    const n = String((e as CustomEvent).detail?.name || '').trim();
+    if (!n) return;
+    store.set(NAME_KEY, n);
+    const u = new URL(location.href);
+    u.searchParams.delete('name');
+    location.replace(u.toString());
+  }, { once: true });
   // 다른 폴더로 바꾸는 길 — 작업대 아래 링크(새 탭에서 처음 화면)
   const manifest = adapters.docs.manifest.bind(adapters.docs);
   adapters.docs.manifest = async () => {
@@ -90,7 +104,8 @@ function startScreen(root: HTMLElement, remembered: FileSystemDirectoryHandle | 
     h('h1', { id: 'db-start-title', text: t('start.title') }),
     h('p', { text: t('start.lead') }),
     h('p', { html: escapeHtml(t('start.where', { dir: '\u0000' })).replace('\u0000', '<code>.docbench/</code>') }),
-    canWrite ? h('label', null, t('start.name'), h('span', { text: t('start.name.hint') }), nameInput) : null,
+    canWrite ? h('label', { class: 'db-start-name' }, h('span', { class: 'l', text: t('start.name') }), nameInput,
+      h('span', { class: 'db-start-note' }, h('b', { text: t('start.name.important') }), ' ', t('start.name.hint'), h('br'), h('small', { text: t('start.name.how') }))) : null,
     acts, picker, msg,
     h('small', { text: t('start.foot') }),
   )));

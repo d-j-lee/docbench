@@ -13,3 +13,6 @@
 test/fixtures/** -text
 # 예제의 BOM·CRLF·EUC-KR 문서도 바이트 그대로
 examples/sample-workspace/notes/** -text
+# 지문(SHA-256)을 단일 HTML 이 담는 CLI 파일 — 줄바꿈 변환 없이 바이트 그대로
+release/docbench.mjs -text
+integrations/claude-code/cli/docbench.mjs -text

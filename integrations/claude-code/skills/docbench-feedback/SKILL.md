@@ -6,14 +6,20 @@ description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 
 # DocBench 피드백 처리
 
 사람은 화면(대시보드 패널·`docbench serve`·단일 HTML `docbench.html`)에서 문서에 피드백을 달고, 너는 이 터미널에서 `docbench` CLI 로 같은 작업 폴더를 다룬다.
-화면이 켜져 있으면 네가 고친 내용이 화면에 뜬다(서버는 바로, 단일 HTML 은 몇 초 안에 — 바뀐 섹션 표시). 꺼져 있어도 파일만으로 기록이 맞는다.
+화면이 켜져 있으면 네가 고친 글이 화면에 표시된다(서버는 바로, 단일 HTML 은 몇 초 안에 — 바뀐 글을 초록·취소선으로). 꺼져 있어도 파일만으로 기록이 맞는다.
 
-`docbench` 가 PATH 에 없으면 `node <DocBench 위치>/bin/docbench.mjs` 로 부른다(대시보드에 붙였다면 보통 `vendor/docbench`).
+**CLI 찾기** — 처음 된 것을 쓴다:
+1. `docbench` (PATH)
+2. `node "${CLAUDE_PLUGIN_ROOT}/cli/docbench.mjs"` — 이 플러그인에 들어 있는 CLI 파일 하나(Node 20.11+). 이 경로가 실제 폴더로 바뀌어 있지 않으면(플러그인이 아니라 복사해 둔 스킬) 건너뛴다
+3. `node "%LOCALAPPDATA%\docbench\docbench.mjs"` (macOS `~/Library/Application Support/docbench/`, Linux `~/.config/docbench/`) — 화면의 Claude 작업 실행기를 설치했으면 여기 있다
+4. `node <DocBench 위치>/bin/docbench.mjs` — 대시보드에 붙였다면 보통 `vendor/docbench`
 작업 폴더는 현재 폴더에서 위로 `.docbench` 를 찾는다. 다른 곳에서 부르면 `--root <폴더>` 또는 환경 변수 `DOCBENCH_ROOT` (종료 코드 2 = 못 찾음 — 만들지 않는다).
+
+**화면의 "Claude 작업"과 함께 쓸 때**: 화면이 같은 폴더의 피드백을 백그라운드 Claude 에 맡겼을 수 있다. `docbench status` 에 `실행 중`·`대기` 줄로 보이는 피드백은 건드리지 말고(그 작업이 처리한다), 사용자에게 그렇다고 알린다. 동시에 잡아도 판 비교로 한쪽만 반영되지만, 같은 일을 두 번 하게 된다.
 
 ## 순서
 
-1. **현황**: `docbench status` → `docbench fb list --waiting assistant`
+1. **현황**: `docbench status`(맡겨 둔 Claude 작업이 있는지도) → `docbench fb list --waiting assistant`
    `docbench inbox` 에 "넘기기" 요청이 있으면 거기 적힌 문서·`feedbackIds` 부터.
 2. **한 건씩**: `docbench fb show <id>`
    - 피드백 내용·인용문·대화, 그리고 **지금 그 섹션 원문**과 줄 번호가 나온다.

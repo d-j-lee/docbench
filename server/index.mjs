@@ -7,20 +7,22 @@ import { createDocBenchHandler } from './handler.mjs';
 export { Workspace, createDocBenchHandler };
 export { defaultPcConfigFile } from './workspace.mjs';
 export { decode, encode, atomicWrite } from './textio.mjs';
+export { RunEngine, probeClaude, resolveClaudeCommand, listRunners } from './runs.mjs';
 
 /**
- * @param {{ root: string, port?: number, host?: string, token?: string, allowOrigins?: string[], allowHosts?: string[], pcConfigFile?: string }} o
+ * @param {{ root: string, port?: number, host?: string, token?: string, allowOrigins?: string[], allowHosts?: string[], pcConfigFile?: string, runs?: boolean }} o
  */
 export async function startServer(o) {
   const ws = await new Workspace(o.root, { pcConfigFile: o.pcConfigFile }).init();
   await ws.reconcileAll();
-  const handle = createDocBenchHandler(ws, { token: o.token, allowOrigins: o.allowOrigins, allowHosts: o.allowHosts });
+  const handle = createDocBenchHandler(ws, { token: o.token, allowOrigins: o.allowOrigins, allowHosts: o.allowHosts, runs: o.runs !== false });
   const server = http.createServer((req, res) => { if (!handle(req, res)) { res.writeHead(404).end(); } });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(o.port ?? 4317, o.host || '127.0.0.1', () => resolve(undefined)); });
   const addr = /** @type {import('node:net').AddressInfo} */ (server.address());
   return {
     ws, server, port: addr.port,
     url: `http://${o.host && o.host !== '0.0.0.0' ? o.host : '127.0.0.1'}:${addr.port}/`,
-    close: () => new Promise((r) => { handle.close(); server.close(() => r(undefined)); server.closeAllConnections?.(); }),
+    handle,
+    close: async () => { await handle.close(); await new Promise((r) => { server.close(() => r(undefined)); server.closeAllConnections?.(); }); },
   };
 }

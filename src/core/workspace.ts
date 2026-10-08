@@ -12,6 +12,8 @@
  *       viewstate/<user>.json 접기·깊이 등 보기 상태 (커밋하지 않음)
  *       inbox/                "AI에게 넘기기" 요청 (커밋하지 않음)
  *       locks/                같은 대상 쓰기를 줄 세우는 잠금 파일 (커밋하지 않음)
+ *       runs/                 Claude 작업 요청·상태·로그 (커밋하지 않음, src/core/runs.ts)
+ *       runners/              실행기 심장 박동 (커밋하지 않음)
  *
  * 이 PC 에만 해당하는 설정(실행 명령·이름)은 문서 폴더 밖, 운영체제의 앱 설정 자리에 둔다(서버·CLI):
  *   Windows %LOCALAPPDATA%\docbench\config.json · macOS ~/Library/Application Support/docbench · Linux ~/.config/docbench
@@ -27,7 +29,7 @@ import { headingPlain } from './markdown';
 export const IGNORE_DIRS = new Set(['.git', 'node_modules', '.docbench', '.svn', '.hg', '__pycache__', '.venv', 'dist', 'build', '.idea', '.vscode']);
 
 /** .docbench/.gitignore — 사람이 읽는 피드백·이력·설정만 커밋 대상 */
-export const DOT_GITIGNORE = 'blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\n';
+export const DOT_GITIGNORE = 'blobs/\nviewstate/\ninbox/\nlocks/\nruns/\nrunners/\nstate.json\n*.tmp\n';
 
 /** 예전 판이 만든 .docbench/.gitignore 에 빠진 줄을 덧붙인 글(바뀔 것이 없으면 null) — 사람이 더한 줄은 그대로 */
 export function mergeGitignore(existing: string): string | null {
@@ -263,7 +265,7 @@ export function sortDocIds(ids: string[]): string[] {
 export interface DocFileInfo { title: string; size?: number; mtimeMs?: number }
 
 /** 설정 + 문서 목록 → 화면 매니페스트. 설정 그룹에 안 걸린 문서는 최상위 폴더별로 묶는다 */
-export function buildManifest(c: WorkspaceConfig, docIds: string[], info: (id: string) => DocFileInfo | undefined, subtitle: string, ci = false): Manifest {
+export function buildManifest(c: WorkspaceConfig, docIds: string[], info: (id: string) => DocFileInfo | undefined, subtitle: string, ci = false, extra: { folders?: Manifest['folders']; rootName?: string } = {}): Manifest {
   const ids = sortDocIds(docIds);
   const groups: Manifest['groups'] = [];
   const taken = new Set<string>();
@@ -302,6 +304,23 @@ export function buildManifest(c: WorkspaceConfig, docIds: string[], info: (id: s
     docs,
     render: c.render,
     assistantName: c.assistantName,
+    folders: extra.folders,
+    rootName: extra.rootName,
+  };
+}
+
+/**
+ * 폴더 나무에 넣을 폴더 기록기 — 훑으면서 폴더마다 "문서가 아닌 파일" 수를 센다.
+ * 문서가 없는 폴더도 나무에 보여 주려고(탐색기와 같은 모양) 쓴다. 숨김·의존성 폴더는 훑지 않으므로 빠진다.
+ */
+export function folderTally(): { dir(rel: string): void; file(rel: string, isDoc: boolean): void; result(): Record<string, { files: number }> } {
+  // 폴더 이름이 __proto__ 같아도 Object.prototype 을 건드리지 않게 — 프로토타입 없는 객체
+  const m: Record<string, { files: number }> = Object.assign(Object.create(null) as Record<string, { files: number }>, { '': { files: 0 } });
+  const parentOf = (rel: string) => (rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '');
+  return {
+    dir(rel) { m[rel] ||= { files: 0 }; },
+    file(rel, isDoc) { const p = parentOf(rel); m[p] ||= { files: 0 }; if (!isDoc && !rel.split('/').pop()!.startsWith('.')) m[p].files++; },
+    result: () => m,
   };
 }
 

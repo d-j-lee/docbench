@@ -2,9 +2,9 @@
  * 편집 도우미 — 섹션·문서 편집, 미리보기, 차이, 저장 충돌, 인코딩, 제안 적용.
  */
 import { DocConflictError, DocReadOnlyError, type DocContent, type Feedback } from '../types';
-import { getSectionText, replaceSection, KEY_SEP } from '../core/source';
+import { diffSections, getSectionText, replaceSection, KEY_SEP } from '../core/source';
 import { lineDiff, type DiffResult } from '../core/diff';
-import { toLF } from '../core/markdown';
+import { toLF, norm } from '../core/markdown';
 import { renderMarkdown, decorate, type Section } from './render';
 import { h } from './dom';
 import type { T } from './i18n';
@@ -50,6 +50,9 @@ export class Editor {
   private init: EditorInit;
   private mode: 'edit' | 'preview' | 'diff' = 'edit';
   private draftKey: string;
+  /** 편집하는 동안 바깥에서 바뀐 최신 판 (닫을 때 화면에 반영) */
+  private pendingFresh: DocContent | null = null;
+  private saved = false;
 
   constructor(view: DocView, sec: Section | null, init: EditorInit = {}) {
     this.view = view;
@@ -112,7 +115,35 @@ export class Editor {
     this.msg.replaceChildren(text, extra || '');
     this.msg.hidden = !text && !extra;
   }
-  externalChanged(): void { this.note(this.view.t('doc.extChanged'), 'warn'); }
+  /**
+   * 편집하는 동안 문서가 바깥(에디터·Claude·다른 사람)에서 바뀌었다. 내 글은 지킨다.
+   *  - 다른 섹션만 바뀌었으면: 저장하면 최신 판에 그대로 끼운다고 알린다
+   *  - 이 섹션이 바뀌었으면: 그쪽 글과 내 글의 차이를 보여 주고, 그쪽 글로 바꿀지 내 글을 지킬지 고르게 한다
+   */
+  externalChanged(fresh: DocContent): void {
+    const t = this.view.t;
+    this.pendingFresh = fresh;
+    const theirs = this.key != null ? getSectionText(fresh.md, this.key) : fresh.md;
+    if (this.key != null && theirs != null && norm(theirs) === norm(this.base)) { this.note(t('edit.ext.other'), 'warn'); return; }
+    const box = h('div', {},
+      renderDiff(lineDiff(theirs ?? '', toLF(this.area.value)), t, t('edit.ext.diffLabel')),
+      h('div', { class: 'db-row' },
+        h('button', { class: 'db-btn sm', type: 'button', onclick: () => this.takeTheirs(fresh, theirs) }, t('edit.ext.theirs')),
+        h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => this.note(t('edit.ext.kept'), 'warn') }, t('edit.ext.keep'))));
+    this.note(theirs == null ? t('edit.ext.gone') : t('edit.ext.same'), 'bad', box);
+  }
+
+  /** 그쪽 글로 바꾸고 이어서 편집 — 내 글은 초안 저장소에 한 번 더 남겨 둔다 */
+  private takeTheirs(fresh: DocContent, theirs: string | null): void {
+    try { localStorage.setItem(this.draftKey + ':before-take', JSON.stringify({ text: this.area.value, at: Date.now() })); } catch { /* 저장소 막힘 */ }
+    this.view.content = fresh;
+    this.baseVersion = fresh.version;
+    this.base = theirs ?? '';
+    this.area.value = (theirs ?? '').replace(/\n+$/, '\n');
+    this.autosize();
+    this.pendingFresh = fresh;
+    this.note(this.view.t('edit.ext.taken'), 'warn');
+  }
 
   private setMode(m: 'edit' | 'preview' | 'diff'): void {
     this.mode = m;
@@ -136,7 +167,11 @@ export class Editor {
     try { localStorage.removeItem(this.draftKey); } catch { /* 무시 */ }
     this.el.remove();
     this.sec?.el.classList.remove('editing');
-    if (!silent) this.view.editorClosed();
+    if (!silent) {
+      this.view.editorClosed();
+      // 저장하지 않고 닫았는데 그 사이 바뀐 판이 있으면 이제 화면에 보여 준다(무엇이 바뀌었는지 표시와 함께)
+      if (this.pendingFresh && !this.saved) void this.view.showFresh(this.pendingFresh);
+    }
   }
 
   private compose(md: string): string | null {
@@ -162,8 +197,11 @@ export class Editor {
         convertTo,
       });
       const fresh: DocContent = { ...baseDoc, md: next, version: res.version, updatedAt: res.updatedAt || new Date().toISOString(), updatedBy: app.me, readOnly: false, encoding: convertTo || baseDoc.encoding };
+      this.saved = true;
       this.close();
-      this.view.rerender(fresh, this.index ?? undefined);
+      // 내 것 = 이 저장이 바꾼 섹션(바탕 판 → 저장한 글). 더 새 판에 끼워 저장했으면 그 사이 남의 변경은 표시된다
+      const d = diffSections(baseDoc.md, next);
+      this.view.rerender(fresh, this.index ?? undefined, against ? { mine: new Set([...d.changed, ...d.added, ...d.removed]) } : true);
       app.docState(this.view.id).lastSeen = res.version;
       app.saveState();
       app.toast(t('edit.saved'));
@@ -228,7 +266,7 @@ export async function applyProposal(app: App, f: Feedback): Promise<void> {
     const next = replaceSection(view.content.md, key, p.after)!;
     try {
       const res = await app.ad.docs.save!(f.docId, next, { baseVersion: view.content.version, summary: f.title || f.body.slice(0, 60), feedbackIds: [f.id] });
-      view.rerender({ ...view.content, md: next, version: res.version, updatedAt: res.updatedAt, updatedBy: app.me }, sec?.index);
+      view.rerender({ ...view.content, md: next, version: res.version, updatedAt: res.updatedAt, updatedBy: app.me }, sec?.index, true);
       app.docState(f.docId).lastSeen = res.version;
       app.saveState();
       app.emit({ type: 'doc:saved', docId: f.docId, version: res.version });

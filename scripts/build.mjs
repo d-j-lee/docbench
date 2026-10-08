@@ -25,11 +25,26 @@ const common = {
 
 await build({ ...common, entryPoints: ['src/index.ts'], format: 'esm', outfile: 'dist/docbench.js', minify: true });
 await build({ ...common, entryPoints: ['src/iife.ts'], format: 'iife', globalName: 'DocBench', outfile: 'dist/docbench.iife.js', minify: true });
-await build({ ...common, entryPoints: ['src/core/index.ts'], format: 'esm', platform: 'neutral', outfile: 'dist/core.mjs', minify: false, sourcemap: false, mainFields: ['module', 'main'] });
+await build({ ...common, entryPoints: ['src/core/index.ts'], format: 'esm', platform: 'neutral', outfile: 'dist/core.mjs', minify: false, sourcemap: false, mainFields: ['module', 'main'],
+  banner: { js: `/*! DocBench core ${pkg.version} (MIT) — bundles marked (MIT), jsdiff (BSD-3-Clause). See THIRD_PARTY_NOTICES.md */` } });
 writeFileSync('dist/docbench.css', cssText);
 
+// CLI 파일 하나 (release/docbench.mjs) — 단일 HTML 의 실행기(docbench runner)·터미널 Claude Code 가 쓴다.
+// 서버·코어·iconv-lite 를 함께 묶어 Node 만 있으면 돈다(설치·빌드 없이). 단일 HTML 의 설치 안내가 이 파일의 주소·지문을 담는다
+let iconvOk = true;
+try { (await import('node:module')).createRequire(import.meta.url).resolve('iconv-lite'); } catch { iconvOk = false; console.warn('주의: iconv-lite 가 없어 CLI 묶음에서 CP949 쓰기가 빠집니다 (npm install 로 선택 의존성을 까세요)'); }
+await build({
+  entryPoints: ['scripts/cli-bundle-entry.mjs'], bundle: true, platform: 'node', format: 'esm', target: ['node20'], outfile: 'dist/docbench.mjs',
+  minify: false, legalComments: 'none', logLevel: 'error', external: iconvOk ? [] : ['iconv-lite'],
+  define: { __DOCBENCH_VERSION__: JSON.stringify(pkg.version) },
+  banner: { js: `#!/usr/bin/env node\n/*! DocBench CLI ${pkg.version} (MIT) — one file: docbench runner · fb · doc · status. Bundles iconv-lite (MIT) and marked (MIT), jsdiff (BSD-3-Clause). https://github.com/d-j-lee/docbench */\nimport { createRequire as __docbenchCreateRequire } from 'node:module'; const require = __docbenchCreateRequire(import.meta.url);` },
+});
+const cliSha = createHash('sha256').update(readFileSync('dist/docbench.mjs')).digest('hex');
+const cliUrl = `https://raw.githubusercontent.com/d-j-lee/docbench/v${pkg.version}/release/docbench.mjs`;
+
 // 서버 없는 단일 HTML — 파일 하나를 엣지·크롬으로 열고 문서 폴더를 고른다(src/standalone.ts)
-const standalone = await build({ ...common, entryPoints: ['src/standalone.ts'], format: 'iife', write: false, minify: true, sourcemap: false });
+const standalone = await build({ ...common, entryPoints: ['src/standalone.ts'], format: 'iife', write: false, minify: true, sourcemap: false,
+  define: { ...common.define, __DOCBENCH_CLI_URL__: JSON.stringify(cliUrl), __DOCBENCH_CLI_SHA256__: JSON.stringify(cliSha) } });
 // 인라인 <script> 안에서 문자열 '</script' 가 태그를 닫지 않게
 const inlineJs = standalone.outputFiles[0].text.replace(/<\/(script)/gi, '<\\/$1');
 // '<!--' 와 '<script' 가 함께 있으면 HTML 파서가 스크립트 안에서 다른 상태로 넘어갈 수 있다 — 생기면 멈춘다
@@ -45,7 +60,7 @@ writeFileSync('dist/docbench.html', page);
 writeFileSync('dist/core.d.mts', "export * from './types/core/index.js';\n");
 execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', '-p', 'tsconfig.json'], { stdio: 'inherit' });
 
-for (const f of ['docbench.js', 'docbench.iife.js', 'core.mjs', 'docbench.css', 'docbench.html']) {
+for (const f of ['docbench.js', 'docbench.iife.js', 'core.mjs', 'docbench.css', 'docbench.html', 'docbench.mjs']) {
   const b = readFileSync('dist/' + f);
   console.log(f.padEnd(18), String(statSync('dist/' + f).size).padStart(8), 'B  sha256', createHash('sha256').update(b).digest('hex').slice(0, 12));
 }

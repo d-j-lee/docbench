@@ -8,3 +8,4 @@ export * from './prompt';
 export * from '../types';
 export * from './textcodec';
 export * from './workspace';
+export * from './runs';

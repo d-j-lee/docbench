@@ -13,7 +13,13 @@ import { core } from './core.mjs';
 export const { EncodingReadOnlyError, restoreEol } = core;
 
 /** iconv-lite(선택 의존성). 동기로 한 번 불러 둔다 — 없으면 레거시 인코딩은 읽기 전용 */
-const iconv = /** @type {any} */ ((() => { if (process.env.DOCBENCH_NO_ICONV === '1') return null; try { return createRequire(import.meta.url)('iconv-lite'); } catch { return null; } })());
+const iconv = /** @type {any} */ ((() => {
+  if (process.env.DOCBENCH_NO_ICONV === '1') return null;
+  // 파일 하나로 묶은 CLI(release/docbench.mjs)는 진입점이 iconv-lite 를 넘겨 둔다
+  const bundled = /** @type {any} */ (globalThis).__docbenchIconv;
+  if (bundled) return bundled;
+  try { return createRequire(import.meta.url)('iconv-lite'); } catch { return null; }
+})());
 
 /**
  * CP949 코덱. Node 의 TextDecoder('euc-kr') 는 확장 음절(똠·햏)을 다르게 읽으므로 iconv-lite 의 cp949 를 쓴다.

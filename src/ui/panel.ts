@@ -151,22 +151,28 @@ export class Panel {
     const act = h('div', { class: 'db-c-act' });
     const now = () => new Date().toISOString();
     const msg = (text: string) => ({ author: app.me, text, at: now() });
-    if (this.busy.has(f.id)) {
-      act.append(h('span', { class: 'db-busy', text: t('fb.act.proposing') }), h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => this.busy.get(f.id)?.abort() }, t('edit.cancel')));
+    const run = app.dock?.activeFor(f.id);
+    if (run) {
+      // Claude 작업이 이 피드백을 다루는 중 — 결과는 회신·제안으로 붙는다
+      act.append(h('span', { class: 'db-busy' }, h('span', { class: 'db-spin sm' }), ' ', t(run.state === 'queued' ? 'run.fb.queued' : 'run.fb.running')),
+        h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => app.dock?.setOpen(true) }, t('run.open')),
+        h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => void app.dock?.cancel(run.id) }, t('run.cancel')));
+    } else if (this.busy.has(f.id)) {
+      act.append(h('span', { class: 'db-busy' }, h('span', { class: 'db-spin sm' }), ' ', t('fb.act.proposing')), h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => this.busy.get(f.id)?.abort() }, t('edit.cancel')));
     } else if (f.status === 'open') {
       // 제안이 걸려 있으면 결정은 제안 상자의 적용·거절로 한다 (버튼 중복 방지)
       if (turn === 'owner' && app.can('feedback.update') && f.proposal?.state !== 'pending') {
         act.append(h('button', { class: 'db-btn sm primary', type: 'button', title: t('fb.act.toAssistant.hint'), onclick: () => void app.updateFeedback(f, { waitingOn: 'assistant', thread: [...f.thread, msg(t('fb.act.toAssistant'))] }) }, t('fb.act.toAssistant')));
         act.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => void app.updateFeedback(f, { status: 'declined', thread: [...f.thread, msg(t('fb.act.decline'))] }) }, t('fb.act.decline')));
       }
-      if (app.can('assistant.propose') && f.target.kind === 'section' && !(f.proposal && f.proposal.state === 'pending')) {
-        act.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => void this.propose(f) }, t('fb.act.propose')));
+      if ((app.dock || app.can('assistant.propose')) && f.target.kind === 'section' && !(f.proposal && f.proposal.state === 'pending')) {
+        act.append(h('button', { class: 'db-btn sm', type: 'button', title: t('fb.act.propose.hint'), onclick: () => void this.propose(f) }, t('fb.act.propose')));
       }
       if (app.can('feedback.update')) act.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => void app.updateFeedback(f, { status: 'resolved', thread: [...f.thread, msg(t('fb.act.resolve'))] }) }, t('fb.act.resolve')));
     } else if (app.can('feedback.update')) {
       act.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => void app.updateFeedback(f, { status: 'open', waitingOn: 'assistant', thread: [...f.thread, msg(t('fb.act.reopen'))] }) }, t('fb.act.reopen')));
     }
-    if (app.can('feedback.update') && !this.busy.has(f.id)) {
+    if (app.can('feedback.update') && !this.busy.has(f.id) && !run) {
       act.append(h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => {
         if (c.querySelector('.db-reply')) return;
         const ta = h('textarea', { placeholder: t('fb.reply.placeholder'), 'aria-label': t('fb.act.reply') }) as HTMLTextAreaElement;
@@ -213,6 +219,8 @@ export class Panel {
 
   private async propose(f: Feedback): Promise<void> {
     const app = this.app;
+    // Claude 작업이 있으면 그 길로(모델·노력 선택, 진행 로그). 결과는 제안으로 이 카드에 붙는다
+    if (app.dock) { await app.dock.propose(f); return; }
     const as = app.ad.assistant;
     if (!as || f.target.kind !== 'section') return;
     const ctl = new AbortController();

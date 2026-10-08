@@ -17,9 +17,28 @@
 
 - 섹션 제목 줄의 **피드백** — 그 섹션(하위 포함) 전체가 대상. 접힌 상태로 달면 `wasCollapsed: true`.
 - 글을 고르면 뜨는 **이 문구에 피드백** — 인용문(`selector`)이 붙고 본문에 밑줄로 보인다.
-- 카드: **반영해**(AI 차례로) · **아니**(보류) · **해결** · **답글** · **Claude 제안**(헤드리스 AI 가 수정안을 만듦).
+- 카드: **반영해**(AI 차례로) · **아니**(보류) · **해결** · **답글** · **Claude 제안**(Claude 가 수정안을 만들어 붙임 — 아래 Claude 작업).
 - 제안 상자: 차이를 보고 **적용**(문서 저장 + 반영됨) 또는 **거절**(다시 AI 차례).
-- 상단 **Claude에게 넘기기** — AI 차례인 것들을 터미널에 알린다.
+- 상단 **Claude에게 넘기기** — AI 차례인 것들을 Claude 작업으로 맡기거나(엔진이 있을 때), 터미널 Claude Code 에 알린다(요청함).
+- 피드백 밑줄·배지에 마우스를 올리면 내용과 마지막 회신이 뜬다. 바뀐 글은 초록(더함)·취소선(지움)으로 그 자리에 보인다.
+
+## Claude 작업 (백그라운드)
+
+화면의 **Claude에게 넘기기**·**Claude 제안**은 이 PC 에 엔진(서버 `docbench serve` 또는 실행기 `docbench runner`)이 있으면 "Claude 작업"이 된다. 엔진이 `claude -p` 를 문서 폴더 밖에서 읽기 도구만 주어 띄우고, Claude 가 돌려준 결과를 엔진이 위의 CLI 와 같은 규칙(판 비교·섹션 안전장치)으로 반영한다.
+
+Claude 가 항목마다 돌려주는 것(`action`):
+
+| action | 엔진이 하는 일 | 피드백 |
+|---|---|---|
+| `edit` | 섹션 저장(그 사이 사람이 고쳤으면 덮지 않고 제안으로) + 이력 `by: assistant` | 반영됨 + 회신 |
+| `propose` | 제안을 붙인다 | 내 차례 |
+| `answer` | 회신만 | 반영됨 |
+| `ask` | 되묻기 | 내 차례 |
+| `decline` | 회신만 | 보류 |
+
+- "제안만" 방식이면 `edit` 도 제안으로 바뀐다. 섹션이 아닌 문서 전체 피드백은 고칠 섹션을 Claude 가 고른다(`section`).
+- 고친 글이 비었거나 안전장치에 걸리면 그 항목은 **실패**로 남고 피드백은 손대지 않는다(그대로 Claude 차례).
+- 그 사이 닫혔거나 사람 차례로 바뀐 피드백은 건너뛴다. 같은 피드백을 터미널 Claude 와 동시에 잡아도 판 비교로 한쪽만 반영된다.
 
 ## AI 가 하는 일 (터미널, `docbench` CLI)
 
@@ -51,7 +70,7 @@ docbench fb reply <id> -m "<질문>" --ask
 | 3 | 그 사이 문서가 바뀜 | `fb show` 로 다시 읽고 고친다 |
 | 4 | 읽기 전용 (EUC-KR + iconv 없음, 설정) | 사람에게 UTF-8 변환(`--convert-utf8`) 여부를 묻는다 |
 
-**직접 편집도 된다.** 에디터·Edit 도구로 파일을 고치면 화면(서버, 또는 단일 HTML 이 열려 있으면 그것)이 `by: external` 로 기록하고 바뀐 섹션을 띄운다. 그 다음 `docbench log <문서> -m "<요약>" --fb <id>` 로 요약을 붙이면 같은 이력 줄에 합쳐진다.
+**직접 편집도 된다.** 에디터·Edit 도구로 파일을 고치면 화면(서버, 또는 단일 HTML 이 열려 있으면 그것)이 `by: external` 로 기록하고 바뀐 글을 문서 위에 표시한다. 그 다음 `docbench log <문서> -m "<요약>" --fb <id>` 로 요약을 붙이면 같은 이력 줄에 합쳐진다.
 단, **CP949·UTF-16 문서는 Edit 도구로 고치지 않는다** — UTF-8 로 다시 써서 글자가 깨질 수 있다. 그런 문서는 `doc write` 로.
 
 **안전장치**: 섹션 쓰기(`doc write --section`, `fb propose`)는 새 글의 첫 줄이 같은 단계의 제목이어야 하고, 하위 섹션이 사라지면 멈춘다. 제목을 바꾸려면 `--rename`, 하위 섹션을 지우려면 `--force`. 입력 파일의 BOM·UTF-16 은 풀어서 받고, 깨진 글자가 있으면 거부한다.
@@ -102,6 +121,18 @@ $ docbench doc sections docs/설계-노트.md
 ```
 
 `.docbench/inbox/req-<시각>.json` — "넘기기" 요청 `{ at, count, docs, feedbackIds }`. 처리한 뒤 지운다.
+
+`.docbench/runs/` — Claude 작업. 화면이 요청을 쓰고, 엔진만 상태·로그를 쓴다. 최근 60건만 남긴다.
+
+| 파일 | 누가 | 내용 |
+|---|---|---|
+| `<id>.req.json` | 화면·서버 | `{ id, kind: handoff\|propose, feedbackIds, model?, effort?, mode?: auto\|propose, by?, runner, at }` — `runner` 는 맡을 엔진 id |
+| `<id>.json` | 엔진 | 상태 `queued → running → done\|failed\|canceled` + 요약(고침·제안·답·질문·보류·실패 수) |
+| `<id>.log.jsonl` | 엔진(덧붙이기) | 진행 로그 한 줄씩 — 읽은 파일, 막힌 접근, 반영 결과 |
+| `<id>.cancel` | 화면 | 멈춤 요청 |
+
+`.docbench/runners/<엔진>.json` — 엔진이 4초마다 고쳐 쓰는 살아 있음 표시(`id`, `kind: server|runner`, `user`, `host`, `protocol`, `claude: { ok, version?, reason? }`, `seenAt` …). 20초 넘게 안 바뀌면 꺼진 것으로 본다. `<엔진>.stop` 이 생기면 실행기가 스스로 끈다.
+`runs/`·`runners/` 는 `.docbench/.gitignore` 에 들어 있다(이 PC 의 상태라 공유하지 않는다).
 
 ## 지킬 것 (AI 쪽)
 

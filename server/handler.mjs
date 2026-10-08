@@ -15,7 +15,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ConflictError, NotFoundError, BadRequestError } from './workspace.mjs';
-import { proposeWithClaudeCli } from './assistant.mjs';
+import { proposeWithClaudeCli, claudeWorkDir } from './assistant.mjs';
+import { RunEngine, listRunners } from './runs.mjs';
 import { core } from './core.mjs';
 import { spawn } from 'node:child_process';
 
@@ -25,8 +26,10 @@ const STATIC = path.resolve(here, 'static');
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.map': 'application/json', '.json': 'application/json', '.svg': 'image/svg+xml' };
 
 /**
+ * runs: Claude 작업(백그라운드 실행)을 이 서버에서 띄울지. **처리기는 기본 끔** — 대시보드에 끼우는 쪽이 "이 PC 사람 한 명이 쓰는
+ * 로컬 도구"일 때만 true 로 켠다(여러 사람이 접속하면 서버 PC 에서 claude 가 그 계정·구독으로 돈다). docbench serve(startServer)는 기본 켬.
  * @param {import('./workspace.mjs').Workspace} ws
- * @param {{ base?: string, token?: string, allowOrigins?: string[], allowHosts?: string[], ui?: boolean, uiBase?: string }} [opts]
+ * @param {{ base?: string, token?: string, allowOrigins?: string[], allowHosts?: string[], ui?: boolean, uiBase?: string, runs?: boolean }} [opts]
  */
 export function createDocBenchHandler(ws, opts = {}) {
   const base = (opts.base || '/api').replace(/\/$/, '');
@@ -43,6 +46,16 @@ export function createDocBenchHandler(ws, opts = {}) {
   const running = new Map();
   /** @type {import('node:child_process').ChildProcess | null} */
   let notifyChild = null;
+  /** @type {RunEngine | null} */
+  let engine = null;
+  /** @type {string} */
+  let engineProblem = '';
+  const runsOn = opts.runs === true;
+  /** @type {Promise<void>} */
+  const engineReady = !runsOn ? Promise.resolve() : (async () => {
+    const e = new RunEngine(ws, { kind: 'server', emit });
+    try { await e.start(); engine = e; } catch (err) { engineProblem = String(/** @type {any} */ (err)?.message || err); await e.stop().catch(() => undefined); }
+  })();
 
   /** @param {import('node:http').IncomingMessage} req @param {import('node:http').ServerResponse} res */
   function handle(req, res) {
@@ -84,11 +97,12 @@ export function createDocBenchHandler(ws, opts = {}) {
       const perms = ['feedback.create', 'feedback.update', 'feedback.delete', 'assistant.notify'];
       if (!ws.config.readOnly) perms.push('doc.edit');
       if (ws.config.assistant) perms.push('assistant.propose');
+      if (runsOn) perms.push('assistant.run');
       return send(res, 200, {
         me: ws.me, permissions: perms,
         assistant: ws.config.assistant ? { name: ws.config.assistantName || 'Claude' } : null,
         notify: ws.config.notify?.inbox !== false || ws.config.notify?.command ? { label: (ws.config.assistantName || 'AI') + '에게 넘기기' } : null,
-        features: { base: !!ws.git, versions: true, inventory: true, changes: true },
+        features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn },
         workspace: { root: ws.root, git: !!ws.git },
       });
     }
@@ -114,6 +128,7 @@ export function createDocBenchHandler(ws, opts = {}) {
     if (m === 'GET' && p === '/events') return sse(req, res);
     if (m === 'POST' && p === '/notify') return notify(req, res);
     if (m === 'POST' && p === '/assistant/propose') return propose(req, res);
+    if (p === '/runs' || p.startsWith('/runs/')) return runs(req, res, url, p, m);
     return send(res, 404, { error: 'NOT_FOUND', message: m + ' ' + p });
   }
 
@@ -168,9 +183,31 @@ export function createDocBenchHandler(ws, opts = {}) {
     running.set(f.id, ctl);
     req.on('close', () => { if (!res.writableEnded) ctl.abort(); });
     try {
-      const out = await proposeWithClaudeCli({ ...cfg, cwd: ws.root }, { docId: f.docId, docTitle: title, feedback: f, sectionPath, sectionText }, ctl.signal);
+      const out = await proposeWithClaudeCli({ ...cfg, cwd: await claudeWorkDir(ws) }, { docId: f.docId, docTitle: title, feedback: f, sectionPath, sectionText }, ctl.signal);
       send(res, 200, out);
     } finally { running.delete(f.id); }
+  }
+
+  /** Claude 작업 @param {any} req @param {any} res @param {URL} url @param {string} p @param {string} m */
+  async function runs(req, res, url, p, m) {
+    if (!runsOn) return send(res, 404, { error: 'NOT_FOUND', message: '이 서버는 Claude 작업을 띄우지 않습니다' });
+    await engineReady;
+    if (m === 'GET' && p === '/runs/status') {
+      const others = core.liveRunners(await listRunners(ws.root)).filter((r) => r.id !== engine?.id);
+      if (!engine) return send(res, 200, { available: false, reason: 'disabled', message: engineProblem || undefined, others });
+      return send(res, 200, { ...engine.availability(), others });
+    }
+    if (!engine) return send(res, 503, { error: 'UNAVAILABLE', message: engineProblem || 'Claude 작업을 쓸 수 없습니다' });
+    if (m === 'GET' && p === '/runs') return send(res, 200, { items: await engine.list(Number(url.searchParams.get('limit')) || 30) });
+    if (m === 'POST' && p === '/runs') {
+      if (ws.config.readOnly) return send(res, 422, { error: 'READ_ONLY', reason: 'config', message: '읽기 전용 작업 폴더' });
+      const st = await engine.submit(await body(req), ws.me);
+      return send(res, 202, st);
+    }
+    const lm = p.match(/^\/runs\/([\w-]+)\/(log|cancel)$/);
+    if (lm && m === 'GET' && lm[2] === 'log') return send(res, 200, await engine.readLog(lm[1], Number(url.searchParams.get('from')) || 0));
+    if (lm && m === 'POST' && lm[2] === 'cancel') { await engine.cancel(lm[1]); return send(res, 204, null); }
+    return send(res, 404, { error: 'NOT_FOUND', message: m + ' ' + p });
   }
 
   /** @param {string} p @param {any} res */
@@ -195,7 +232,9 @@ export function createDocBenchHandler(ws, opts = {}) {
     } catch { send(res, 404, { error: 'NOT_FOUND' }); }
   }
 
-  handle.close = () => { stopWatch(); clearInterval(beat); for (const c of clients) c.end(); clients.clear(); for (const r of running.values()) r.abort(); };
+  handle.close = async () => { stopWatch(); clearInterval(beat); for (const c of clients) c.end(); clients.clear(); for (const r of running.values()) r.abort(); await engineReady; await engine?.stop(); };
+  /** 시험·호스트용: Claude 작업 엔진 (꺼져 있으면 null) */
+  handle.runs = async () => { await engineReady; return engine; };
   handle.emit = emit;
   return handle;
 }
@@ -217,6 +256,8 @@ function fail(res, e) {
   if (e && e.code === 'READ_ONLY') return send(res, 422, { error: 'READ_ONLY', reason: e.reason, message: e.message });
   if (e && e.code === 'TOO_LARGE') { send(res, 413, { error: 'TOO_LARGE', message: e.message }); return; }
   if (e && e.code === 'BUSY') return send(res, 409, { error: 'BUSY', message: e.message });
+  if (e && e.code === 'BAD_REQUEST') return send(res, 400, { error: 'BAD_REQUEST', message: e.message });
+  if (e && e.code === 'UNAVAILABLE') return send(res, 503, { error: 'UNAVAILABLE', message: e.message });
   send(res, 500, { error: 'INTERNAL', message: String(e?.message || e).slice(0, 500) });
 }
 

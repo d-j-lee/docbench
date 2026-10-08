@@ -133,6 +133,25 @@ test('AI 제안(헤드리스 claude) → 차이 보고 적용 → 문서 반영�
   assert.ok(md.indexOf('(제안) 한 줄 추가') < md.indexOf('## 위험'));
 });
 
+test('Claude 작업(서버): 넘기기 → 모델 골라 시작 → 진행 로그 → 문서에 바뀐 글(누가: Claude)·피드백 반영', async (t) => {
+  const page = await open(t, { hash: 'docs/운영-런북.md' });
+  const created = JSON.parse((await cli('fb', 'add', '--as', 'human:dj', '--doc', 'docs/운영-런북.md', '--section', '알림 서비스 운영 런북 › 연락처', '-m', '연락처 형식을 맞춰 줘', '--to', 'assistant', '--json')).stdout);
+  await page.locator(`.db-card[data-id="${created.id}"]`).waitFor({ timeout: 6000 });
+  await page.locator('.db-send').click();
+  await page.locator('.db-dock-state.ok', { hasText: '서버' }).waitFor({ timeout: 8000 });
+  await page.locator('.db-dock-opt select').nth(0).selectOption('haiku');
+  await page.locator('.db-dock .compose .db-btn.primary').click();
+  await page.locator('.db-run[data-state="done"]').first().waitFor({ timeout: 15000 });
+  await page.locator('.db-runlog .db-ll.good', { hasText: '고침 —' }).first().waitFor();
+  await until(async () => (await readFb()).find((x) => x.id === created.id).status === 'resolved', 6000);
+  assert.match(await fs.readFile(path.join(dir, 'docs/운영-런북.md'), 'utf8'), /\(고침\) 한 줄 추가/);
+  await page.locator('ins.db-chg-ins', { hasText: '한 줄 추가' }).waitFor({ timeout: 8000 });
+  await page.locator('.db-sec[data-key="알림 서비스 운영 런북 › 연락처"] .db-badge.chg', { hasText: 'Claude' }).waitFor({ timeout: 6000 });
+  await page.locator('.db-banner:not([hidden])', { hasText: 'Claude' }).waitFor();
+  const st = await (await fetch(url + 'api/runs/status')).json();
+  assert.equal(st.runner.kind, 'server');
+});
+
 test('편집 중 다른 섹션이 바뀌면 최신본에 다시 적용, 같은 섹션이면 겹침 안내', async (t) => {
   const page = await open(t, { hash: 'docs/질의응답.md' });
   const key = '알림 서비스 질의응답 › 일정 › 언제 전환하나요?';

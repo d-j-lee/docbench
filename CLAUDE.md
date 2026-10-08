@@ -7,10 +7,10 @@
 ```bash
 npm install          # 빌드까지 (prepare). 실행 Node 20.11+, 개발·시험 Node 22.22+
 npm run typecheck    # 브라우저 TS + 서버/CLI JSDoc
-npm test             # 단위(vitest) + 서버·CLI(node:test)
+npm test             # 단위(vitest) + 서버·CLI(node:test) — Claude 는 test/fixtures/fake-claude.mjs 가 대신
 npm run test:e2e     # Playwright Chromium — npx playwright install chromium (한 번)
 npm run check        # 전부 + release 사본·플러그인 버전 확인. 끝내기 전에 이것
-npm run release      # 화면을 고쳤으면: release/docbench.html 갱신(함께 커밋)
+npm run release      # 화면·CLI 를 고쳤으면: release/docbench.{html,mjs} + 플러그인 cli/ 갱신(함께 커밋)
 claude plugin validate . && claude plugin validate ./integrations/claude-code --strict   # 스킬·플러그인을 고쳤으면
 ```
 
@@ -21,9 +21,12 @@ claude plugin validate . && claude plugin validate ./integrations/claude-code --
 - **판 비교 + 줄 세우기**: 문서·피드백 쓰기는 `Workspace.withLock`(서버·CLI) / `FolderWorkspace.withLock`(브라우저) 안에서 판을 다시 비교한다. 우회하는 쓰기 경로를 만들지 않는다.
 - **한 벌의 규칙**: 바이트↔글은 `src/core/textcodec.ts`, `.docbench/` 디스크 모양은 `src/core/workspace.ts` — 서버와 단일 HTML 이 같이 쓴다. 한쪽에만 규칙을 넣지 않는다.
 - **단일 HTML**: `release/docbench.html` 은 `npm run release` 로만 바꾼다. 바깥으로 나가는 길 차단(CSP `connect-src 'none'`·`img-src data: blob:`)을 풀지 않는다.
+- **CLI 파일 하나**: `release/docbench.mjs`·`integrations/claude-code/cli/docbench.mjs` 도 `npm run release` 로만. HTML 이 그 지문(SHA-256)과 `v<판>` 태그 주소를 담으므로 푸시할 때 같은 판의 태그도 올린다.
+- **Claude 작업은 읽기만**: 엔진(`server/runs.mjs`)이 claude 를 문서 폴더 밖에서 `--restricted --safe-mode --permission-mode dontAsk --tools Read,Grep,Glob --add-dir` 로 띄운다(`REQUIRED_CLAUDE_FLAGS` 가 없으면 실행하지 않음). 쓰기 도구·문서 폴더 cwd 를 주지 않는다 — 그 폴더의 훅·CLAUDE.md 가 실행·지시가 된다(실측, SECURITY.md). 반영은 엔진이 `planRun` → `Workspace` 로만.
+- **runs 파일의 주인**: `runs/<id>.req.json`·`.cancel` 은 화면·서버, `<id>.json`·`.log.jsonl` 은 그 요청의 `runner` 엔진만 쓴다.
 - **실행 명령·이름은 이 PC 의 설정에서만**: `assistant`·`notify.command`·`user` 는 문서 폴더 밖 이 PC 의 설정(`server/workspace.mjs defaultPcConfigFile` — Windows `%LOCALAPPDATA%\docbench\config.json`; `core.pcSettingsFor` → `core.mergeConfig`)에서만 읽는다. 문서 폴더 `config.json` 에서 읽는 길을 만들지 않는다. 시험은 `DOCBENCH_HOME` 을 임시 폴더로(`scripts/node-test.mjs`).
 - **이력 덧붙이기는 `changes` 잠금 안에서** (브라우저는 O_APPEND 가 없다).
-- **AI 제안은 섹션을 자르지 않는다**: 한도를 넘으면 거부(`src/core/prompt.ts`).
+- **AI 제안은 섹션을 자르지 않는다**: 한도를 넘으면 거부(`src/core/prompt.ts`). Claude 작업 결과도 `checkSectionText` 를 지나야 반영된다(CLI `doc write` 와 같은 안전장치).
 - 브라우저 번들은 CDN 없이 돈다(의존성 번들). 서버는 의존성 0(선택: iconv-lite).
 
 ## 고칠 때
