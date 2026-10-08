@@ -22,7 +22,7 @@ claude plugin validate . && claude plugin validate ./integrations/claude-code --
 - **한 벌의 규칙**: 바이트↔글은 `src/core/textcodec.ts`, 기록 폴더 모양은 `src/core/workspace.ts` — 서버와 단일 HTML 이 같이 쓴다. 한쪽에만 규칙을 넣지 않는다.
 - **문서 폴더에는 문서만** (D57): 기록(피드백·이력·작업·잠금)은 기록 폴더에 — 기본은 문서 폴더 밖(기록 보관함/<이름>), 고른 경우만 안(`.docbench`). 기록 경로는 서버·CLI 는 `ws.dir`, 브라우저는 `FolderWorkspace.data` 로만 만든다(`<root>/.docbench` 를 직접 잇지 않는다). 기록 자리 찾기는 `server/workspace.mjs locateData` 한 곳(D58). CLI 는 기록을 찾기만 하고 만들지 않는다(`init`·`link`·`serve` 만).
 - **단일 HTML**: `release/docbench.html` 은 `npm run release` 로만 바꾼다. 바깥으로 나가는 길 차단(CSP `connect-src 'none'`·`img-src data: blob:`)을 풀지 않는다.
-- **CLI 파일 하나**: `release/docbench.mjs`·`integrations/claude-code/cli/docbench.mjs` 도 `npm run release` 로만. HTML 이 그 지문(SHA-256)과 `v<판>` 태그 주소를 담으므로 푸시할 때 같은 판의 태그도 올린다.
+- **CLI 파일 하나**: `release/docbench.mjs`·`integrations/claude-code/cli/docbench.mjs` 도 `npm run release` 로만. HTML 이 그 지문(SHA-256)과 `v<판>` 태그 주소를 담는다. 태그·Release 는 CI 가 만든다(`main` 에 새 판 → `check` 통과 → `release`) — 손으로 태그를 올리지 않는다.
 - **Claude 작업은 읽기만**: 엔진(`server/runs.mjs`)이 claude 를 문서 폴더 밖에서 `--restricted --safe-mode --permission-mode dontAsk --tools Read,Grep,Glob --add-dir` 로 띄운다(`REQUIRED_CLAUDE_FLAGS` 가 없으면 실행하지 않음). 쓰기 도구·문서 폴더 cwd 를 주지 않는다 — 그 폴더의 훅·CLAUDE.md 가 실행·지시가 된다(실측, SECURITY.md). 반영은 엔진이 `planRun` → `Workspace` 로만.
 - **runs 파일의 주인** (기록 폴더 `runs/`): `runs/<id>.req.json`·`.cancel` 은 화면·서버, `<id>.json`·`.log.jsonl` 은 그 요청의 `runner` 엔진만 쓴다.
 - **실행 명령·이름은 이 PC 의 설정에서만**: `assistant`·`notify.command`·`user` 는 문서 폴더 밖 이 PC 의 설정(`server/workspace.mjs defaultPcConfigFile` — Windows `%LOCALAPPDATA%\docbench\config.json`; `core.pcSettingsFor` → `core.mergeConfig`)에서만 읽는다. 문서 폴더 `config.json` 에서 읽는 길을 만들지 않는다. 시험은 `DOCBENCH_HOME` 을 임시 폴더로(`scripts/node-test.mjs`).
@@ -33,7 +33,7 @@ claude plugin validate . && claude plugin validate ./integrations/claude-code --
 ## 고칠 때
 
 - 공개 API(`src/types.ts`, REST 계약 `docs/openapi.yaml`, CLI 명령·종료 코드)를 바꾸면 문서(README·PORTING·FEEDBACK-PROTOCOL·스킬 둘)도 같은 커밋에서 맞춘다. 문서가 코드와 다르면 그것이 버그다.
-- 버전을 올리면 `integrations/claude-code/.claude-plugin/plugin.json` 의 version 도(check 가 본다).
+- 버전을 올리면 `integrations/claude-code/.claude-plugin/plugin.json` 의 version 과 `CHANGELOG.md` 의 그 판 절도(check 가 본다 — CI 가 그 절로 Release 를 만든다).
 - 결정은 `docs/DECISIONS.md` 에 한 줄. 뒤집으면 지우지 말고 새 줄.
 - 화면 문구는 `src/ui/i18n.ts` (ko·en 둘 다). 사람이 읽는 말로, 시스템 용어 대신.
 - 스타일은 `.docbench` 아래 `--db-*` 토큰으로. 빌드가 선택자 우선순위를 올리므로 `.docbench` 밖 선택자를 쓰지 않는다.

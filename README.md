@@ -117,7 +117,7 @@ npm run check       # 전부
 ```
 
 빌드 결과물: `dist/docbench.js`(ESM), `dist/docbench.iife.js`(전역 `DocBench`), `dist/docbench.css`, `dist/core.mjs`(서버·CLI), `dist/docbench.html`(단일 HTML), `dist/docbench.mjs`(CLI 파일 하나), `dist/types/`.
-화면·CLI 를 고쳤으면 `npm run release` 로 `release/docbench.html`·`release/docbench.mjs`·`integrations/claude-code/cli/docbench.mjs` 도 갱신해 함께 커밋한다(`npm run check` 가 다르면 실패). 단일 HTML 의 설치 안내는 같은 판 태그(`v<판>`)의 `release/docbench.mjs` 주소와 SHA-256 을 담으므로, 판을 올리면 그 태그도 올린다.
+화면·CLI 를 고쳤으면 `npm run release` 로 `release/docbench.html`·`release/docbench.mjs`·`integrations/claude-code/cli/docbench.mjs` 도 갱신해 함께 커밋한다(`npm run check` 가 다르면 실패). 단일 HTML 의 설치 안내는 같은 판 태그(`v<판>`)의 `release/docbench.mjs` 주소와 SHA-256 을 담는다 — 판을 올릴 때는 [`CHANGELOG.md`](CHANGELOG.md) 에 그 판 절을 쓰고 `main` 에 올리면 CI 가 시험을 통과한 뒤 태그와 GitHub Release(두 파일 첨부)를 만든다. 태그를 손으로 올리지 않는다.
 marked·DOMPurify·jsdiff 는 번들에 들어 있어 사내망·엄격한 CSP 에서도 CDN 없이 돈다([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
 
 ## 파일 모양 보존

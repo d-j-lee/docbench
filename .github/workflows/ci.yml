@@ -1,0 +1,80 @@
+# 시험과 릴리스.
+#  - check   (Linux): npm run check 전부 — 타입·빌드·단위·서버/CLI·브라우저 e2e·배포물 확인
+#  - windows (Windows): 타입·단위·서버/CLI — 경로·잠금·감시·claude.cmd 해석을 실제 Windows 에서
+#  - release (main 에 새 판이 올라왔을 때): check 가 통과하면 태그 v<판> 과 GitHub Release 를 만들고
+#            release/docbench.html·docbench.mjs 를 첨부한다. 본문은 CHANGELOG.md 의 그 판 절.
+#            단일 HTML 의 실행기 설치 안내가 이 태그 주소에서 CLI 를 받으므로 판마다 태그가 꼭 있어야 한다.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: check (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run check
+
+  windows:
+    name: test (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  release:
+    name: release
+    needs: check
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v5
+      - name: 판과 태그
+        id: v
+        run: |
+          V=$(node -p "require('./package.json').version")
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v$V" > /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "v$V 태그가 이미 있습니다 — 릴리스하지 않습니다."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: 태그·Release 만들기
+        if: steps.v.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          node scripts/release-notes.mjs "$V" > "$RUNNER_TEMP/notes.md"
+          gh release create "v$V" release/docbench.html release/docbench.mjs \
+            --target "$GITHUB_SHA" --title "DocBench $V" --notes-file "$RUNNER_TEMP/notes.md"

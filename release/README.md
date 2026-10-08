@@ -14,4 +14,4 @@
 
 - 단일 HTML 의 **Claude 작업**(백그라운드 처리)을 돌리는 실행기: `node docbench.mjs runner "<문서 폴더>" --detach`. 화면의 Claude 작업 창이 받기·지문 확인·켜기까지 Claude Code 에 붙여 넣을 설치 문구를 준다(이 파일의 주소와 SHA-256 이 HTML 에 들어 있다).
 - 터미널 Claude Code 가 피드백을 처리할 때도 같은 파일: `node docbench.mjs fb list --waiting assistant` 등. 서버(`serve`)와 `init --claude` 는 저장소판에서만.
-- 주소는 판마다 고정된다: `https://raw.githubusercontent.com/d-j-lee/docbench/v<판>/release/docbench.mjs` — 그래서 판을 올리면 같은 이름의 git 태그(`v0.3.0` 등)가 있어야 한다.
+- 주소는 판마다 고정된다: `https://raw.githubusercontent.com/d-j-lee/docbench/v<판>/release/docbench.mjs` — 그래서 판마다 같은 이름의 git 태그(`v0.4.0` 등)가 있어야 한다. `main` 에 새 판이 올라가면 CI(`.github/workflows/ci.yml`)가 시험을 통과한 뒤 태그와 GitHub Release 를 만든다(본문은 `CHANGELOG.md` 의 그 판 절, 두 파일 첨부).
