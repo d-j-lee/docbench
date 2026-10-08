@@ -2,9 +2,10 @@
 /**
  * 작업 폴더 — 로컬 드라이브의 문서 폴더 하나를 DocBench 저장소로 쓴다.
  *
- *   <작업 폴더>/
- *     *.md                    문서 (정본은 언제나 이 파일들)
- *     .docbench/
+ * 문서 폴더(*.md, 정본)와 기록 폴더는 따로다(D57). 기록 폴더는 locateData 가 찾는다 —
+ * 기본은 문서 폴더 밖(기록 보관함/<문서 폴더 이름>), 예전 판·팀 공유는 문서 폴더 안 .docbench/. 모양은 같다:
+ *
+ *   <기록 폴더>/
  *       config.json           그룹·제목·규칙 (선택, 함께 씀 — 실행 명령·이름은 여기서 읽지 않는다)
  *       feedback/<id>.json    피드백 한 건 = 파일 하나 (사람·AI 가 같이 읽고 쓴다)
  *       changes.jsonl         변경 이력 (한 줄 = 한 번 저장)
@@ -38,6 +39,155 @@ export class BadRequestError extends Error { constructor(msg) { super(msg); this
 const safeName = core.safeName;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/** 기록 보관함 기본 자리 — 이 PC 의 설정 폴더 아래 data/ @param {string} pcConfigFile */
+export const defaultDataHome = (pcConfigFile) => path.join(path.dirname(pcConfigFile), 'data');
+/** @param {string} a @param {string} b */
+const samePath = (a, b) => { const n = (x) => path.resolve(x).replace(/[\\/]+$/, ''); return CI ? n(a).toLowerCase() === n(b).toLowerCase() : n(a) === n(b); };
+
+export class DataLocationError extends Error {
+  /** @param {string} msg @param {string} code */
+  constructor(msg, code = 'DATA_LOCATION') { super(msg); this.code = code; }
+}
+
+/**
+ * 이 문서 폴더의 기록 폴더를 찾는다 (D58, D61). 순서:
+ *   1. 준 것(--data · DOCBENCH_DATA · new Workspace(root, { dataDir }))
+ *   2. 문서 폴더 안 .docbench/ — 예전 판·팀 공유 (브라우저도 안쪽이 있으면 그것을 먼저 본다 — 둘이 갈라지지 않게)
+ *   3. 이 PC 의 설정 workspaces[<문서 폴더>].data — init·실행기·link 가 적는 짝. 그 폴더가 없으면(드라이브가 안 붙었거나 옮김)
+ *      만들지 않고 멈춘다 — 빈 기록을 새로 만들면 사람의 기록이 사라진 것처럼 보인다
+ *   4. 기록 보관함(이 PC 의 설정 dataHome, 없으면 <PC 설정 폴더>/data) 아래 '<문서 폴더 이름>', '<이름> (2)' … 중
+ *      표식이 이 문서 폴더를 가리키는 것(docsPath, 없으면 문서 표본이 겹치는 것)
+ * 없으면 create 일 때만 보관함의 빈 이름 자리를 돌려준다(만들기는 init·serve). CLI 의 다른 명령은 create 없이 — 몰래 새 기록을 만들지 않는다.
+ * @param {string} root @param {{ pcConfigFile: string, dataDir?: string, create?: boolean, docs?: string[] }} o docs = 문서 표본(없으면 훑는다)
+ * @returns {Promise<{ dir: string, mode: 'inside' | 'outside', source: 'option' | 'pc' | 'inside' | 'home' | 'new', claimed?: boolean } | null>}
+ */
+export async function locateData(root, o) {
+  root = path.resolve(root);
+  const inside = path.join(root, '.docbench');
+  const real = await fs.realpath(root).catch(() => root);
+  const mode = (/** @type {string} */ d) => (samePath(d, inside) ? 'inside' : 'outside');
+  if (o.dataDir) {
+    const d = path.resolve(o.dataDir);
+    if (!o.create && !(await isDir(d))) return null;
+    return { dir: d, mode: mode(d), source: 'option' };
+  }
+  if (await isDir(inside)) return { dir: inside, mode: 'inside', source: 'inside' };
+  const pc = core.pcDataFor(await readJson(o.pcConfigFile, {}), [root, real], CI);
+  if (pc.data) {
+    const d = path.resolve(path.dirname(o.pcConfigFile), pc.data);
+    if (!(await isDir(d))) throw new DataLocationError(`이 문서 폴더의 기록 폴더가 없습니다: ${d}\n드라이브가 붙어 있는지 보세요. 다른 자리로 옮겼으면: docbench link "${root}" --data <기록 폴더>`, 'DATA_MISSING');
+    return { dir: d, mode: mode(d), source: 'pc' };
+  }
+  const home = pc.dataHome ? path.resolve(path.dirname(o.pcConfigFile), pc.dataHome) : defaultDataHome(o.pcConfigFile);
+  let docs = o.docs;
+  /** @type {string | null} */
+  let free = null;
+  for (const name of core.dataFolderCandidates(path.basename(root))) {
+    const cand = path.join(home, name);
+    const raw = await readJson(path.join(cand, core.DATA_MARKER));
+    const marker = core.parseDataMarker(raw);
+    if (!marker) {
+      // 표식 없는 자리: 비어 있으면 새 기록 자리로 쓸 수 있다(다른 파일이 있으면 건너뛴다)
+      if (!free && !(await fs.readdir(cand).catch(() => [])).length) free = cand;
+      continue;
+    }
+    if (marker.docsPath) {
+      if (samePath(marker.docsPath, root) || samePath(marker.docsPath, real)) return { dir: cand, mode: 'outside', source: 'home', claimed: true };
+      continue;
+    }
+    // 브라우저가 만든 기록(경로 없음): 문서 표본이 겹치면 이 폴더의 것
+    docs ??= await quickDocList(root);
+    if (core.sameDocsFolder(marker, docs)) return { dir: cand, mode: 'outside', source: 'home', claimed: false };
+  }
+  if (!o.create) return null;
+  if (!free) throw new DataLocationError(`기록 보관함(${home})에 "${path.basename(root)}" 이름의 자리가 모두 다른 문서 폴더의 것입니다. 기록 자리를 정해 주세요: docbench init "${root}" --data <기록 폴더>`, 'DATA_CONFLICT');
+  return { dir: free, mode: 'outside', source: 'new' };
+}
+/**
+ * 이 PC 의 설정에 문서 폴더 ↔ 기록 폴더 짝을 적는다(같으면 그대로). 보관함을 주면 dataHome 이 비었을 때만 그것으로.
+ * 읽지 못하는 설정 파일은 덮어쓰지 않는다.
+ * @param {string} pcConfigFile @param {string} root @param {string | null} dataDir null = 짝 지우기 @param {{ dataHome?: string }} [o]
+ * @returns {Promise<boolean>} 바꿨는지
+ */
+export async function setPcMapping(pcConfigFile, root, dataDir, o = {}) {
+  const text = await fs.readFile(pcConfigFile, 'utf8').catch((e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
+  /** @type {any} */
+  let c = {};
+  if (text != null) { try { c = core.parseJsonText(text) || {}; } catch { throw new DataLocationError(`이 PC 의 설정 파일을 읽지 못해 고치지 않았습니다(JSON 확인): ${pcConfigFile}`); } }
+  if (!c || typeof c !== 'object' || Array.isArray(c)) throw new DataLocationError(`이 PC 의 설정 파일 모양이 이상해 고치지 않았습니다: ${pcConfigFile}`);
+  c.workspaces = c.workspaces && typeof c.workspaces === 'object' && !Array.isArray(c.workspaces) ? c.workspaces : {};
+  const key = Object.keys(c.workspaces).find((k) => samePath(k, root)) || root;
+  const cur = c.workspaces[key] && typeof c.workspaces[key] === 'object' ? c.workspaces[key] : {};
+  let changed = false;
+  if (dataDir == null) { if ('data' in cur) { delete cur.data; changed = true; } }
+  else if (!(typeof cur.data === 'string' && samePath(path.resolve(path.dirname(pcConfigFile), cur.data), dataDir))) { cur.data = dataDir; changed = true; }
+  if (changed) { if (Object.keys(cur).length) c.workspaces[key] = cur; else delete c.workspaces[key]; }
+  if (o.dataHome && !c.dataHome) { c.dataHome = o.dataHome; changed = true; }
+  if (!changed) return false;
+  await fs.mkdir(path.dirname(pcConfigFile), { recursive: true });
+  await writeJson(pcConfigFile, c);
+  return true;
+}
+
+/** @param {string} p */
+async function isDir(p) { const st = await fs.stat(p).catch(() => null); return !!st?.isDirectory(); }
+
+/** 문서 표본용으로 문서 폴더의 .md 를 가볍게 훑는다(기본 규칙: 숨김·node_modules 등 제외) @param {string} root */
+export async function quickDocList(root, limit = 400) {
+  /** @type {string[]} */
+  const out = [];
+  const walk = async (/** @type {string} */ dir, /** @type {string} */ rel, depth = 0) => {
+    if (depth > 8 || out.length >= limit) return;
+    const ents = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of ents) {
+      if (out.length >= limit) return;
+      if (e.isSymbolicLink()) continue;
+      const r = rel ? rel + '/' + e.name : e.name;
+      if (e.isDirectory()) { if (core.walkable(e.name)) await walk(path.join(dir, e.name), r, depth + 1); }
+      else if (/\.(md|markdown)$/i.test(e.name)) out.push(r);
+    }
+  };
+  await walk(root, '');
+  return out;
+}
+
+/**
+ * 밖에 둔 기록 폴더를 이 문서 폴더의 것으로 확인한다: 문서 폴더 안·문서 폴더를 품는 자리는 거부, 다른 문서 폴더를 가리키는
+ * 표식(docsPath, 또는 문서 표본이 겹치지 않음)이면 거부, 표식 없는 폴더는 비어 있어야 한다(예전 .docbench 를 옮겨 놓은 것은 된다).
+ * claim 이면 표식을 만들거나 docsPath·문서 표본을 채운다 — init·link·serve·실행기만. 읽기만 하는 CLI 명령은 표식을 바꾸지 않는다.
+ * @param {string} dir @param {string} root @param {{ claim?: boolean, docs?: string[], force?: boolean }} [o] force = 문서 목록이 달라도 잇는다(link --force)
+ */
+export async function claimDataDir(dir, root, o = {}) {
+  root = path.resolve(root);
+  if (isInside(dir, root) || samePath(dir, root)) throw new DataLocationError(`기록 폴더는 문서 폴더 밖이어야 합니다(안에 두려면 ${path.join(root, '.docbench')}): ${dir}`);
+  if (isInside(root, dir)) throw new DataLocationError(`기록 폴더가 문서 폴더를 품고 있습니다 — 따로 된 폴더를 고르세요: ${dir}`);
+  const file = path.join(dir, core.DATA_MARKER);
+  const raw = await readJson(file);
+  const marker = core.parseDataMarker(raw);
+  if (raw != null && !marker) throw new DataLocationError(`기록 폴더의 표식(${file})을 읽지 못했습니다`);
+  const real = await fs.realpath(root).catch(() => root);
+  if (marker?.docsPath && !samePath(marker.docsPath, root) && !samePath(marker.docsPath, real)) {
+    throw new DataLocationError(`이 기록 폴더는 다른 문서 폴더(${marker.docsPath})의 것입니다: ${dir}`, 'DATA_CONFLICT');
+  }
+  const docs = o.docs || await quickDocList(root);
+  if (marker && !marker.docsPath && !o.force && !core.sameDocsFolder(marker, docs)) {
+    throw new DataLocationError(`이 기록 폴더는 이름이 같은 다른 문서 폴더("${marker.docsName}")의 것으로 보입니다(문서 목록이 다릅니다): ${dir}\n맞다면 docbench link "${root}" --data "${dir}" --force`, 'DATA_CONFLICT');
+  }
+  if (!marker) {
+    const ents = await fs.readdir(dir).catch(() => []);
+    if (ents.some((n) => !['feedback', 'blobs', 'viewstate', 'inbox', 'locks', 'runs', 'runners', '.gitignore'].includes(n) && !/^(config|state)\.json$|^changes\.jsonl$/.test(n))) {
+      throw new DataLocationError(`기록 폴더로 쓰려는 곳에 다른 파일이 있습니다 — 빈 폴더를 고르세요: ${dir}`);
+    }
+  }
+  if (!o.claim) return;
+  const next = { ...(marker || core.newDataMarker(path.basename(root))), docsName: marker?.docsName || path.basename(root), docsPath: root, docs: core.nextDocsSample(marker?.docs, docs) };
+  delete next.migrating;
+  if (!marker || marker.docsPath !== root || JSON.stringify(marker.docs || []) !== JSON.stringify(next.docs)) {
+    await fs.mkdir(dir, { recursive: true });
+    await writeJson(file, next);
+  }
+}
+
 /**
  * 이 PC 의 설정 파일 — 문서 폴더 밖이라 git·OneDrive·공유 폴더로 퍼지지 않는다. 운영체제의 앱 설정 자리:
  *   Windows %LOCALAPPDATA%\docbench\config.json (로밍되지 않는 이 PC 자리 — 명령에 이 PC 의 경로가 들어간다)
@@ -61,10 +211,20 @@ function isInside(child, root) {
 const IGNORE_DIRS = core.IGNORE_DIRS;
 
 export class Workspace {
-  /** @param {string} root @param {{ actor?: any, pcConfigFile?: string }} [opts] pcConfigFile = 이 PC 의 설정 파일(기본: 사용자 폴더) */
+  /**
+   * @param {string} root 문서 폴더
+   * @param {{ actor?: any, pcConfigFile?: string, dataDir?: string, create?: boolean }} [opts] pcConfigFile = 이 PC 의 설정 파일(기본: 사용자 폴더),
+   *   dataDir = 기록 폴더(주지 않으면 init 이 locateData 로 찾는다),
+   *   create = 기록이 없으면 만든다(기본 켬 — 서버·init). 끄면(CLI 의 다른 명령) 찾기만 하고 표식도 바꾸지 않는다
+   */
   constructor(root, opts = {}) {
     this.root = path.resolve(root);
-    this.dir = path.join(this.root, '.docbench');
+    /** 기록 폴더 — init 이 정한다 */
+    this.dir = opts.dataDir ? path.resolve(opts.dataDir) : path.join(this.root, '.docbench');
+    this.dataOption = opts.dataDir;
+    this.create = opts.create !== false;
+    /** @type {'inside' | 'outside'} */
+    this.dataMode = 'inside';
     this.actor = opts.actor;
     /** @type {import('../dist/core.mjs').WorkspaceConfig} */
     this.config = core.mergeConfig({}, path.basename(this.root));
@@ -89,13 +249,29 @@ export class Workspace {
   async init() {
     const st = await fs.stat(this.root).catch(() => null);
     if (!st || !st.isDirectory()) throw new Error('작업 폴더가 없습니다: ' + this.root);
+    const loc = await locateData(this.root, { pcConfigFile: this.pcConfigFile, dataDir: this.dataOption, create: this.create });
+    if (!loc) throw new DataLocationError(`이 문서 폴더의 기록을 찾지 못했습니다: ${this.root}`, 'NO_DATA');
+    this.dir = loc.dir;
+    this.dataMode = loc.mode;
+    /** @type {string[]} */
+    this.dataWarnings = [];
+    if (loc.mode === 'outside') {
+      await claimDataDir(this.dir, this.root, { claim: this.create });
+      // 만든·찾은 기록은 짝을 이 PC 의 설정에 적어 둔다 — 보관함(dataHome)이 바뀌어도 이 폴더의 기록을 잃지 않게
+      if (this.create && loc.source !== 'pc') await setPcMapping(this.pcConfigFile, this.root, this.dir).catch((e) => this.dataWarnings.push(String(e.message || e)));
+    } else {
+      const pc = core.pcDataFor(await readJson(this.pcConfigFile, {}), [this.root], CI);
+      if (pc.data) this.dataWarnings.push(`이 PC 의 설정에 이 폴더의 기록 짝(${pc.data})이 있지만 문서 폴더 안 .docbench 를 씁니다(안쪽이 먼저). 밖을 쓰려면 안쪽을 옮기거나 지우세요.`);
+    }
     await this.loadConfig();
     for (const d of ['feedback', 'blobs', 'viewstate', 'inbox']) await fs.mkdir(path.join(this.dir, d), { recursive: true });
-    // 예전 판이 만든 .gitignore 에도 빠진 줄을 덧붙인다(사람이 더한 줄은 그대로)
-    const gi = path.join(this.dir, '.gitignore');
-    const giText = await fs.readFile(gi, 'utf8').catch(() => null);
-    const giNext = giText == null ? core.DOT_GITIGNORE : core.mergeGitignore(giText);
-    if (giNext != null) await fs.writeFile(gi, giNext);
+    if (loc.mode === 'inside') {
+      // 예전 판이 만든 .gitignore 에도 빠진 줄을 덧붙인다(사람이 더한 줄은 그대로). 밖에 둔 기록은 git 과 상관없다
+      const gi = path.join(this.dir, '.gitignore');
+      const giText = await fs.readFile(gi, 'utf8').catch(() => null);
+      const giNext = giText == null ? core.DOT_GITIGNORE : core.mergeGitignore(giText);
+      if (giNext != null) await fs.writeFile(gi, giNext);
+    }
     this.legacyWritable = await canEncodeLegacy();
     this.git = await gitInfo(this.root).catch(() => null);
     await this.scan();
@@ -402,7 +578,9 @@ export class Workspace {
     /** @type {Map<string, { title: string, size?: number, mtimeMs?: number }>} */
     const info = new Map();
     for (const [id, d] of this.docs) info.set(id, { title: await this.titleOf(id), size: d.size, mtimeMs: d.mtimeMs });
-    return core.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI, { folders: this.folders, rootName: path.basename(this.root) });
+    const m = core.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI, { folders: this.folders, rootName: path.basename(this.root) });
+    m.project.storage = this.dataMode === 'inside' ? path.basename(this.root) + '/.docbench' : this.dir;
+    return m;
   }
 
   // ------------------------------------------------------------ 피드백
@@ -522,13 +700,19 @@ export class Workspace {
     /** @type {Map<string, NodeJS.Timeout>} */
     const timers = new Map();
     const later = (key, fn, ms = 250) => { clearTimeout(timers.get(key)); timers.set(key, setTimeout(() => { timers.delete(key); fn(); }, ms)); };
+    // 기록 폴더 안의 경로(기록 폴더 기준)
+    const onData = (rel) => {
+      rel = rel.split(path.sep).join('/');
+      if (rel.startsWith('feedback/')) return later('fb', () => emit({ type: 'feedback' }), 150);
+      if (rel === 'changes.jsonl') return later('changes', () => void announceChanges(), 200);
+      if (rel === 'config.json') return later('config', async () => { await this.loadConfig(); await this.scan(); emit({ type: 'manifest' }); });
+    };
+    const insideData = this.dataMode === 'inside';
     const onPath = (rel) => {
       if (!rel) return;
       rel = rel.split(path.sep).join('/');
-      if (rel.startsWith('.docbench/feedback/')) return later('fb', () => emit({ type: 'feedback' }), 150);
-      if (rel === '.docbench/changes.jsonl') return later('changes', () => void announceChanges(), 200);
-      if (rel === '.docbench/config.json') return later('config', async () => { await this.loadConfig(); await this.scan(); emit({ type: 'manifest' }); });
-      if (rel.startsWith('.docbench/') || rel.split('/').some((s) => IGNORE_DIRS.has(s))) return;
+      if (rel.startsWith('.docbench/')) { if (insideData) onData(rel.slice('.docbench/'.length)); return; }
+      if (rel.split('/').some((s) => IGNORE_DIRS.has(s))) return;
       if (!this.isDoc(rel)) return;
       later('doc:' + rel, async () => {
         const listChanged = await this.scan();
@@ -591,16 +775,24 @@ export class Workspace {
       fbSig = sig;
     };
     let watcher = null;
+    let dataWatcher = null;
     let poll = null;
     try {
       // 파일 이름 없이 오는 알림(Windows 버퍼 넘침 등)은 전체를 한 번 훑는다
       watcher = fsWatch(this.root, { recursive: true }, (_ev, file) => (file ? onPath(String(file)) : later('poll', () => void pollAll(), 300)));
       watcher.on('error', () => { watcher?.close(); watcher = null; startPoll(); });
     } catch { startPoll(); }
+    if (!insideData) {
+      // 기록 폴더가 문서 폴더 밖이면 따로 감시한다
+      try {
+        dataWatcher = fsWatch(this.dir, { recursive: true }, (_ev, file) => (file ? onData(String(file)) : later('poll', () => void pollAll(), 300)));
+        dataWatcher.on('error', () => { dataWatcher?.close(); dataWatcher = null; startPoll(); });
+      } catch { startPoll(); }
+    }
     function startPoll() { if (!poll) poll = setInterval(() => void pollAll(), 3000); }
     // 안전망: 네트워크 드라이브처럼 알림이 안 오는 곳을 위해 30초마다 한 번 훑는다
     const safety = setInterval(() => { if (!poll) void pollAll(); }, 30000);
-    return () => { watcher?.close(); if (poll) clearInterval(poll); clearInterval(safety); timers.forEach(clearTimeout); };
+    return () => { watcher?.close(); dataWatcher?.close(); if (poll) clearInterval(poll); clearInterval(safety); timers.forEach(clearTimeout); };
   }
   /** @param {(ev: {type: string, id?: string}) => void} emit */
   async pollOnce(emit) {

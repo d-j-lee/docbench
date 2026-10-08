@@ -1,6 +1,6 @@
 ---
 name: docbench-feedback
-description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 AI 차례인 것을 처리한다 — 섹션을 고치거나, 수정 제안을 올리거나, 되묻는다. 사용자가 "피드백 반영", "넘긴 거 처리", "/docbench-feedback" 이라고 하거나 .docbench/inbox 에 요청이 쌓였을 때 쓴다. Process DocBench document feedback waiting on the assistant.
+description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 AI 차례인 것을 처리한다 — 섹션을 고치거나, 수정 제안을 올리거나, 되묻는다. 사용자가 "피드백 반영", "넘긴 거 처리", "/docbench-feedback" 이라고 하거나 넘기기 요청(docbench inbox)이 쌓였을 때 쓴다. Process DocBench document feedback waiting on the assistant.
 ---
 
 # DocBench 피드백 처리
@@ -13,7 +13,9 @@ description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 
 2. `node "${CLAUDE_PLUGIN_ROOT}/cli/docbench.mjs"` — 이 플러그인에 들어 있는 CLI 파일 하나(Node 20.11+). 이 경로가 실제 폴더로 바뀌어 있지 않으면(플러그인이 아니라 복사해 둔 스킬) 건너뛴다
 3. `node "%LOCALAPPDATA%\docbench\docbench.mjs"` (macOS `~/Library/Application Support/docbench/`, Linux `~/.config/docbench/`) — 화면의 Claude 작업 실행기를 설치했으면 여기 있다
 4. `node <DocBench 위치>/bin/docbench.mjs` — 대시보드에 붙였다면 보통 `vendor/docbench`
-작업 폴더는 현재 폴더에서 위로 `.docbench` 를 찾는다. 다른 곳에서 부르면 `--root <폴더>` 또는 환경 변수 `DOCBENCH_ROOT` (종료 코드 2 = 못 찾음 — 만들지 않는다).
+**작업 폴더와 기록 폴더**: 피드백·이력은 문서 폴더가 아니라 **기록 폴더**에 있다 — 기본은 문서 폴더 밖(기록 보관함/<문서 폴더 이름>), 예전·팀 공유 폴더는 문서 폴더 안 `.docbench`. CLI 는 현재 폴더에서 위로 문서 폴더를 찾고 기록 폴더도 스스로 찾는다(`docbench status` 가 둘 다 보여 준다). 다른 곳에서 부르면 `--root <문서 폴더>`(`DOCBENCH_ROOT`). 종료 코드 2 = 못 찾음 — 만들지 않는다:
+- 브라우저(단일 HTML)로만 쓰던 폴더면 기록 짝이 아직 없다. 사용자에게 기록 보관함 위치를 물어 `docbench link "<문서 폴더>" --data "<보관함>/<문서 폴더 이름>"` 로 한 번 잇는다(그 폴더에 `docbench-data.json` 이 있다).
+- 기록 폴더 안의 파일은 직접 읽거나 고치지 않는다 — 언제나 CLI 로.
 
 **화면의 "Claude 작업"과 함께 쓸 때**: 화면이 같은 폴더의 피드백을 백그라운드 Claude 에 맡겼을 수 있다. `docbench status` 에 `실행 중`·`대기` 줄로 보이는 피드백은 건드리지 말고(그 작업이 처리한다), 사용자에게 그렇다고 알린다. 동시에 잡아도 판 비교로 한쪽만 반영되지만, 같은 일을 두 번 하게 된다.
 
@@ -47,4 +49,4 @@ description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 
 - 종료 코드 3 = 그 사이 문서가 바뀜 → `fb show` 로 다시 읽고 고친다. 덮어쓰지 않는다.
 - 종료 코드 4 = 읽기 전용(CP949 인데 iconv-lite 없음 등) → 사람에게 UTF-8 변환 저장(`--convert-utf8`) 여부를 묻는다.
 - 섹션 키는 `docbench doc sections <docId>` 로 확인한다. 같은 이름 제목이 여럿이면 키 끝에 ` #2` 가 붙는다.
-- `.docbench/feedback/*.json` 을 손으로 고치지 않는다(판 번호). 회신·제안은 `fb reply`·`fb propose` 로.
+- 기록 폴더의 `feedback/*.json` 을 손으로 고치지 않는다(판 번호). 회신·제안은 `fb reply`·`fb propose` 로.

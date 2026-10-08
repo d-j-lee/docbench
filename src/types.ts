@@ -15,6 +15,8 @@ export interface Manifest {
     name: string;
     subtitle?: string;
     links?: { label: string; url: string }[];
+    /** 기록(피드백·이력)이 있는 자리 — 화면 아래에 "기록: …" 으로 보인다 (D57) */
+    storage?: string;
   };
   /** 상단 바의 D-day. 대시보드 안에서는 보통 비운다. */
   milestones?: { date: string; label: string; kind?: 'official' | 'plan'; source?: string }[];
@@ -422,7 +424,8 @@ export interface RunsAdapter {
   /** 여럿일 때 쓸 실행기를 고른다 (폴더 어댑터) */
   choose?(runnerId: string): void;
   /** 실행기가 없을 때 보여 줄 설치 안내의 재료 (단일 HTML — 받을 CLI 주소·지문) */
-  setup?: { version: string; cliUrl: string; sha256: string; folderName: string };
+  /** dataHome·dataName = 기록을 문서 폴더 밖(기록 보관함 dataHome 아래 dataName)에 둘 때 그 이름들 */
+  setup?: { version: string; cliUrl: string; sha256: string; folderName: string; dataHome?: string; dataName?: string };
 }
 
 // ---------------------------------------------------------------- 폴더 지도

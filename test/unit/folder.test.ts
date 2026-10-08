@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import iconv from 'iconv-lite';
 import { createFolderAdapters, lockFileName, type FolderAdapters } from '../../src/adapters/folder';
-import { fsFromMemory, type FsLike } from '../../src/adapters/folder-fs';
+import { fsFromMemory, subFs, type FsLike } from '../../src/adapters/folder-fs';
 import { DocConflictError, DocReadOnlyError, FeedbackConflictError, type DocEvent } from '../../src/types';
 import type { LegacyCodec } from '../../src/core/textcodec';
 
@@ -206,6 +206,55 @@ function fsFromNode(root: string): FsLike {
     async remove(p) { await fsp.rm(abs(p), { force: true }); },
   };
 }
+
+describe('기록을 문서 폴더 밖에 둘 때 (D57)', () => {
+  it('메모리: 문서 폴더에는 아무것도 안 생기고, 기록은 기록 폴더에 같은 모양으로', async () => {
+    const docs = fsFromMemory({ 'docs/런북.md': DOC }, '문서');
+    const home = fsFromMemory({}, '기록함');
+    const a = await open(docs, { data: subFs(home, '문서'), dataHome: '기록함' });
+    const f = await a.feedback.create({ docId: 'docs/런북.md', target: { kind: 'doc' }, body: '확인' });
+    const d = await a.docs.load('docs/런북.md');
+    await a.docs.save!('docs/런북.md', d.md.replace('확인한다', '두 번 확인한다'), { baseVersion: d.version, summary: '강조' });
+    expect([...docs.files.keys()]).toEqual(['docs/런북.md']);
+    const keys = [...home.files.keys()];
+    expect(keys).toContain(`문서/feedback/${f.id}.json`);
+    expect(keys).toContain('문서/changes.jsonl');
+    expect(keys).toContain('문서/docbench-data.json');
+    expect(keys.some((k) => k.startsWith('문서/.gitignore'))).toBe(false);
+    expect(JSON.parse(home.text('문서/docbench-data.json')!)).toMatchObject({ protocol: 1, docsName: '문서' });
+    expect((await a.docs.manifest()).project.storage).toBe('기록함/문서');
+    expect(a.runs?.setup).toBeUndefined();
+    // Claude 작업도 기록 폴더로: 실행기 심장 박동을 읽고 요청을 남긴다
+    await home.write('문서/runners/runner_dj@pc.json', JSON.stringify({ id: 'runner:dj@pc', kind: 'runner', user: 'dj', host: 'pc', pid: 1, version: 't', protocol: 1, startedAt: '', seenAt: new Date().toISOString(), claude: { ok: true }, models: [], efforts: [] }));
+    expect((await a.runs!.status()).available).toBe(true);
+    const r = await a.runs!.start({ kind: 'handoff', feedbackIds: [f.id] });
+    expect(home.files.has(`문서/runs/${r.id}.req.json`)).toBe(true);
+    expect([...docs.files.keys()]).toEqual(['docs/런북.md']);
+  });
+  it('실제 디스크: 브라우저가 보관함에 만든 기록을 CLI 가 link 로 이어받는다', async () => {
+    const base = await fsp.mkdtemp(path.join(os.tmpdir(), 'docbench-out-'));
+    try {
+      const dir = path.join(base, '문서');
+      const homeDir = path.join(base, '기록함');
+      const pcHome = path.join(base, 'pc');
+      await fsp.cp(path.join(repo, 'examples/sample-workspace'), dir, { recursive: true, filter: (s) => !/[\\/]\.docbench([\\/]|$)/.test(s) });
+      await fsp.mkdir(homeDir, { recursive: true });
+      await fsp.writeFile(path.join(homeDir, 'docbench-home.json'), '{"protocol":1}');
+      const env = { ...process.env, DOCBENCH_HOME: pcHome, DOCBENCH_ACTOR: '' };
+      const cli = async (...args: string[]) => (await run(process.execPath, [path.join(repo, 'bin/docbench.mjs'), ...args, '--json'], { cwd: dir, env })).stdout;
+      const a = await open(fsFromNode(dir), { legacy: cp949, data: subFs(fsFromNode(homeDir), '문서'), dataHome: '기록함' });
+      const f = await a.feedback.create({ docId: 'docs/운영-런북.md', target: { kind: 'doc' }, body: '연락처 빈칸을 알려 줘' });
+      await expect(cli('fb', 'list')).rejects.toMatchObject({ code: 2 });
+      await cli('link', dir, '--data', path.join(homeDir, '문서'));
+      expect(JSON.parse(await cli('fb', 'list', '--waiting', 'assistant')).map((x: { id: string }) => x.id)).toContain(f.id);
+      await cli('fb', 'reply', f.id, '-m', '두 군데입니다', '--resolve');
+      const rows = await new Promise<import('../../src/types').Feedback[]>((r) => { const off = a.feedback.subscribe((x) => { off(); r(x); }); });
+      expect(rows.find((x) => x.id === f.id)).toMatchObject({ status: 'resolved' });
+      expect((await fsp.readdir(dir)).includes('.docbench')).toBe(false);
+      expect(JSON.parse(await fsp.readFile(path.join(pcHome, 'config.json'), 'utf8')).dataHome).toBe(homeDir);
+    } finally { await fsp.rm(base, { recursive: true, force: true }); }
+  });
+});
 
 describe('실제 디스크: 브라우저 어댑터 ↔ CLI 가 같은 폴더를 이어받는다', () => {
   it('피드백·회신·섹션 쓰기·판이 서로 맞는다', async () => {

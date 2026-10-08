@@ -427,6 +427,12 @@
 .docbench .db-start label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; color: var(--db-ink-2); }
 .docbench .db-start label span { font-weight: 400; color: var(--db-ink-3); }
 .docbench .db-start input[type="text"] { border: 1px solid var(--db-line-2); border-radius: 7px; padding: 6px 10px; font-size: 14px; background: var(--db-bg); width: 100%; box-sizing: border-box; }
+.docbench .db-start-step:empty { display: none; }
+.docbench .db-start-data { display: grid; gap: 8px; border: 1px solid color-mix(in srgb, var(--db-info) 35%, var(--db-line)); background: color-mix(in srgb, var(--db-info-soft) 45%, var(--db-surface)); border-radius: 10px; padding: 12px 14px; }
+.docbench .db-start-data b { font-size: 14.5px; }
+.docbench .db-start-data p { font-size: 13.5px; }
+.docbench .db-start-data small { color: var(--db-ink-3); font-size: 12px; }
+.docbench .db-rail-store { font-size: 11.5px; color: var(--db-ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .docbench .db-start-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .docbench .db-start-acts .db-btn { padding: 7px 14px; font-size: 14px; }
 .docbench .db-start-acts .db-btn.ghost { color: var(--db-ink-2); text-decoration: underline; text-underline-offset: 3px; padding-inline: 4px; }

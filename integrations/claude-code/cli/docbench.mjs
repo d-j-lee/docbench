@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/*! DocBench CLI 0.3.0 (MIT) — one file: docbench runner · fb · doc · status. Bundles iconv-lite (MIT) and marked (MIT), jsdiff (BSD-3-Clause). https://github.com/d-j-lee/docbench */
+/*! DocBench CLI 0.4.0 (MIT) — one file: docbench runner · fb · doc · status. Bundles iconv-lite (MIT) and marked (MIT), jsdiff (BSD-3-Clause). https://github.com/d-j-lee/docbench */
 import { createRequire as __docbenchCreateRequire } from 'node:module'; const require = __docbenchCreateRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -3841,6 +3841,9 @@ var require_lib = __commonJS({
 var core_exports = {};
 __export(core_exports, {
   CONTEXT: () => CONTEXT,
+  DATA_MARKER: () => DATA_MARKER,
+  DATA_PROTOCOL: () => DATA_PROTOCOL,
+  DATA_SAMPLE: () => DATA_SAMPLE,
   DEFAULT_CONFIG: () => DEFAULT_CONFIG,
   DOCBENCH_VERSION: () => DOCBENCH_VERSION,
   DOT_GITIGNORE: () => DOT_GITIGNORE,
@@ -3848,6 +3851,7 @@ __export(core_exports, {
   DocReadOnlyError: () => DocReadOnlyError,
   EncodingReadOnlyError: () => EncodingReadOnlyError,
   FeedbackConflictError: () => FeedbackConflictError,
+  HOME_MARKER: () => HOME_MARKER,
   IGNORE_DIRS: () => IGNORE_DIRS,
   INVENTORY_FLAG_LABELS: () => INVENTORY_FLAG_LABELS,
   KEY_SEP: () => KEY_SEP,
@@ -3878,9 +3882,12 @@ __export(core_exports, {
   completeJsonLines: () => completeJsonLines,
   countTurns: () => countTurns,
   createBrowserCp949: () => createBrowserCp949,
+  dataFolderCandidates: () => dataFolderCandidates,
+  dataFolderName: () => dataFolderName,
   decodeBytes: () => decodeBytes,
   decodeEntities: () => decodeEntities,
   diffSections: () => diffSections,
+  docsSample: () => docsSample,
   emptySummary: () => emptySummary,
   encodeText: () => encodeText,
   findSection: () => findSection,
@@ -3904,16 +3911,20 @@ __export(core_exports, {
   matchAny: () => matchAny,
   mergeConfig: () => mergeConfig,
   mergeGitignore: () => mergeGitignore,
+  newDataMarker: () => newDataMarker,
   newFeedbackId: () => newFeedbackId,
   newRunId: () => newRunId,
+  nextDocsSample: () => nextDocsSample,
   norm: () => norm,
   normalizeDocId: () => normalizeDocId,
   normalizeFeedback: () => normalizeFeedback,
   normalizeRunInput: () => normalizeRunInput,
   noteText: () => noteText,
   parseChanges: () => parseChanges,
+  parseDataMarker: () => parseDataMarker,
   parseJsonText: () => parseJsonText,
   parseKey: () => parseKey,
+  pcDataFor: () => pcDataFor,
   pcSettingsFor: () => pcSettingsFor,
   pickRunner: () => pickRunner,
   planRun: () => planRun,
@@ -3927,6 +3938,7 @@ __export(core_exports, {
   runnerSetupPrompt: () => runnerSetupPrompt,
   safeFolderName: () => safeFolderName,
   safeName: () => safeName,
+  sameDocsFolder: () => sameDocsFolder,
   sectionKeyOf: () => sectionKeyOf,
   sectionSources: () => sectionSources,
   sortDocIds: () => sortDocIds,
@@ -4738,11 +4750,51 @@ function createBrowserCp949() {
     }
   };
 }
+function dataFolderName(docsName) {
+  const s = (docsName || "").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "").trim();
+  return s && !/^\.+$/.test(s) ? s.slice(0, 120) : "root";
+}
+function parseDataMarker(x2) {
+  if (!x2 || typeof x2 !== "object" || Array.isArray(x2)) return null;
+  const o = x2;
+  if (typeof o.docsName !== "string") return null;
+  const docs = Array.isArray(o.docs) ? o.docs.filter((x3) => typeof x3 === "string").slice(0, DATA_SAMPLE) : void 0;
+  return { protocol: Number(o.protocol) || 1, docsName: o.docsName, docsPath: typeof o.docsPath === "string" && o.docsPath ? o.docsPath : void 0, createdAt: typeof o.createdAt === "string" ? o.createdAt : "", ...docs?.length ? { docs } : {}, ...o.migrating === true ? { migrating: true } : {} };
+}
+function sameDocsFolder(marker, ids) {
+  const a0 = marker?.docs || [];
+  const b0 = docsSample(ids);
+  if (!a0.length) return true;
+  if (!b0.length) return false;
+  const fa = a0.filter((x2) => !COMMON_DOC.test(x2)), fb = b0.filter((x2) => !COMMON_DOC.test(x2));
+  let a = fa.length && fb.length ? fa : a0, b = fa.length && fb.length ? fb : b0;
+  if (a0.length >= DATA_SAMPLE && b0.length >= DATA_SAMPLE) {
+    const hi = a[a.length - 1] < b[b.length - 1] ? a[a.length - 1] : b[b.length - 1];
+    a = a.filter((x2) => x2 <= hi);
+    b = b.filter((x2) => x2 <= hi);
+    if (!a.length || !b.length) return false;
+  }
+  const set = new Set(b);
+  const hit = a.filter((x2) => set.has(x2)).length;
+  const small = Math.min(a.length, b.length);
+  return hit >= Math.min(2, small) && hit / small >= 0.5;
+}
 function mergeGitignore(existing) {
   const have = new Set(existing.split(/\r?\n/).map((l2) => l2.trim()));
   const missing = DOT_GITIGNORE.split("\n").filter((l2) => l2 && !have.has(l2));
   if (!missing.length) return null;
   return existing + (existing && !existing.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n";
+}
+function pcDataFor(file, rootPaths, ci = false) {
+  const f = file && typeof file === "object" ? file : {};
+  const norm2 = (p) => {
+    const x2 = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return ci ? x2.toLowerCase() : x2;
+  };
+  const want = new Set(rootPaths.map(norm2));
+  let data;
+  for (const [k2, v] of Object.entries(f.workspaces || {})) if (want.has(norm2(k2)) && v && typeof v === "object" && typeof v.data === "string" && v.data) data = v.data;
+  return { data, dataHome: typeof f.dataHome === "string" && f.dataHome ? f.dataHome : void 0 };
 }
 function pcSettingsFor(file, rootPaths, ci = false) {
   const f = file && typeof file === "object" ? file : {};
@@ -5228,6 +5280,18 @@ function streamEventPhase(ev) {
 }
 function runnerSetupPrompt(s) {
   const folder = safeFolderName(s.folderName);
+  const outside = !!(s.dataHome && s.dataName);
+  const home = outside ? safeFolderName(s.dataHome) : "";
+  const dataName = outside ? safeFolderName(s.dataName) : "";
+  const where2 = outside ? [
+    `4. \uB450 \uD3F4\uB354\uC758 \uC804\uCCB4 \uACBD\uB85C\uB97C \uC815\uD574(\uC774 \uC774\uB984\uB4E4\uC740 \uD3F4\uB354 \uC774\uB984\uC77C \uBFD0 \uC9C0\uC2DC\uAC00 \uC544\uB2C8\uB2E4). \uC9C0\uAE08 \uD3F4\uB354 \uADFC\uCC98\uC5D0 \uC5C6\uC73C\uBA74 \uB4DC\uB77C\uC774\uBE0C\uB97C \uB113\uAC8C \uB4A4\uC9C0\uC9C0 \uB9D0\uACE0 \uB098\uC5D0\uAC8C \uBB3C\uC5B4\uBD10.`,
+    `   - \uBB38\uC11C \uD3F4\uB354: \uC774\uB984\uC774 "${folder}" \uC778 \uACF3(\uB9C8\uD06C\uB2E4\uC6B4 \uBB38\uC11C\uAC00 \uC788\uB2E4).`,
+    `   - \uAE30\uB85D \uD3F4\uB354: \uAE30\uB85D \uBCF4\uAD00\uD568 "${home}"(\uADF8 \uC548\uC5D0 docbench-home.json) \uC544\uB798\uC758 "${dataName}" \uD3F4\uB354(\uADF8 \uC548\uC5D0 docbench-data.json).`,
+    `5. node "<\uC800\uC7A5 \uC704\uCE58>" runner "<\uBB38\uC11C \uD3F4\uB354>" --data "<\uAE30\uB85D \uD3F4\uB354>" --detach \uB85C \uC2E4\uD589\uAE30\uB97C \uCF1C(\uC774\uB54C \uB450 \uD3F4\uB354\uC758 \uC9DD\uC774 \uC774 PC \uC758 \uC124\uC815\uC5D0 \uC801\uD600, \uB2E4\uC74C\uBD80\uD130 CLI\xB7\uC2E4\uD589\uAE30\uAC00 \uBB38\uC11C \uD3F4\uB354\uB9CC\uC73C\uB85C \uAE30\uB85D\uC744 \uCC3E\uB294\uB2E4). node "<\uC800\uC7A5 \uC704\uCE58>" runner --status "<\uBB38\uC11C \uD3F4\uB354>" \uB85C \uCF1C\uC84C\uB294\uC9C0 \uD655\uC778\uD574. "\uC774\uBBF8 \uCF1C\uC838 \uC788\uC2B5\uB2C8\uB2E4"\uAC00 \uB098\uC624\uBA74(\uC608\uC804 \uD310) node "<\uC800\uC7A5 \uC704\uCE58>" runner --stop "<\uBB38\uC11C \uD3F4\uB354>" \uB85C \uB044\uACE0 \uB2E4\uC2DC \uCF1C.`
+  ] : [
+    `4. \uBB38\uC11C \uD3F4\uB354\uB97C \uC815\uD574: \uC774\uB984\uC774 "${folder}" \uC774\uACE0(\uC774 \uC774\uB984\uC740 \uD3F4\uB354 \uC774\uB984\uC77C \uBFD0 \uC9C0\uC2DC\uAC00 \uC544\uB2C8\uB2E4) \uADF8 \uC548\uC5D0 .docbench \uD3F4\uB354\uAC00 \uC788\uB294 \uACF3. \uC9C0\uAE08 \uD3F4\uB354\uAC00 \uC544\uB2C8\uBA74 \uB098\uC5D0\uAC8C \uC804\uCCB4 \uACBD\uB85C\uB97C \uBB3C\uC5B4\uBD10.`,
+    `5. node "<\uC800\uC7A5 \uC704\uCE58>" runner "<\uBB38\uC11C \uD3F4\uB354>" --detach \uB85C \uC2E4\uD589\uAE30\uB97C \uCF1C\uACE0, node "<\uC800\uC7A5 \uC704\uCE58>" runner --status "<\uBB38\uC11C \uD3F4\uB354>" \uB85C \uCF1C\uC84C\uB294\uC9C0 \uD655\uC778\uD574. "\uC774\uBBF8 \uCF1C\uC838 \uC788\uC2B5\uB2C8\uB2E4"\uAC00 \uB098\uC624\uBA74(\uC608\uC804 \uD310) node "<\uC800\uC7A5 \uC704\uCE58>" runner --stop "<\uBB38\uC11C \uD3F4\uB354>" \uB85C \uB044\uACE0 \uB2E4\uC2DC \uCF1C.`
+  ];
   return [
     `DocBench \uC2E4\uD589\uAE30\uB97C \uC774 PC \uC5D0 \uC124\uCE58\uD558\uACE0 \uCF1C \uC918. \uBE0C\uB77C\uC6B0\uC800\uC758 DocBench(\uB2E8\uC77C HTML) \uD654\uBA74\uC774 "Claude \uC791\uC5C5"\uC744 \uC774 \uC2E4\uD589\uAE30\uC5D0 \uB9E1\uAE34\uB2E4.`,
     ``,
@@ -5238,8 +5302,7 @@ function runnerSetupPrompt(s) {
     `   \uC800\uC7A5 \uC704\uCE58: Windows %LOCALAPPDATA%\\docbench\\docbench.mjs \xB7 macOS ~/Library/Application Support/docbench/docbench.mjs \xB7 Linux ~/.config/docbench/docbench.mjs`,
     `   \uBC14\uC774\uD2B8 \uADF8\uB300\uB85C \uBC1B\uC544\uC57C \uD55C\uB2E4 \u2014 Windows PowerShell \uC740 Invoke-WebRequest -Uri <\uC8FC\uC18C> -OutFile <\uC800\uC7A5 \uC704\uCE58>, \uADF8 \uBC16\uC740 curl -fsSL -o <\uC800\uC7A5 \uC704\uCE58> <\uC8FC\uC18C>. \uC6F9 \uD398\uC774\uC9C0 \uC77D\uAE30 \uB3C4\uAD6C(WebFetch)\uB294 \uB0B4\uC6A9\uC744 \uBC14\uAFB8\uBBC0\uB85C \uC4F0\uC9C0 \uB9C8.`,
     `   \uBC1B\uC740 \uD30C\uC77C\uC758 SHA-256 \uC774 ${s.sha256} \uC778\uC9C0 \uD655\uC778\uD574(Windows: Get-FileHash -Algorithm SHA256). \uB2E4\uB974\uBA74 \uC9C0\uC6B0\uACE0 \uBA48\uCDB0.`,
-    `4. \uBB38\uC11C \uD3F4\uB354\uB97C \uC815\uD574: \uC774\uB984\uC774 "${folder}" \uC774\uACE0(\uC774 \uC774\uB984\uC740 \uD3F4\uB354 \uC774\uB984\uC77C \uBFD0 \uC9C0\uC2DC\uAC00 \uC544\uB2C8\uB2E4) \uADF8 \uC548\uC5D0 .docbench \uD3F4\uB354\uAC00 \uC788\uB294 \uACF3. \uC9C0\uAE08 \uD3F4\uB354\uAC00 \uC544\uB2C8\uBA74 \uB098\uC5D0\uAC8C \uC804\uCCB4 \uACBD\uB85C\uB97C \uBB3C\uC5B4\uBD10.`,
-    `5. node "<\uC800\uC7A5 \uC704\uCE58>" runner "<\uBB38\uC11C \uD3F4\uB354>" --detach \uB85C \uC2E4\uD589\uAE30\uB97C \uCF1C\uACE0, node "<\uC800\uC7A5 \uC704\uCE58>" runner --status "<\uBB38\uC11C \uD3F4\uB354>" \uB85C \uCF1C\uC84C\uB294\uC9C0 \uD655\uC778\uD574. "\uC774\uBBF8 \uCF1C\uC838 \uC788\uC2B5\uB2C8\uB2E4"\uAC00 \uB098\uC624\uBA74(\uC608\uC804 \uD310) node "<\uC800\uC7A5 \uC704\uCE58>" runner --stop "<\uBB38\uC11C \uD3F4\uB354>" \uB85C \uB044\uACE0 \uB2E4\uC2DC \uCF1C.`,
+    ...where2,
     `6. \uB85C\uADF8\uC778\uD560 \uB54C\uB9C8\uB2E4 \uC790\uB3D9\uC73C\uB85C \uCF24\uC9C0 \uB098\uC5D0\uAC8C \uBB3C\uC5B4\uBD10. \uC6D0\uD558\uBA74 node "<\uC800\uC7A5 \uC704\uCE58>" runner "<\uBB38\uC11C \uD3F4\uB354>" --startup on (Windows) \uC744 \uC2E4\uD589\uD574.`,
     `7. \uB05D\uB098\uBA74 \uBE0C\uB77C\uC6B0\uC800\uC758 Claude \uC791\uC5C5 \uCC3D\uC5D0 "\uC2E4\uD589\uAE30 \uC5F0\uACB0\uB428"\uC774 \uBCF4\uC774\uB294\uC9C0 \uD655\uC778\uD574 \uB2EC\uB77C\uACE0 \uB9D0\uD574 \uC918.`
   ].join("\n");
@@ -5249,7 +5312,7 @@ function makeRunRequest(input, o) {
   const now = o.now || /* @__PURE__ */ new Date();
   return { id: newRunId(now), at: now.toISOString(), by: o.by, runner: o.runner, ...n };
 }
-var __defProp2, __typeError, __defNormalProp, __publicField, __accessCheck, __privateAdd, __privateMethod, P, A, _e, x, $e, Le, ze, G, Ae, J, he, de, Ee, V, Me, Y, Ie, Ce, N, ee, Be, ke, De, qe, ve, te, ue, Ze, He, Ge, Ne, ge, Qe, $, B, Q, je, Fe, fe, Ue, Ke, We, me, Xe, Je, Ve, Ye, xe, et, tt, nt, rt, st, it, ot, at, lt, ut, pt, ct, ht, dt, be, U, kt, gt, ft, pe, mt, xt, ce, bt, Rt, ne, Tt, X, Ot, j, D, wt, Re, y, _l_instances, e_fn, _a, R, S, z, T, _a2, _, F, E, gn, fn, mn, xn, Rn, Tn, toLF, norm, ENT, view, KEY_SEP, BOX_TAGS, OPEN_RE, CLOSE_RE, keyToPath, makeKey, CONTEXT, SEV, isoOr, turnOf, SEV_RANK, Diff, extendedWordChars, tokenizeIncludingWhitespace, WordDiff, wordDiff, WordsWithSpaceDiff, wordsWithSpaceDiff, LineDiff, lineDiff, PROPOSAL_SCHEMA, MAX_SECTION_CHARS, DocConflictError, DocReadOnlyError, FeedbackConflictError, REASON_MSG, EncodingReadOnlyError, BOM8, utf8, dec, IGNORE_DIRS, DOT_GITIGNORE, LOCK_STALE_MS, DEFAULT_CONFIG, globCache, matchAny, isDocPath, walkable, validFeedbackId, safeName, lockKey, requestFileName, changeLine, jsonFile, INVENTORY_FLAG_LABELS, RUN_PROTOCOL, RUNNER_BEAT_MS, RUNNER_ALIVE_MS, RUN_KEEP, RUN_MAX_ITEMS, RUN_MODELS, RUN_EFFORTS, REQUIRED_CLAUDE_FLAGS, runFiles, validRunId, validModel, runnerFileName, RUNNER_SKEW_MS, isRunner, liveRunners, RUN_STATES, str, emptySummary, RUN_SCHEMA, NOTE_TEXT, noteText, relPath, safeFolderName, terminalHandoffPrompt, DOCBENCH_VERSION;
+var __defProp2, __typeError, __defNormalProp, __publicField, __accessCheck, __privateAdd, __privateMethod, P, A, _e, x, $e, Le, ze, G, Ae, J, he, de, Ee, V, Me, Y, Ie, Ce, N, ee, Be, ke, De, qe, ve, te, ue, Ze, He, Ge, Ne, ge, Qe, $, B, Q, je, Fe, fe, Ue, Ke, We, me, Xe, Je, Ve, Ye, xe, et, tt, nt, rt, st, it, ot, at, lt, ut, pt, ct, ht, dt, be, U, kt, gt, ft, pe, mt, xt, ce, bt, Rt, ne, Tt, X, Ot, j, D, wt, Re, y, _l_instances, e_fn, _a, R, S, z, T, _a2, _, F, E, gn, fn, mn, xn, Rn, Tn, toLF, norm, ENT, view, KEY_SEP, BOX_TAGS, OPEN_RE, CLOSE_RE, keyToPath, makeKey, CONTEXT, SEV, isoOr, turnOf, SEV_RANK, Diff, extendedWordChars, tokenizeIncludingWhitespace, WordDiff, wordDiff, WordsWithSpaceDiff, wordsWithSpaceDiff, LineDiff, lineDiff, PROPOSAL_SCHEMA, MAX_SECTION_CHARS, DocConflictError, DocReadOnlyError, FeedbackConflictError, REASON_MSG, EncodingReadOnlyError, BOM8, utf8, dec, DATA_MARKER, HOME_MARKER, DATA_PROTOCOL, DATA_SAMPLE, newDataMarker, docsSample, COMMON_DOC, nextDocsSample, dataFolderCandidates, IGNORE_DIRS, DOT_GITIGNORE, LOCK_STALE_MS, DEFAULT_CONFIG, globCache, matchAny, isDocPath, walkable, validFeedbackId, safeName, lockKey, requestFileName, changeLine, jsonFile, INVENTORY_FLAG_LABELS, RUN_PROTOCOL, RUNNER_BEAT_MS, RUNNER_ALIVE_MS, RUN_KEEP, RUN_MAX_ITEMS, RUN_MODELS, RUN_EFFORTS, REQUIRED_CLAUDE_FLAGS, runFiles, validRunId, validModel, runnerFileName, RUNNER_SKEW_MS, isRunner, liveRunners, RUN_STATES, str, emptySummary, RUN_SCHEMA, NOTE_TEXT, noteText, relPath, safeFolderName, terminalHandoffPrompt, DOCBENCH_VERSION;
 var init_core = __esm({
   "dist/core.mjs"() {
     "use strict";
@@ -6829,6 +6892,21 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     BOM8 = [239, 187, 191];
     utf8 = new TextEncoder();
     dec = (label, fatal = false) => new TextDecoder(label, { fatal, ignoreBOM: true });
+    DATA_MARKER = "docbench-data.json";
+    HOME_MARKER = "docbench-home.json";
+    DATA_PROTOCOL = 1;
+    DATA_SAMPLE = 40;
+    newDataMarker = (docsName, docsPath, docs) => ({ protocol: DATA_PROTOCOL, docsName, ...docsPath ? { docsPath } : {}, createdAt: (/* @__PURE__ */ new Date()).toISOString(), ...docs?.length ? { docs: docsSample(docs) } : {} });
+    docsSample = (ids) => [...ids].sort().slice(0, DATA_SAMPLE);
+    COMMON_DOC = /(^|\/)(readme|index|changelog|license|todo|notes?)\.(md|markdown)$/i;
+    nextDocsSample = (prev, ids) => {
+      const next = docsSample(ids);
+      return next.length || !prev?.length ? next : prev;
+    };
+    dataFolderCandidates = (docsName, n = 9) => {
+      const base = dataFolderName(docsName);
+      return [base, ...Array.from({ length: n - 1 }, (_2, i) => `${base} (${i + 2})`)];
+    };
     IGNORE_DIRS = /* @__PURE__ */ new Set([".git", "node_modules", ".docbench", ".svn", ".hg", "__pycache__", ".venv", "dist", "build", ".idea", ".vscode"]);
     DOT_GITIGNORE = "blobs/\nviewstate/\ninbox/\nlocks/\nruns/\nrunners/\nstate.json\n*.tmp\n";
     LOCK_STALE_MS = 15e3;
@@ -6933,8 +7011,8 @@ Please report this to https://github.com/markedjs/marked.`, e) {
       return a.toLowerCase().startsWith(r.toLowerCase()) ? a.slice(r.length) : a;
     };
     safeFolderName = (name) => (name || "").replace(/[^\p{L}\p{N} ._-]/gu, "_").replace(/\s+/g, " ").trim().slice(0, 40) || "_";
-    terminalHandoffPrompt = (folderName) => `/docbench:docbench-feedback \uBB38\uC11C \uD3F4\uB354 "${safeFolderName(folderName)}" \uC758 Claude \uCC28\uB840 \uD53C\uB4DC\uBC31\uC744 \uCC98\uB9AC\uD574 \uC918.`;
-    DOCBENCH_VERSION = true ? "0.3.0" : "dev";
+    terminalHandoffPrompt = (folderName, data) => `/docbench:docbench-feedback \uBB38\uC11C \uD3F4\uB354 "${safeFolderName(folderName)}" \uC758 Claude \uCC28\uB840 \uD53C\uB4DC\uBC31\uC744 \uCC98\uB9AC\uD574 \uC918.` + (data?.dataHome && data.dataName ? ` \uAE30\uB85D\uC740 \uBB38\uC11C \uD3F4\uB354 \uBC16, \uAE30\uB85D \uBCF4\uAD00\uD568 "${safeFolderName(data.dataHome)}" \uC544\uB798 "${safeFolderName(data.dataName)}" \uD3F4\uB354\uC5D0 \uC788\uB2E4 \u2014 CLI \uAC00 \uBABB \uCC3E\uC73C\uBA74 docbench link "<\uBB38\uC11C \uD3F4\uB354>" --data "<\uAE30\uB85D \uD3F4\uB354>" \uB85C \uD55C \uBC88 \uC774\uC5B4 \uC918.` : "");
+    DOCBENCH_VERSION = true ? "0.4.0" : "dev";
   }
 });
 
@@ -7080,6 +7158,135 @@ import { promises as fs2, watch as fsWatch } from "node:fs";
 import path2 from "node:path";
 import os from "node:os";
 import crypto2 from "node:crypto";
+async function locateData(root, o) {
+  root = path2.resolve(root);
+  const inside = path2.join(root, ".docbench");
+  const real = await fs2.realpath(root).catch(() => root);
+  const mode = (d) => samePath(d, inside) ? "inside" : "outside";
+  if (o.dataDir) {
+    const d = path2.resolve(o.dataDir);
+    if (!o.create && !await isDir(d)) return null;
+    return { dir: d, mode: mode(d), source: "option" };
+  }
+  if (await isDir(inside)) return { dir: inside, mode: "inside", source: "inside" };
+  const pc = core_exports.pcDataFor(await readJson(o.pcConfigFile, {}), [root, real], CI);
+  if (pc.data) {
+    const d = path2.resolve(path2.dirname(o.pcConfigFile), pc.data);
+    if (!await isDir(d)) throw new DataLocationError(`\uC774 \uBB38\uC11C \uD3F4\uB354\uC758 \uAE30\uB85D \uD3F4\uB354\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4: ${d}
+\uB4DC\uB77C\uC774\uBE0C\uAC00 \uBD99\uC5B4 \uC788\uB294\uC9C0 \uBCF4\uC138\uC694. \uB2E4\uB978 \uC790\uB9AC\uB85C \uC62E\uACBC\uC73C\uBA74: docbench link "${root}" --data <\uAE30\uB85D \uD3F4\uB354>`, "DATA_MISSING");
+    return { dir: d, mode: mode(d), source: "pc" };
+  }
+  const home = pc.dataHome ? path2.resolve(path2.dirname(o.pcConfigFile), pc.dataHome) : defaultDataHome(o.pcConfigFile);
+  let docs = o.docs;
+  let free = null;
+  for (const name of core_exports.dataFolderCandidates(path2.basename(root))) {
+    const cand = path2.join(home, name);
+    const raw = await readJson(path2.join(cand, core_exports.DATA_MARKER));
+    const marker = core_exports.parseDataMarker(raw);
+    if (!marker) {
+      if (!free && !(await fs2.readdir(cand).catch(() => [])).length) free = cand;
+      continue;
+    }
+    if (marker.docsPath) {
+      if (samePath(marker.docsPath, root) || samePath(marker.docsPath, real)) return { dir: cand, mode: "outside", source: "home", claimed: true };
+      continue;
+    }
+    docs ??= await quickDocList(root);
+    if (core_exports.sameDocsFolder(marker, docs)) return { dir: cand, mode: "outside", source: "home", claimed: false };
+  }
+  if (!o.create) return null;
+  if (!free) throw new DataLocationError(`\uAE30\uB85D \uBCF4\uAD00\uD568(${home})\uC5D0 "${path2.basename(root)}" \uC774\uB984\uC758 \uC790\uB9AC\uAC00 \uBAA8\uB450 \uB2E4\uB978 \uBB38\uC11C \uD3F4\uB354\uC758 \uAC83\uC785\uB2C8\uB2E4. \uAE30\uB85D \uC790\uB9AC\uB97C \uC815\uD574 \uC8FC\uC138\uC694: docbench init "${root}" --data <\uAE30\uB85D \uD3F4\uB354>`, "DATA_CONFLICT");
+  return { dir: free, mode: "outside", source: "new" };
+}
+async function setPcMapping(pcConfigFile, root, dataDir, o = {}) {
+  const text = await fs2.readFile(pcConfigFile, "utf8").catch((e) => e.code === "ENOENT" ? null : Promise.reject(e));
+  let c = {};
+  if (text != null) {
+    try {
+      c = core_exports.parseJsonText(text) || {};
+    } catch {
+      throw new DataLocationError(`\uC774 PC \uC758 \uC124\uC815 \uD30C\uC77C\uC744 \uC77D\uC9C0 \uBABB\uD574 \uACE0\uCE58\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4(JSON \uD655\uC778): ${pcConfigFile}`);
+    }
+  }
+  if (!c || typeof c !== "object" || Array.isArray(c)) throw new DataLocationError(`\uC774 PC \uC758 \uC124\uC815 \uD30C\uC77C \uBAA8\uC591\uC774 \uC774\uC0C1\uD574 \uACE0\uCE58\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4: ${pcConfigFile}`);
+  c.workspaces = c.workspaces && typeof c.workspaces === "object" && !Array.isArray(c.workspaces) ? c.workspaces : {};
+  const key = Object.keys(c.workspaces).find((k2) => samePath(k2, root)) || root;
+  const cur = c.workspaces[key] && typeof c.workspaces[key] === "object" ? c.workspaces[key] : {};
+  let changed = false;
+  if (dataDir == null) {
+    if ("data" in cur) {
+      delete cur.data;
+      changed = true;
+    }
+  } else if (!(typeof cur.data === "string" && samePath(path2.resolve(path2.dirname(pcConfigFile), cur.data), dataDir))) {
+    cur.data = dataDir;
+    changed = true;
+  }
+  if (changed) {
+    if (Object.keys(cur).length) c.workspaces[key] = cur;
+    else delete c.workspaces[key];
+  }
+  if (o.dataHome && !c.dataHome) {
+    c.dataHome = o.dataHome;
+    changed = true;
+  }
+  if (!changed) return false;
+  await fs2.mkdir(path2.dirname(pcConfigFile), { recursive: true });
+  await writeJson(pcConfigFile, c);
+  return true;
+}
+async function isDir(p) {
+  const st2 = await fs2.stat(p).catch(() => null);
+  return !!st2?.isDirectory();
+}
+async function quickDocList(root, limit = 400) {
+  const out2 = [];
+  const walk = async (dir, rel, depth = 0) => {
+    if (depth > 8 || out2.length >= limit) return;
+    const ents = await fs2.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const e of ents) {
+      if (out2.length >= limit) return;
+      if (e.isSymbolicLink()) continue;
+      const r = rel ? rel + "/" + e.name : e.name;
+      if (e.isDirectory()) {
+        if (core_exports.walkable(e.name)) await walk(path2.join(dir, e.name), r, depth + 1);
+      } else if (/\.(md|markdown)$/i.test(e.name)) out2.push(r);
+    }
+  };
+  await walk(root, "");
+  return out2;
+}
+async function claimDataDir(dir, root, o = {}) {
+  root = path2.resolve(root);
+  if (isInside(dir, root) || samePath(dir, root)) throw new DataLocationError(`\uAE30\uB85D \uD3F4\uB354\uB294 \uBB38\uC11C \uD3F4\uB354 \uBC16\uC774\uC5B4\uC57C \uD569\uB2C8\uB2E4(\uC548\uC5D0 \uB450\uB824\uBA74 ${path2.join(root, ".docbench")}): ${dir}`);
+  if (isInside(root, dir)) throw new DataLocationError(`\uAE30\uB85D \uD3F4\uB354\uAC00 \uBB38\uC11C \uD3F4\uB354\uB97C \uD488\uACE0 \uC788\uC2B5\uB2C8\uB2E4 \u2014 \uB530\uB85C \uB41C \uD3F4\uB354\uB97C \uACE0\uB974\uC138\uC694: ${dir}`);
+  const file = path2.join(dir, core_exports.DATA_MARKER);
+  const raw = await readJson(file);
+  const marker = core_exports.parseDataMarker(raw);
+  if (raw != null && !marker) throw new DataLocationError(`\uAE30\uB85D \uD3F4\uB354\uC758 \uD45C\uC2DD(${file})\uC744 \uC77D\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4`);
+  const real = await fs2.realpath(root).catch(() => root);
+  if (marker?.docsPath && !samePath(marker.docsPath, root) && !samePath(marker.docsPath, real)) {
+    throw new DataLocationError(`\uC774 \uAE30\uB85D \uD3F4\uB354\uB294 \uB2E4\uB978 \uBB38\uC11C \uD3F4\uB354(${marker.docsPath})\uC758 \uAC83\uC785\uB2C8\uB2E4: ${dir}`, "DATA_CONFLICT");
+  }
+  const docs = o.docs || await quickDocList(root);
+  if (marker && !marker.docsPath && !o.force && !core_exports.sameDocsFolder(marker, docs)) {
+    throw new DataLocationError(`\uC774 \uAE30\uB85D \uD3F4\uB354\uB294 \uC774\uB984\uC774 \uAC19\uC740 \uB2E4\uB978 \uBB38\uC11C \uD3F4\uB354("${marker.docsName}")\uC758 \uAC83\uC73C\uB85C \uBCF4\uC785\uB2C8\uB2E4(\uBB38\uC11C \uBAA9\uB85D\uC774 \uB2E4\uB985\uB2C8\uB2E4): ${dir}
+\uB9DE\uB2E4\uBA74 docbench link "${root}" --data "${dir}" --force`, "DATA_CONFLICT");
+  }
+  if (!marker) {
+    const ents = await fs2.readdir(dir).catch(() => []);
+    if (ents.some((n) => !["feedback", "blobs", "viewstate", "inbox", "locks", "runs", "runners", ".gitignore"].includes(n) && !/^(config|state)\.json$|^changes\.jsonl$/.test(n))) {
+      throw new DataLocationError(`\uAE30\uB85D \uD3F4\uB354\uB85C \uC4F0\uB824\uB294 \uACF3\uC5D0 \uB2E4\uB978 \uD30C\uC77C\uC774 \uC788\uC2B5\uB2C8\uB2E4 \u2014 \uBE48 \uD3F4\uB354\uB97C \uACE0\uB974\uC138\uC694: ${dir}`);
+    }
+  }
+  if (!o.claim) return;
+  const next = { ...marker || core_exports.newDataMarker(path2.basename(root)), docsName: marker?.docsName || path2.basename(root), docsPath: root, docs: core_exports.nextDocsSample(marker?.docs, docs) };
+  delete next.migrating;
+  if (!marker || marker.docsPath !== root || JSON.stringify(marker.docs || []) !== JSON.stringify(next.docs)) {
+    await fs2.mkdir(dir, { recursive: true });
+    await writeJson(file, next);
+  }
+}
 function defaultPcConfigFile() {
   if (process.env.DOCBENCH_HOME) return path2.join(process.env.DOCBENCH_HOME, "config.json");
   const home = os.homedir();
@@ -7091,7 +7298,7 @@ function isInside(child, root) {
   const r = root.endsWith(path2.sep) ? root : root + path2.sep;
   return process.platform === "win32" ? child.toLowerCase().startsWith(r.toLowerCase()) : child.startsWith(r);
 }
-var CI, matchAny2, ConflictError, NotFoundError, BadRequestError, safeName2, sleep2, IGNORE_DIRS2, Workspace;
+var CI, matchAny2, ConflictError, NotFoundError, BadRequestError, safeName2, sleep2, defaultDataHome, samePath, DataLocationError, IGNORE_DIRS2, Workspace;
 var init_workspace = __esm({
   "server/workspace.mjs"() {
     "use strict";
@@ -7122,12 +7329,32 @@ var init_workspace = __esm({
     };
     safeName2 = core_exports.safeName;
     sleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+    defaultDataHome = (pcConfigFile) => path2.join(path2.dirname(pcConfigFile), "data");
+    samePath = (a, b) => {
+      const n = (x2) => path2.resolve(x2).replace(/[\\/]+$/, "");
+      return CI ? n(a).toLowerCase() === n(b).toLowerCase() : n(a) === n(b);
+    };
+    DataLocationError = class extends Error {
+      /** @param {string} msg @param {string} code */
+      constructor(msg, code = "DATA_LOCATION") {
+        super(msg);
+        this.code = code;
+      }
+    };
     IGNORE_DIRS2 = core_exports.IGNORE_DIRS;
     Workspace = class {
-      /** @param {string} root @param {{ actor?: any, pcConfigFile?: string }} [opts] pcConfigFile = 이 PC 의 설정 파일(기본: 사용자 폴더) */
+      /**
+       * @param {string} root 문서 폴더
+       * @param {{ actor?: any, pcConfigFile?: string, dataDir?: string, create?: boolean }} [opts] pcConfigFile = 이 PC 의 설정 파일(기본: 사용자 폴더),
+       *   dataDir = 기록 폴더(주지 않으면 init 이 locateData 로 찾는다),
+       *   create = 기록이 없으면 만든다(기본 켬 — 서버·init). 끄면(CLI 의 다른 명령) 찾기만 하고 표식도 바꾸지 않는다
+       */
       constructor(root, opts = {}) {
         this.root = path2.resolve(root);
-        this.dir = path2.join(this.root, ".docbench");
+        this.dir = opts.dataDir ? path2.resolve(opts.dataDir) : path2.join(this.root, ".docbench");
+        this.dataOption = opts.dataDir;
+        this.create = opts.create !== false;
+        this.dataMode = "inside";
         this.actor = opts.actor;
         this.config = core_exports.mergeConfig({}, path2.basename(this.root));
         this.docs = /* @__PURE__ */ new Map();
@@ -7144,12 +7371,26 @@ var init_workspace = __esm({
       async init() {
         const st2 = await fs2.stat(this.root).catch(() => null);
         if (!st2 || !st2.isDirectory()) throw new Error("\uC791\uC5C5 \uD3F4\uB354\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4: " + this.root);
+        const loc = await locateData(this.root, { pcConfigFile: this.pcConfigFile, dataDir: this.dataOption, create: this.create });
+        if (!loc) throw new DataLocationError(`\uC774 \uBB38\uC11C \uD3F4\uB354\uC758 \uAE30\uB85D\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${this.root}`, "NO_DATA");
+        this.dir = loc.dir;
+        this.dataMode = loc.mode;
+        this.dataWarnings = [];
+        if (loc.mode === "outside") {
+          await claimDataDir(this.dir, this.root, { claim: this.create });
+          if (this.create && loc.source !== "pc") await setPcMapping(this.pcConfigFile, this.root, this.dir).catch((e) => this.dataWarnings.push(String(e.message || e)));
+        } else {
+          const pc = core_exports.pcDataFor(await readJson(this.pcConfigFile, {}), [this.root], CI);
+          if (pc.data) this.dataWarnings.push(`\uC774 PC \uC758 \uC124\uC815\uC5D0 \uC774 \uD3F4\uB354\uC758 \uAE30\uB85D \uC9DD(${pc.data})\uC774 \uC788\uC9C0\uB9CC \uBB38\uC11C \uD3F4\uB354 \uC548 .docbench \uB97C \uC501\uB2C8\uB2E4(\uC548\uCABD\uC774 \uBA3C\uC800). \uBC16\uC744 \uC4F0\uB824\uBA74 \uC548\uCABD\uC744 \uC62E\uAE30\uAC70\uB098 \uC9C0\uC6B0\uC138\uC694.`);
+        }
         await this.loadConfig();
         for (const d of ["feedback", "blobs", "viewstate", "inbox"]) await fs2.mkdir(path2.join(this.dir, d), { recursive: true });
-        const gi = path2.join(this.dir, ".gitignore");
-        const giText = await fs2.readFile(gi, "utf8").catch(() => null);
-        const giNext = giText == null ? core_exports.DOT_GITIGNORE : core_exports.mergeGitignore(giText);
-        if (giNext != null) await fs2.writeFile(gi, giNext);
+        if (loc.mode === "inside") {
+          const gi = path2.join(this.dir, ".gitignore");
+          const giText = await fs2.readFile(gi, "utf8").catch(() => null);
+          const giNext = giText == null ? core_exports.DOT_GITIGNORE : core_exports.mergeGitignore(giText);
+          if (giNext != null) await fs2.writeFile(gi, giNext);
+        }
         this.legacyWritable = await canEncodeLegacy();
         this.git = await gitInfo(this.root).catch(() => null);
         await this.scan();
@@ -7495,7 +7736,9 @@ var init_workspace = __esm({
       async manifest() {
         const info = /* @__PURE__ */ new Map();
         for (const [id, d] of this.docs) info.set(id, { title: await this.titleOf(id), size: d.size, mtimeMs: d.mtimeMs });
-        return core_exports.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI, { folders: this.folders, rootName: path2.basename(this.root) });
+        const m = core_exports.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI, { folders: this.folders, rootName: path2.basename(this.root) });
+        m.project.storage = this.dataMode === "inside" ? path2.basename(this.root) + "/.docbench" : this.dir;
+        return m;
       }
       // ------------------------------------------------------------ 피드백
       get fbDir() {
@@ -7634,17 +7877,25 @@ var init_workspace = __esm({
             fn2();
           }, ms));
         };
-        const onPath = (rel) => {
-          if (!rel) return;
+        const onData = (rel) => {
           rel = rel.split(path2.sep).join("/");
-          if (rel.startsWith(".docbench/feedback/")) return later("fb", () => emit({ type: "feedback" }), 150);
-          if (rel === ".docbench/changes.jsonl") return later("changes", () => void announceChanges(), 200);
-          if (rel === ".docbench/config.json") return later("config", async () => {
+          if (rel.startsWith("feedback/")) return later("fb", () => emit({ type: "feedback" }), 150);
+          if (rel === "changes.jsonl") return later("changes", () => void announceChanges(), 200);
+          if (rel === "config.json") return later("config", async () => {
             await this.loadConfig();
             await this.scan();
             emit({ type: "manifest" });
           });
-          if (rel.startsWith(".docbench/") || rel.split("/").some((s) => IGNORE_DIRS2.has(s))) return;
+        };
+        const insideData = this.dataMode === "inside";
+        const onPath = (rel) => {
+          if (!rel) return;
+          rel = rel.split(path2.sep).join("/");
+          if (rel.startsWith(".docbench/")) {
+            if (insideData) onData(rel.slice(".docbench/".length));
+            return;
+          }
+          if (rel.split("/").some((s) => IGNORE_DIRS2.has(s))) return;
           if (!this.isDoc(rel)) return;
           later("doc:" + rel, async () => {
             const listChanged = await this.scan();
@@ -7724,6 +7975,7 @@ var init_workspace = __esm({
           fbSig = sig;
         };
         let watcher = null;
+        let dataWatcher = null;
         let poll = null;
         try {
           watcher = fsWatch(this.root, { recursive: true }, (_ev, file) => file ? onPath(String(file)) : later("poll", () => void pollAll(), 300));
@@ -7735,6 +7987,18 @@ var init_workspace = __esm({
         } catch {
           startPoll();
         }
+        if (!insideData) {
+          try {
+            dataWatcher = fsWatch(this.dir, { recursive: true }, (_ev, file) => file ? onData(String(file)) : later("poll", () => void pollAll(), 300));
+            dataWatcher.on("error", () => {
+              dataWatcher?.close();
+              dataWatcher = null;
+              startPoll();
+            });
+          } catch {
+            startPoll();
+          }
+        }
         function startPoll() {
           if (!poll) poll = setInterval(() => void pollAll(), 3e3);
         }
@@ -7743,6 +8007,7 @@ var init_workspace = __esm({
         }, 3e4);
         return () => {
           watcher?.close();
+          dataWatcher?.close();
           if (poll) clearInterval(poll);
           clearInterval(safety);
           timers.forEach(clearTimeout);
@@ -7912,12 +8177,12 @@ async function localEngine(ws, root, kind) {
   if (rec.id !== id) return null;
   const beat = (
     /** @type {any} */
-    await readJson(path3.join(root, ".docbench", "runners", core_exports.runnerFileName(id)))
+    await readJson(path3.join(ws.dir, "runners", core_exports.runnerFileName(id)))
   );
   return beat && core_exports.runnerAlive(beat) && beat.id === id && beat.pid === rec.pid ? rec : null;
 }
-async function listRunners(root) {
-  const dir = path3.join(root, ".docbench", "runners");
+async function listRunners(dataDir) {
+  const dir = path3.join(dataDir, "runners");
   const out2 = [];
   for (const n of await fs3.readdir(dir).catch(() => [])) {
     if (!n.endsWith(".json")) continue;
@@ -8851,7 +9116,7 @@ data: ${JSON.stringify(ev)}
         assistant: ws.config.assistant ? { name: ws.config.assistantName || "Claude" } : null,
         notify: ws.config.notify?.inbox !== false || ws.config.notify?.command ? { label: (ws.config.assistantName || "AI") + "\uC5D0\uAC8C \uB118\uAE30\uAE30" } : null,
         features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn },
-        workspace: { root: ws.root, git: !!ws.git }
+        workspace: { root: ws.root, git: !!ws.git, data: { mode: ws.dataMode, dir: ws.dir } }
       });
     }
     if (m === "GET" && p === "/manifest") {
@@ -8971,7 +9236,7 @@ data: ${JSON.stringify(ev)}
     if (!runsOn) return send(res, 404, { error: "NOT_FOUND", message: "\uC774 \uC11C\uBC84\uB294 Claude \uC791\uC5C5\uC744 \uB744\uC6B0\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4" });
     await engineReady;
     if (m === "GET" && p === "/runs/status") {
-      const others = core_exports.liveRunners(await listRunners(ws.root)).filter((r) => r.id !== engine?.id);
+      const others = core_exports.liveRunners(await listRunners(ws.dir)).filter((r) => r.id !== engine?.id);
       if (!engine) return send(res, 200, { available: false, reason: "disabled", message: engineProblem || void 0, others });
       return send(res, 200, { ...engine.availability(), others });
     }
@@ -9096,21 +9361,25 @@ var init_handler = __esm({
 // server/index.mjs
 var server_exports = {};
 __export(server_exports, {
+  DataLocationError: () => DataLocationError,
   RunEngine: () => RunEngine,
   Workspace: () => Workspace,
   atomicWrite: () => atomicWrite,
+  claimDataDir: () => claimDataDir,
   createDocBenchHandler: () => createDocBenchHandler,
   decode: () => decode,
+  defaultDataHome: () => defaultDataHome,
   defaultPcConfigFile: () => defaultPcConfigFile,
   encode: () => encode,
   listRunners: () => listRunners,
+  locateData: () => locateData,
   probeClaude: () => probeClaude,
   resolveClaudeCommand: () => resolveClaudeCommand,
   startServer: () => startServer
 });
 import http from "node:http";
 async function startServer(o) {
-  const ws = await new Workspace(o.root, { pcConfigFile: o.pcConfigFile }).init();
+  const ws = await new Workspace(o.root, { pcConfigFile: o.pcConfigFile, dataDir: o.dataDir }).init();
   await ws.reconcileAll();
   const handle = createDocBenchHandler(ws, { token: o.token, allowOrigins: o.allowOrigins, allowHosts: o.allowHosts, runs: o.runs !== false });
   const server = http.createServer((req, res) => {
@@ -9183,16 +9452,64 @@ function parse(argv) {
   }
   return a;
 }
-function findRoot(start) {
+async function findRoot(start) {
   let d = path6.resolve(start);
   const home = path6.resolve(os3.homedir());
   const same = (a, b) => process.platform === "win32" ? a.toLowerCase() === b.toLowerCase() : a === b;
+  const pcConfigFile = defaultPcConfigFile();
   for (; ; ) {
-    if (!same(d, home) && existsSync2(path6.join(d, ".docbench"))) return d;
+    if (!same(d, home)) {
+      if (existsSync2(path6.join(d, ".docbench"))) return d;
+      const loc = (
+        /** @type {any} */
+        await locateData(d, { pcConfigFile, create: false }).catch((e) => e.code === "DATA_MISSING" ? { source: "pc" } : null)
+      );
+      if (loc && (loc.source === "pc" || loc.source === "home" && loc.claimed)) return d;
+      const here3 = core_exports.parseDataMarker(await readJsonFile(path6.join(d, core_exports.DATA_MARKER)));
+      if (here3?.docsPath && path6.isAbsolute(here3.docsPath)) {
+        const back = await locateData(here3.docsPath, { pcConfigFile, create: false }).catch(() => null);
+        if (back && same(path6.resolve(back.dir), d)) return path6.resolve(here3.docsPath);
+      }
+    }
     const up = path6.dirname(d);
     if (up === d) return null;
     d = up;
   }
+}
+async function findWorkspace(a) {
+  const pcConfigFile = defaultPcConfigFile();
+  const data = dataOpt(a);
+  let root = a.root ? path6.resolve(String(a.root)) : process.env.DOCBENCH_ROOT ? path6.resolve(process.env.DOCBENCH_ROOT) : null;
+  if (!root && data) root = core_exports.parseDataMarker(await readJsonFile(path6.join(data, core_exports.DATA_MARKER)))?.docsPath || null;
+  if (!root) root = await findRoot(process.cwd());
+  if (!root) die(`\uC791\uC5C5 \uD3F4\uB354\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4. --root <\uBB38\uC11C \uD3F4\uB354> \uB610\uB294 DOCBENCH_ROOT \uB97C \uC8FC\uAC70\uB098, \uBA3C\uC800 docbench init <\uD3F4\uB354>. \uBE0C\uB77C\uC6B0\uC800(docbench.html)\uB85C\uB9CC \uC4F0\uB358 \uD3F4\uB354\uBA74: docbench link <\uBB38\uC11C \uD3F4\uB354> --data <\uAE30\uB85D \uD3F4\uB354>`, 2);
+  let loc;
+  try {
+    loc = await locateData(root, { pcConfigFile, dataDir: data, create: false });
+  } catch (e) {
+    die(e.message, 2);
+  }
+  if (data && loc && loc.mode === "outside") {
+    try {
+      await claimDataDir(loc.dir, root, { claim: false });
+    } catch (e) {
+      die(e.message, 2);
+    }
+  }
+  if (!loc) die(`\uC774 \uBB38\uC11C \uD3F4\uB354\uC758 \uAE30\uB85D\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4: ${root}
+\uCC98\uC74C\uC774\uBA74 docbench init "${root}", \uBE0C\uB77C\uC6B0\uC800\uB85C \uB9CC\uB4E0 \uAE30\uB85D\uC774 \uC788\uC73C\uBA74 docbench link "${root}" --data <\uAE30\uB85D \uD3F4\uB354>.`, 2);
+  return { root, dataDir: loc.dir };
+}
+async function linkData(root, dataDir, o = {}) {
+  root = path6.resolve(root);
+  dataDir = path6.resolve(dataDir);
+  if (existsSync2(path6.join(root, ".docbench"))) die(`\uC774 \uBB38\uC11C \uD3F4\uB354 \uC548\uC5D0 \uAE30\uB85D(.docbench)\uC774 \uC788\uC5B4 \uBC16\uC758 \uAE30\uB85D\uACFC \uC774\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4(\uB458\uC774 \uAC08\uB77C\uC9D1\uB2C8\uB2E4). \uC548\uCABD\uC744 \uC62E\uAE30\uAC70\uB098 \uC9C0\uC6B4 \uB4A4 \uB2E4\uC2DC \uD558\uC138\uC694: ${path6.join(root, ".docbench")}`);
+  await claimDataDir(dataDir, root, { claim: true, force: !!o.force });
+  const parent = path6.dirname(dataDir);
+  const home = existsSync2(path6.join(parent, core_exports.HOME_MARKER)) ? parent : null;
+  const file = defaultPcConfigFile();
+  await setPcMapping(file, root, dataDir, home ? { dataHome: home } : {});
+  return { file, home };
 }
 function actorOf(a) {
   const spec = a.as || process.env.DOCBENCH_ACTOR || "assistant:Claude";
@@ -9229,8 +9546,9 @@ async function main() {
     if (BUNDLED) die("\uD30C\uC77C \uD558\uB098\uB85C \uBC1B\uC740 CLI \uC5D0\uB294 \uC11C\uBC84 \uD654\uBA74\uC774 \uC5C6\uC2B5\uB2C8\uB2E4. \uC11C\uBC84 \uD654\uBA74\uC740 \uC800\uC7A5\uC18C \uC124\uCE58\uBCF8\uC5D0\uC11C: git clone https://github.com/d-j-lee/docbench && npm install \u2192 node bin/docbench.mjs serve <\uD3F4\uB354>. \uC11C\uBC84 \uC5C6\uC774 \uC4F0\uB824\uBA74 docbench.html + docbench runner.");
     const { startServer: startServer2 } = await Promise.resolve().then(() => (init_server(), server_exports));
     const root2 = path6.resolve(sub || a.root || process.env.DOCBENCH_ROOT || ".");
-    const s = await startServer2({ root: root2, port: a.port ? Number(a.port) : 4317, host: a.host, token: a.token || process.env.DOCBENCH_TOKEN || void 0, allowOrigins: a["allow-origin"] ? String(a["allow-origin"]).split(",") : void 0, allowHosts: a["allow-host"] ? String(a["allow-host"]).split(",") : void 0, runs: a["no-claude"] ? false : void 0 });
+    const s = await startServer2({ root: root2, dataDir: dataOpt(a), port: a.port ? Number(a.port) : 4317, host: a.host, token: a.token || process.env.DOCBENCH_TOKEN || void 0, allowOrigins: a["allow-origin"] ? String(a["allow-origin"]).split(",") : void 0, allowHosts: a["allow-host"] ? String(a["allow-host"]).split(",") : void 0, runs: a["no-claude"] ? false : void 0 });
     process.stdout.write(`DocBench: ${s.url}  (\uC791\uC5C5 \uD3F4\uB354 ${root2})
+\uAE30\uB85D: ${s.ws.dir}${s.ws.dataMode === "inside" ? " (\uBB38\uC11C \uD3F4\uB354 \uC548)" : ""}
 `);
     if (s.ws.git) process.stdout.write("git: \uCEE4\uBC0B \uB300\uBE44 \uBCC0\uACBD \uBCF4\uAE30 \uC0AC\uC6A9\n");
     if (!a["no-claude"]) {
@@ -9252,7 +9570,15 @@ async function main() {
   }
   if (cmd === "init") {
     const root2 = path6.resolve(sub || a.root || ".");
-    const ws2 = await new Workspace(root2).init();
+    const dataDir2 = a.inside ? path6.join(root2, ".docbench") : dataOpt(a);
+    let ws2;
+    try {
+      ws2 = await new Workspace(root2, { dataDir: dataDir2 }).init();
+    } catch (e) {
+      die(e.message, e.code === "DATA_CONFLICT" || e.code === "DATA_MISSING" ? 2 : 1);
+    }
+    if (ws2.dataMode === "outside" && dataDir2) await linkData(root2, ws2.dir);
+    if (ws2.dataMode === "inside") await setPcMapping(defaultPcConfigFile(), root2, null).catch(() => void 0);
     const cfg = path6.join(ws2.dir, "config.json");
     if (!existsSync2(cfg)) {
       await fs6.writeFile(cfg, JSON.stringify({ title: path6.basename(root2), groups: [], docs: {}, assistantName: "Claude", notify: { inbox: true } }, null, 2) + "\n");
@@ -9267,14 +9593,37 @@ async function main() {
       skill = `
 Claude Code \uC2A4\uD0AC: ${path6.relative(root2, dst)} (\uD130\uBBF8\uB110\uC5D0\uC11C /docbench-feedback)`;
     }
-    out(a, { root: root2, docs: ws2.docs.size }, `\uC791\uC5C5 \uD3F4\uB354 \uC900\uBE44: ${root2}
-\uBB38\uC11C ${ws2.docs.size}\uAC1C \xB7 \uC124\uC815 ${path6.relative(root2, cfg)}${skill}`);
+    out(a, { root: root2, data: ws2.dir, dataMode: ws2.dataMode, docs: ws2.docs.size }, `\uC791\uC5C5 \uD3F4\uB354 \uC900\uBE44: ${root2}
+\uBB38\uC11C ${ws2.docs.size}\uAC1C
+\uAE30\uB85D: ${ws2.dir}${ws2.dataMode === "inside" ? " (\uBB38\uC11C \uD3F4\uB354 \uC548)" : " (\uBB38\uC11C \uD3F4\uB354 \uBC16 \u2014 \uBB38\uC11C \uD3F4\uB354\uC5D0\uB294 \uC544\uBB34\uAC83\uB3C4 \uB9CC\uB4E4\uC9C0 \uC54A\uC558\uC2B5\uB2C8\uB2E4)"}
+\uC124\uC815: ${cfg}${skill}`);
+    return;
+  }
+  if (cmd === "link") {
+    const root2 = path6.resolve(sub || a.root || ".");
+    const dataDir2 = dataOpt(a);
+    if (!dataDir2) die("\uAE30\uB85D \uD3F4\uB354\uB97C --data \uB85C \uC8FC\uC138\uC694: docbench link <\uBB38\uC11C \uD3F4\uB354> --data <\uAE30\uB85D \uD3F4\uB354>");
+    if (!existsSync2(root2)) die("\uBB38\uC11C \uD3F4\uB354\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4: " + root2);
+    let r;
+    try {
+      r = await linkData(root2, dataDir2, { force: !!a.force });
+    } catch (e) {
+      die(e.message, 1);
+    }
+    out(a, { root: root2, data: dataDir2, pcConfigFile: r.file, dataHome: r.home }, `\uC774\uC5C8\uC2B5\uB2C8\uB2E4: ${root2}
+\uAE30\uB85D: ${dataDir2}
+\uC774 PC \uC758 \uC124\uC815: ${r.file}${r.home ? `
+\uAE30\uB85D \uBCF4\uAD00\uD568: ${r.home} (\uB2E4\uC74C \uBB38\uC11C \uD3F4\uB354\uB294 \uC9DD \uC5C6\uC774 \uCC3E\uC2B5\uB2C8\uB2E4)` : ""}`);
     return;
   }
   if (cmd === "runner") return runnerCmd(a, sub);
-  const root = a.root ? path6.resolve(String(a.root)) : process.env.DOCBENCH_ROOT ? path6.resolve(process.env.DOCBENCH_ROOT) : findRoot(process.cwd());
-  if (!root || !existsSync2(path6.join(root, ".docbench"))) die(`\uC791\uC5C5 \uD3F4\uB354(.docbench)\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4${root ? ": " + root : ""}. --root <\uD3F4\uB354> \uB610\uB294 DOCBENCH_ROOT \uB97C \uC8FC\uAC70\uB098, \uBA3C\uC800 docbench init <\uD3F4\uB354>.`, 2);
-  const ws = await new Workspace(root, { actor: actorOf(a) }).init();
+  const { root, dataDir } = await findWorkspace(a);
+  let ws;
+  try {
+    ws = await new Workspace(root, { actor: actorOf(a), dataDir, create: false }).init();
+  } catch (e) {
+    die(e.message, ["NO_DATA", "DATA_MISSING", "DATA_CONFLICT"].includes(e.code) ? 2 : 1);
+  }
   if (cmd === "status") {
     const rows = await ws.listFeedback();
     const by = {};
@@ -9284,9 +9633,9 @@ Claude Code \uC2A4\uD0AC: ${path6.relative(root2, dst)} (\uD130\uBBF8\uB110\uC5D
     }
     const c = core_exports.countTurns(rows);
     const inbox = (await fs6.readdir(path6.join(ws.dir, "inbox")).catch(() => [])).filter((n) => n.endsWith(".json")).length;
-    const warnings = ws.config.warnings || [];
+    const warnings = [...ws.config.warnings || [], ...ws.dataWarnings || []];
     const { listRunners: listRunners2 } = await Promise.resolve().then(() => (init_runs(), runs_exports));
-    const runners = core_exports.liveRunners(await listRunners2(root)).map((r) => ({ id: r.id, kind: r.kind, pid: r.pid, claude: r.claude, busy: r.busy || null }));
+    const runners = core_exports.liveRunners(await listRunners2(ws.dir)).map((r) => ({ id: r.id, kind: r.kind, pid: r.pid, claude: r.claude, busy: r.busy || null }));
     const runsDir = path6.join(ws.dir, "runs");
     const active = [];
     for (const n of (await fs6.readdir(runsDir).catch(() => [])).filter((x2) => x2.endsWith(".req.json")).sort()) {
@@ -9300,7 +9649,8 @@ Claude Code \uC2A4\uD0AC: ${path6.relative(root2, dst)} (\uD130\uBBF8\uB110\uC5D
       if (!req || !runners.some((r) => r.id === req.runner)) continue;
       active.push({ id, state, feedbackIds: Array.isArray(req.feedbackIds) ? req.feedbackIds : [] });
     }
-    out(a, { root, docs: ws.docs.size, feedback: c, byDoc: by, inbox, runners, activeRuns: active, warnings, pcConfigFile: ws.pcConfigFile }, () => (`\uC791\uC5C5 \uD3F4\uB354 ${root} \xB7 \uBB38\uC11C ${ws.docs.size}\uAC1C${inbox ? ` \xB7 \uB118\uAE30\uAE30 \uC694\uCCAD ${inbox}\uAC74` : ""}
+    out(a, { root, data: ws.dir, dataMode: ws.dataMode, docs: ws.docs.size, feedback: c, byDoc: by, inbox, runners, activeRuns: active, warnings, pcConfigFile: ws.pcConfigFile }, () => (`\uC791\uC5C5 \uD3F4\uB354 ${root} \xB7 \uBB38\uC11C ${ws.docs.size}\uAC1C${inbox ? ` \xB7 \uB118\uAE30\uAE30 \uC694\uCCAD ${inbox}\uAC74` : ""}
+\uAE30\uB85D: ${ws.dir}${ws.dataMode === "inside" ? " (\uBB38\uC11C \uD3F4\uB354 \uC548)" : ""}
 AI \uCC28\uB840 ${c.assistant} \xB7 \uC0AC\uB78C \uCC28\uB840 ${c.owner} \xB7 \uBC18\uC601\uB428 ${c.resolved} \xB7 \uBCF4\uB958 ${c.declined}
 Claude \uC791\uC5C5: ${runners.length ? runners.map((r) => `${r.kind === "server" ? "\uC11C\uBC84" : "\uC2E4\uD589\uAE30"} ${r.id.split(":")[1]}${r.claude?.ok ? "" : " (\uC4F8 \uC218 \uC5C6\uC74C)"}${r.busy ? " \u2014 \uC791\uC5C5 \uC911" : ""}`).join(", ") : "\uCF1C\uC9C4 \uC2E4\uD589\uAE30\xB7\uC11C\uBC84 \uC5C6\uC74C"}
 ` + active.map((r) => `  ${r.state === "running" ? "\uC2E4\uD589 \uC911" : "\uB300\uAE30"} ${r.id}: \uD53C\uB4DC\uBC31 ${r.feedbackIds.join(", ")}
@@ -9510,16 +9860,26 @@ function fmtRunLog(l2) {
   return `${t} ${m ? m() : l2.k}`;
 }
 async function runnerCmd(a, sub) {
-  const rootArg = sub || a.root || process.env.DOCBENCH_ROOT;
-  const root = rootArg ? path6.resolve(String(rootArg)) : findRoot(process.cwd());
   if (a.startup === "entry") return startupEntry(String(a.id || ""));
-  if (!root || !existsSync2(path6.join(root, ".docbench"))) die(`\uC791\uC5C5 \uD3F4\uB354(.docbench)\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4${root ? ": " + root : ""}. \uBE0C\uB77C\uC6B0\uC800\uC758 DocBench \uB85C \uADF8 \uD3F4\uB354\uB97C \uD55C \uBC88 \uC5F4\uAC70\uB098 docbench init <\uD3F4\uB354>.`, 2);
+  if ((sub || a.root) && dataOpt(a)) {
+    try {
+      await linkData(path6.resolve(String(sub || a.root)), dataOpt(a), { force: !!a.force });
+    } catch (e) {
+      die(e.message, 1);
+    }
+  }
+  const { root, dataDir } = await findWorkspace({ ...a, root: sub || a.root, data: void 0 });
   const { listRunners: listRunners2, engineId: engineId2, localEngine: localEngine2, localEngineFile: localEngineFile2, pidAlive: pidAlive2 } = await Promise.resolve().then(() => (init_runs(), runs_exports));
-  const ws0 = await new Workspace(root, { actor: { kind: "assistant", name: "Claude" } }).init();
+  let ws0;
+  try {
+    ws0 = await new Workspace(root, { actor: { kind: "assistant", name: "Claude" }, dataDir, create: false }).init();
+  } catch (e) {
+    die(e.message, 2);
+  }
   const me2 = engineId2(ws0, "runner");
-  const mine = async () => (await listRunners2(root)).filter((r) => core_exports.runnerAlive(r) && r.id === me2);
+  const mine = async () => (await listRunners2(ws0.dir)).filter((r) => core_exports.runnerAlive(r) && r.id === me2);
   if (a.status) {
-    const all = core_exports.liveRunners(await listRunners2(root));
+    const all = core_exports.liveRunners(await listRunners2(ws0.dir));
     out(a, all, (rs) => rs.length ? rs.map((r) => `${r.id}  pid ${r.pid}  Claude Code ${r.claude?.version || "?"}${r.claude?.ok ? "" : " (\uC4F8 \uC218 \uC5C6\uC74C: " + (r.claude?.problem || "") + ")"}${r.busy ? "  \uC791\uC5C5 \uC911 " + r.busy : ""}`).join("\n") : "\uCF1C\uC9C4 \uC2E4\uD589\uAE30 \uC5C6\uC74C");
     if (!all.length) process.exitCode = 1;
     return;
@@ -9531,7 +9891,7 @@ async function runnerCmd(a, sub) {
       out(a, { stopped: 0 }, "\uC774 PC \uC5D0\uC11C \uCF1C\uC9C4 \uC2E4\uD589\uAE30\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4");
       return;
     }
-    const runnersDir = path6.join(root, ".docbench", "runners");
+    const runnersDir = path6.join(ws0.dir, "runners");
     const stopFile = path6.join(runnersDir, core_exports.runnerFileName(me2).replace(/\.json$/, ".stop"));
     await fs6.writeFile(stopFile, (/* @__PURE__ */ new Date()).toISOString());
     const gone = async () => !await localEngine2(ws0, root, "runner") && !(await mine()).length;
@@ -9640,12 +10000,13 @@ rem DocBench \uC2E4\uD589\uAE30 - \uBB38\uC11C \uD3F4\uB354\uB294 %LOCALAPPDATA%
 }
 async function startupEntry(key) {
   const list = JSON.parse(await fs6.readFile(path6.join(pcDir(), "runner-startup.json"), "utf8").catch(() => "{}") || "{}");
-  const root = list[key];
-  if (!root) die("\uC790\uB3D9 \uC2DC\uC791 \uBAA9\uB85D\uC5D0 \uC5C6\uB294 \uD3F4\uB354\uC785\uB2C8\uB2E4: " + key);
-  process.argv = [process.argv[0], SELF, "runner", root, "--detach"];
-  return runnerCmd(parse(["runner", root, "--detach"]), root);
+  const ent = typeof list[key] === "string" ? { root: list[key] } : list[key];
+  if (!ent?.root) die("\uC790\uB3D9 \uC2DC\uC791 \uBAA9\uB85D\uC5D0 \uC5C6\uB294 \uD3F4\uB354\uC785\uB2C8\uB2E4: " + key);
+  const args = ["runner", ent.root, "--detach"];
+  process.argv = [process.argv[0], SELF, ...args];
+  return runnerCmd(parse(args), ent.root);
 }
-var here2, BUNDLED, SELF, HELP, BOOL, STATUS_VALUES, out, die, encLabel, turn, where, short;
+var here2, BUNDLED, SELF, HELP, BOOL, STATUS_VALUES, readJsonFile, dataOpt, out, die, encLabel, turn, where, short;
 var init_docbench = __esm({
   "bin/docbench.mjs"() {
     "use strict";
@@ -9659,9 +10020,13 @@ var init_docbench = __esm({
     HELP = `docbench CLI \u2014 \uC0AC\uB78C\uACFC \uD130\uBBF8\uB110\uC758 Claude Code \uAC00 \uAC19\uC740 \uC791\uC5C5 \uD3F4\uB354\uB97C \uB2E4\uB8EC\uB2E4.
 \uC11C\uBC84\uAC00 \uAEBC\uC838 \uC788\uC5B4\uB3C4 \uD30C\uC77C\uB9CC\uC73C\uB85C \uB3D9\uC791\uD558\uACE0, \uC11C\uBC84\uAC00 \uCF1C\uC838 \uC788\uC73C\uBA74 \uD654\uBA74\uC774 \uC2E4\uC2DC\uAC04\uC73C\uB85C \uB530\uB77C\uC628\uB2E4.
 
-  docbench serve [\uD3F4\uB354] [--port 4317] [--host 127.0.0.1] [--token T] [--allow-origin URL] [--allow-host \uC774\uB984] [--no-claude]
+  docbench serve [\uD3F4\uB354] [--data \uAE30\uB85D\uD3F4\uB354] [--port 4317] [--host 127.0.0.1] [--token T] [--allow-origin URL] [--allow-host \uC774\uB984] [--no-claude]
                                              \uD1A0\uD070\uC740 \uD658\uACBD \uBCC0\uC218 DOCBENCH_TOKEN \uC73C\uB85C\uB3C4(\uBA85\uB839\uC904\uC740 \uD504\uB85C\uC138\uC2A4 \uBAA9\uB85D\uC5D0 \uBCF4\uC778\uB2E4)
-  docbench init [\uD3F4\uB354] [--claude]            \uC791\uC5C5 \uD3F4\uB354 \uC900\uBE44 (+ Claude Code \uC2A4\uD0AC \uBCF5\uC0AC)
+  docbench init [\uD3F4\uB354] [--data \uAE30\uB85D\uD3F4\uB354 | --inside] [--claude]
+                                             \uC791\uC5C5 \uD3F4\uB354 \uC900\uBE44. \uAE30\uB85D\uC740 \uAE30\uBCF8\uC73C\uB85C \uBB38\uC11C \uD3F4\uB354 \uBC16(\uAE30\uB85D \uBCF4\uAD00\uD568/<\uC774\uB984>),
+                                             --inside \uBA74 \uBB38\uC11C \uD3F4\uB354 \uC548 .docbench (\uD300\uC774 git \uC73C\uB85C \uD568\uAED8 \uC4F8 \uB54C)
+  docbench link <\uD3F4\uB354> --data \uAE30\uB85D\uD3F4\uB354 [--force]  \uBB38\uC11C \uD3F4\uB354 \u2194 \uAE30\uB85D \uD3F4\uB354 \uC9DD\uC744 \uC774 PC \uC758 \uC124\uC815\uC5D0 (\uBE0C\uB77C\uC6B0\uC800\uB85C \uB9CC\uB4E0 \uAE30\uB85D.
+                                             \uBB38\uC11C \uBAA9\uB85D\uC774 \uB2EC\uB77C \uB2E4\uB978 \uD3F4\uB354\uC758 \uAE30\uB85D\uC73C\uB85C \uBCF4\uC774\uBA74 \uBA48\uCD98\uB2E4 \u2014 \uB9DE\uB2E4\uBA74 --force)
   docbench status [--json]                   \uCC28\uB840\uBCC4 \uD53C\uB4DC\uBC31 \uC218 \xB7 Claude \uC791\uC5C5(\uC5D4\uC9C4\xB7\uB9E1\uACA8 \uB454 \uD53C\uB4DC\uBC31)
   docbench fb list [--waiting assistant|owner] [--status open|resolved|declined|all] [--doc ID] [--json]
   docbench fb show <id> [--json]             \uD53C\uB4DC\uBC31 + \uC9C0\uAE08 \uADF8 \uC139\uC158 \uC6D0\uBB38\xB7\uD310\xB7\uC778\uCF54\uB529
@@ -9674,20 +10039,23 @@ var init_docbench = __esm({
   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m \uC694\uC57D] [--fb id,id] [--rename] [--force] [--convert-utf8]
   docbench log <docId> -m \uC694\uC57D [--fb id,id]   \uB9C8\uC9C0\uB9C9 \uBCC0\uACBD\uC5D0 \uC694\uC57D \uB367\uBD99\uC774\uAE30 (\uC9C1\uC811 \uD3B8\uC9D1\uD55C \uB4A4)
   docbench inbox [--clear] [--json]          "\uB118\uAE30\uAE30" \uC694\uCCAD\uD568 \uBCF4\uAE30\xB7\uBE44\uC6B0\uAE30
-  docbench runner [\uD3F4\uB354] [--detach | --status | --stop] [--startup on|off]
+  docbench runner [\uD3F4\uB354] [--data \uAE30\uB85D\uD3F4\uB354] [--detach | --status | --stop] [--startup on|off]
                                              Claude \uC791\uC5C5 \uC2E4\uD589\uAE30 \u2014 \uB2E8\uC77C HTML \uD654\uBA74\uC758 "Claude \uC791\uC5C5"\uC744 \uC774 PC \uC5D0\uC11C \uB744\uC6B4\uB2E4
                                              (--detach \uCC3D \uC5C6\uC774 \uB4A4\uC5D0\uC11C, --startup on \uB85C\uADF8\uC778 \uB54C \uC790\uB3D9\uC73C\uB85C, Windows)
 
-\uC791\uC5C5 \uD3F4\uB354 \uCC3E\uAE30: --root \uD3F4\uB354 \u2192 \uD658\uACBD \uBCC0\uC218 DOCBENCH_ROOT \u2192 \uD604\uC7AC \uD3F4\uB354\uC5D0\uC11C \uC704\uB85C .docbench \uAC00 \uC788\uB294 \uACF3.
+\uC791\uC5C5 \uD3F4\uB354 \uCC3E\uAE30: --root \uD3F4\uB354 \u2192 \uD658\uACBD \uBCC0\uC218 DOCBENCH_ROOT \u2192 \uD604\uC7AC \uD3F4\uB354\uC5D0\uC11C \uC704\uB85C(.docbench \uAC00 \uC788\uAC70\uB098 \uAE30\uB85D \uC9DD\uC774 \uC788\uB294 \uBB38\uC11C \uD3F4\uB354, \uB610\uB294 \uC9C0\uAE08 \uC790\uB9AC\uAC00 \uAE30\uB85D \uD3F4\uB354).
+\uAE30\uB85D \uD3F4\uB354 \uCC3E\uAE30: --data \xB7 DOCBENCH_DATA \u2192 \uBB38\uC11C \uD3F4\uB354 \uC548 .docbench \u2192 \uC774 PC \uC758 \uC124\uC815 workspaces[\uD3F4\uB354].data \u2192 \uAE30\uB85D \uBCF4\uAD00\uD568(dataHome, \uAE30\uBCF8 <PC \uC124\uC815 \uD3F4\uB354>/data)/<\uD3F4\uB354 \uC774\uB984>(\uAC19\uC740 \uC774\uB984\uC758 \uB2E4\uB978 \uD3F4\uB354\uBA74 '<\uC774\uB984> (2)' \u2026).
 \uC791\uC131\uC790: --as human:\uC774\uB984 | assistant:\uC774\uB984 (\uAE30\uBCF8 assistant:Claude, \uB610\uB294 DOCBENCH_ACTOR)
 \uC885\uB8CC \uCF54\uB4DC: 0 \uC131\uACF5 \xB7 1 \uC798\uBABB\uB41C \uC785\uB825 \xB7 2 \uC791\uC5C5 \uD3F4\uB354 \uC5C6\uC74C \xB7 3 \uADF8 \uC0AC\uC774 \uBC14\uB01C(\uB2E4\uC2DC \uC77D\uACE0 \uACE0\uCE60 \uAC83) \xB7 4 \uC77D\uAE30 \uC804\uC6A9
-\uC124\uC815: \uBB38\uC11C \uD3F4\uB354 .docbench/config.json(\uD568\uAED8 \uC500) + \uC774 PC \uC758 \uC124\uC815(\uBB38\uC11C \uD3F4\uB354 \uBC16 \u2014 \uC2E4\uD589 \uBA85\uB839 assistant\xB7notify.command \uC640 \uC774\uB984 user \uB294
+\uC124\uC815: \uAE30\uB85D \uD3F4\uB354 config.json(\uD568\uAED8 \uC500) + \uC774 PC \uC758 \uC124\uC815(\uBB38\uC11C \uD3F4\uB354 \uBC16 \u2014 \uC2E4\uD589 \uBA85\uB839 assistant\xB7notify.command \uC640 \uC774\uB984 user \uB294
       \uC5EC\uAE30\uC5D0\uB9CC, \uD3F4\uB354\uBCC4\uC740 "workspaces": { "<\uD3F4\uB354 \uACBD\uB85C>": {\u2026} }). \uC704\uCE58: Windows %LOCALAPPDATA%\\docbench\\config.json,
       macOS ~/Library/Application Support/docbench, Linux ~/.config/docbench. DOCBENCH_HOME \uC73C\uB85C \uC62E\uAE40. status \uAC00 \uC704\uCE58\uB97C \uBCF4\uC5EC \uC900\uB2E4
 \uD310: ${core_exports.DOCBENCH_VERSION}
 `;
-    BOOL = /* @__PURE__ */ new Set(["json", "stdin", "resolve", "ask", "decline", "claude", "help", "force", "rename", "convert-utf8", "clear", "detach", "stop", "no-claude"]);
+    BOOL = /* @__PURE__ */ new Set(["json", "stdin", "resolve", "ask", "decline", "claude", "help", "force", "rename", "convert-utf8", "clear", "detach", "stop", "no-claude", "inside"]);
     STATUS_VALUES = /* @__PURE__ */ new Set(["open", "resolved", "declined", "all"]);
+    readJsonFile = (f) => fs6.readFile(f, "utf8").then((t) => core_exports.parseJsonText(t), () => null);
+    dataOpt = (a) => a.data && a.data !== true ? path6.resolve(String(a.data)) : process.env.DOCBENCH_DATA ? path6.resolve(process.env.DOCBENCH_DATA) : void 0;
     out = (a, data, human) => {
       if (a.json) process.stdout.write(JSON.stringify(data, null, 2) + "\n");
       else process.stdout.write((typeof human === "function" ? human(data) : human ?? JSON.stringify(data, null, 2)) + "\n");

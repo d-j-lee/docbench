@@ -18,14 +18,14 @@
 └───────────────────────────────────────────────────────┘
 ```
 
-**같은 규칙은 한 곳에**: 바이트 보존(`textcodec`)과 `.docbench/` 디스크 모양(`workspace`)은 서버(Node)와 브라우저 폴더 어댑터가
+**같은 규칙은 한 곳에**: 바이트 보존(`textcodec`)과 기록 폴더 모양(`workspace`)은 서버(Node)와 브라우저 폴더 어댑터가
 같은 코드를 쓴다. 각자는 입출력(파일·해시·잠금)과 CP949 코덱만 다르다 — 서버는 `iconv-lite`, 브라우저는 내장 `euc-kr` 디코더로 만든 역표
 (둘이 BMP 전 글자·2바이트 전 쌍에서 같음을 e2e 로 확인).
 
 ```
 단일 HTML(release/docbench.html) ─ standalone.ts ─ folder 어댑터 ─ File System Access API ─┐
     └ Claude 작업: 요청 파일 ─▶ 이 PC 의 실행기 docbench runner (RunEngine) ─ claude -p ────┤
-대시보드 패널 ─ <doc-bench> ─ rest 어댑터 ─ HTTP ─ server/ (Workspace + RunEngine) ─────────┼─ 같은 작업 폴더(.md + .docbench/)
+대시보드 패널 ─ <doc-bench> ─ rest 어댑터 ─ HTTP ─ server/ (Workspace + RunEngine) ─────────┼─ 같은 문서 폴더(.md) + 같은 기록 폴더
 터미널의 Claude Code ─ bin/docbench.mjs (Workspace) ───────────────────────────────────────┘
 ```
 
@@ -84,7 +84,7 @@
 **밖에서 고침** — 로컬 서버는 파일을 감시한다. 알던 판과 다르면 이력에 `by: external` 로 남기고(바뀐 섹션 포함) SSE 로 알린다. 열려 있는 화면은 다시 읽고 바뀐 섹션에 표시를 단다. CLI 가 `docbench log` 로 요약을 덧붙이면 그 이력에 합쳐진다.
 CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적으므로 외부 편집이 아니다 — 대신 `changes.jsonl` 에 새로 붙은 줄의 문서를 알려 화면이 다시 읽는다(빠졌던 것을 e2e 로 재현해 고침).
 
-**마지막으로 본 뒤** — 보기 상태에 문서별 `lastSeen`(판)을 둔다. 다시 열 때 그 판 본문(`loadVersion`)과 비교해 바뀐 섹션에 표시하고 "이 변경 이후 차이"를 보여 준다. 로컬 서버는 본 적 있는 판 본문을 `.docbench/blobs/` 에 둔다.
+**마지막으로 본 뒤** — 보기 상태에 문서별 `lastSeen`(판)을 둔다. 다시 열 때 그 판 본문(`loadVersion`)과 비교해 바뀐 섹션에 표시하고 "이 변경 이후 차이"를 보여 준다. 본 적 있는 판 본문은 기록 폴더 `blobs/` 에 둔다.
 
 **밖에서 고친 것 따라가기** — 도구 밖(에디터·터미널의 Claude·동기화)에서 고쳐도 화면이 최신인지 보이게:
 문서 머리에 "최신 · n초 전 확인"(서버는 "실시간 반영")과 **다시 읽기**(디스크와 지금 맞춰 보고 바깥 편집이면 이력에 남김), 다른 문서가 바뀌면 왼쪽 목록에 "바뀜",
@@ -102,9 +102,9 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 
 ## Claude 작업 (`server/runs.mjs` · `src/core/runs.ts` · `src/ui/runs.ts`)
 
-화면이 넘긴 피드백을 Claude 가 백그라운드에서 처리한다. 화면 ↔ 실행 엔진은 **작업 폴더의 파일**로만 주고받는다(서버 모드는 REST 가 같은 파일을 쓴다):
+화면이 넘긴 피드백을 Claude 가 백그라운드에서 처리한다. 화면 ↔ 실행 엔진은 **기록 폴더의 파일**로만 주고받는다(서버 모드는 REST 가 같은 파일을 쓴다):
 
-| 파일 (`.docbench/`) | 쓰는 쪽 | 내용 |
+| 파일 (기록 폴더) | 쓰는 쪽 | 내용 |
 |---|---|---|
 | `runs/<id>.req.json` | 화면(단일 HTML)·서버 | 요청: 종류(handoff·propose)·피드백 id·모델·노력·방식(Claude 판단·제안만)·**실행기 id** |
 | `runs/<id>.json` | 엔진만 | 상태: queued·running(진행 단계·토큰)·done·failed·canceled, 요약(고침·제안·답·질문·보류·건너뜀·실패), 사용량(5시간 한도 몫 포함) |
@@ -125,24 +125,32 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 
 - 의존성 없음(선택: `iconv-lite`). Node 20+.
 - **텍스트 입출력**(`textio.mjs` → 규칙은 `src/core/textcodec.ts`): BOM(UTF-8·UTF-16) → UTF-8 → 깨진 바이트가 조금 섞인 UTF-8(읽기 전용) → CP949. **다시 인코딩해 원래 바이트가 그대로 나올 때만 저장 가능**, CP949 에 없는 글자가 들어오면 저장을 막는다. 화면에는 LF 로 주고, 저장할 때 바뀌지 않은 줄은 원래 줄바꿈 그대로, 바뀐 줄은 그 자리 줄바꿈으로. 판 = 파일 바이트 sha256 앞 16자.
-- **쓰기 줄 세우기**: 같은 문서·피드백 쓰기는 프로세스 안 약속 사슬 + `.docbench/locks/` 잠금 파일(O_EXCL, 15초 지나면 죽은 잠금)로 한 줄로 세운 뒤 판을 다시 비교한다 — 서버와 CLI 가 동시에 써도 하나만 이긴다.
-- **쓰기**: 같은 폴더 임시 파일 → rename. Windows 에서 다른 프로그램이 잡고 있으면(EPERM/EBUSY) 잠깐씩 재시도 후 직접 쓰기.
-- **감시**: `fs.watch` 재귀(Windows·macOS·Linux Node 20+), 안 되면 3초 폴링(문서·이력·피드백 폴더).
+- **쓰기 줄 세우기**: 같은 문서·피드백 쓰기는 프로세스 안 약속 사슬 + 기록 폴더 `locks/` 잠금 파일(O_EXCL, 15초 지나면 죽은 잠금)로 한 줄로 세운 뒤 판을 다시 비교한다 — 서버와 CLI 가 동시에 써도 하나만 이긴다.
+- **쓰기**: 같은 폴더 임시 파일(`.<이름>.docbench-….tmp`, 몇 ms) → rename. Windows 에서 다른 프로그램이 잡고 있으면(EPERM/EBUSY) 잠깐씩 재시도 후 직접 쓰기.
+- **감시**: `fs.watch` 재귀(Windows·macOS·Linux Node 20+) — 문서 폴더와, 밖에 둔 기록 폴더를 따로. 안 되면 3초 폴링(문서·이력·피드백 폴더).
 - **Windows 빌드**: 스크립트 경로는 `fileURLToPath` 로 — `URL.pathname` 은 `/C:/…` 가 되어 `npm install` 의 빌드가 깨진다.
 - **git**: 있으면 HEAD 판을 기준본으로, `git status` 를 폴더 지도 표시로.
 - `createDocBenchHandler(ws, opts)` 는 `(req, res) => boolean` — Node http, Express, Fastify raw 어디에나 끼운다.
 
-`.docbench/` 구성:
+## 기록 폴더 (`src/core/workspace.ts` · `server/workspace.mjs locateData`)
 
-| 경로 | 내용 | 커밋 |
+문서 폴더(`.md`, 정본)와 **기록 폴더**는 따로다(D57). 기록 폴더는 둘 중 한 곳, 모양은 같다:
+
+- **밖 (기본)**: 기록 보관함/<문서 폴더 이름>/ — 문서 폴더에는 문서만 있다. 보관함은 서버·CLI 에서 이 PC 의 설정 `dataHome`(없으면 `<PC 설정 폴더>/data`), 단일 HTML 에서 사람이 고른 폴더(예: HTML 옆 `docbench-기록`). 표식 `docbench-data.json` `{ protocol, docsName, docsPath?, docs? }` 가 어느 문서 폴더의 기록인지 적는다 — 브라우저는 경로를 몰라 `docsPath` 를 비워 두고(실행기·`link` 가 채운다) 문서 표본 `docs`(정렬한 앞 40개)로 이름이 같은 다른 문서 폴더를 가려낸다. 같은 이름이 이미 다른 폴더의 것이면 `<이름> (2)` 를 쓴다. 보관함에는 표식 `docbench-home.json`.
+- **안**: `<문서 폴더>/.docbench/` — 예전 판 폴더, 팀이 git 으로 함께 쓸 때(`init --inside`, 화면의 "문서 폴더 안에 두기"). `.gitignore` 로 캐시·개인 상태를 뺀다.
+
+서버·CLI 가 찾는 순서(D58·D61): `--data`·`DOCBENCH_DATA` → 문서 폴더 안 `.docbench`(있으면 먼저 — 브라우저도 그렇게 본다) → 이 PC 의 설정 `workspaces[<문서 폴더>].data`(init·serve·실행기·`docbench link` 가 적는 짝, D60 — 그 폴더가 없으면 만들지 않고 멈춘다) → 보관함/`<이름>`, `<이름> (2)` … 중 표식이 이 문서 폴더를 가리키는 것(`docsPath`, 경로가 없는 브라우저 기록은 문서 표본이 절반 이상 겹치는 것). CLI 는 찾기만 하고 표식도 바꾸지 않는다(`init`·`link`·`serve`·실행기만 만들고 `docsPath` 를 채운다). 위로 올라가며 문서 폴더를 찾고, 기록 폴더 안에서 불렀으면 표식의 `docsPath` 로 — 단 그 문서 폴더의 기록이 정말 여기일 때만(아무 데나 놓은 표식으로 CLI 를 남의 폴더로 돌리지 못하게). 기록 폴더가 문서 폴더 안이거나 문서 폴더를 품으면 거부한다(기록의 `blobs/*.md` 가 문서로 훑힌다).
+
+| 경로 (기록 폴더 기준) | 내용 | 안에 둘 때 커밋 |
 |---|---|---|
 | `config.json` | 제목·그룹·문서별 설정·알림 안내 (함께 쓰는 설정) | ✔ |
-
-실행 명령(`assistant`·`notify.command`)과 이름(`user`)은 문서 폴더가 아니라 **이 PC 의 설정**(Windows `%LOCALAPPDATA%\docbench\config.json` 등 운영체제의 앱 설정 자리, `workspaces["<폴더>"]` 로 폴더별)에서만 읽는다 — 문서 폴더는 git·동기화로 남과 나누기 때문(D40).
 | `feedback/<id>.json` | 피드백 한 건 = 파일 하나 (충돌 적고 diff 읽기 쉬움) | 팀이 정함 |
 | `changes.jsonl` | 저장 이력, 한 줄 = 한 번 | 팀이 정함 |
-| `blobs/` `state.json` `viewstate/` `inbox/` | 캐시·개인 상태·요청함 | ✘ (`.docbench/.gitignore`) |
-| `runs/` `runners/` | Claude 작업 요청·상태·로그, 실행기 심장 박동 | ✘ (`.docbench/.gitignore`) |
+| `blobs/` `state.json` `viewstate/` `inbox/` `locks/` | 캐시·개인 상태·요청함·잠금 | ✘ (`.docbench/.gitignore`) |
+| `runs/` `runners/` | Claude 작업 요청·상태·로그, 실행기 심장 박동 | ✘ |
+| `docbench-data.json` | 밖에 둘 때만: 어느 문서 폴더의 기록인지 | — |
+
+실행 명령(`assistant`·`notify.command`)과 이름(`user`)은 기록 폴더가 아니라 **이 PC 의 설정**(Windows `%LOCALAPPDATA%\docbench\config.json` 등 운영체제의 앱 설정 자리, `workspaces["<폴더>"]` 로 폴더별)에서만 읽는다 — 기록이 문서 폴더 안이면 git·동기화로 남과 나누기 때문(D40). 기록 자리(`dataHome`·`workspaces[…].data`)도 같은 파일에 둔다.
 
 ## 서버 없는 단일 HTML (`src/standalone.ts` · `src/adapters/folder*.ts`)
 
@@ -150,14 +158,14 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 **폴더 어댑터**가 File System Access API 로 그 폴더를 직접 읽고 쓴다. 디스크 모양·판(바이트 해시)·이력·잠금 파일 이름까지 서버와 같아서,
 같은 폴더를 CLI·서버가 이어받는다(실제 디스크에서 어댑터 ↔ CLI 왕복을 단위 시험으로 확인).
 
-- **고르기·기억**: `showDirectoryPicker` → 핸들을 IndexedDB 에 두고 다음에 "다시 열기"(권한은 브라우저가 다시 물을 수 있다). 다른 브라우저는 `<input webkitdirectory>` 로 읽기만.
+- **고르기·기억**: 문서 폴더와 **기록 보관함**을 `showDirectoryPicker` 로 고른다(고르기 창 id 가 달라 각자 지난 자리에서 열린다). 기록 폴더는 `subFs(보관함, <문서 폴더 이름>)` — 보관함이 문서 폴더 자체·그 안·그것을 품은 곳이면 거부(`isSameEntry`·`resolve`). 대시보드 주소로 열면 두 핸들을 IndexedDB 에 두고 다음에 묻지 않고 연다(권한은 브라우저가 다시 물을 수 있다). `file://` 로 열면 기억하지 않는다(D36). 문서 폴더 안에 예전 `.docbench` 가 있으면 "보관함으로 옮기기"(복사 → 바이트 비교 → 안쪽 삭제, 실행기가 쓰는 중이면 멈춤) 또는 "안에서 계속"(그 폴더 이름으로 기억). 다른 브라우저는 `<input webkitdirectory>` 로 읽기만.
 - **바뀜 확인**: 감시 대신 2.5초마다(탭이 보일 때만, 한 번에 하나) 이력 파일에 새로 붙은 **완성된 줄**의 문서(이 탭이 쓴 판은 빼고), 피드백 폴더 서명, 설정 파일, 화면이 보고 있는 문서(`docs.focus`)를 보고, 네 번에 한 번 전체 문서를 훑는다. 서버의 이력 감시도 같은 규칙(완성된 줄만, 자기 저장 빼고).
 - **줄 세우기**: 브라우저에는 O_EXCL 이 없다. 같은 이름의 잠금 파일이 없으면 내 표식을 쓰고 25ms 뒤 되읽어 그대로인지 확인한다. 그래서 문서·피드백 쓰기는 **양쪽(서버·CLI·브라우저) 모두 쓰기 직전에 판을 한 번 더 비교**한다 — 잠금이 겹치는 아주 좁은 틈에서도 한쪽은 충돌로 멈춘다.
 - **이력 덧붙이기**: 브라우저에는 O_APPEND 도 없어 `changes.jsonl` 을 복사본에 덧붙여 바꿔 끼운다. 그 사이 다른 쪽이 덧붙인 줄이 사라지지 않게 서버·CLI·브라우저 모두 `changes` 잠금 안에서 덧붙인다(독립 검토에서 줄 손실 재현, 고침).
 - **처음 열기**: 처음 보는 문서들의 판은 잠금·쓰기 한 번에 적는다(문서마다 잠그면 300개에 17초 — 실측).
 - **JSON 파일**: 메모장·PowerShell 5.1 이 붙이는 BOM 을 떼고 읽는다(서버도 같게 — `core.parseJsonText`).
 - **쓰기**: `createWritable()` 은 임시(.crswap) 파일에 쓰고 닫을 때 바꿔 끼운다.
-- **Claude 작업**: 페이지는 PC 프로그램을 켤 수 없으므로 이 PC 의 실행기(`docbench runner`)가 요청 파일을 받아 claude 를 띄운다. 실행기 없이는 "넘기기"가 요청함 파일만 남기고(`queued`) 터미널의 Claude Code 로 처리한다.
+- **Claude 작업**: 페이지는 PC 프로그램을 켤 수 없으므로 이 PC 의 실행기(`docbench runner`)가 기록 폴더의 요청 파일을 받아 claude 를 띄운다. 기록이 밖이면 설치 문구가 보관함·기록 폴더 이름을 알려 주고 `runner <문서 폴더> --data <기록 폴더>` 로 켜며, 그 짝이 이 PC 의 설정에 적힌다(D60). 실행기 없이는 "넘기기"가 요청함 파일만 남기고(`queued`) 터미널의 Claude Code 로 처리한다.
 - **없는 것**: git 기준본, 넘기기 명령(`notify.command`).
 - **CSP**: 파일 안에 `connect-src 'none'`·`img-src data: blob:`·referrer 없음 — DocBench 가 문서를 어디로도 보내지 않는 데 더해, 페이지 안에서 요청·그림으로 새는 길도 막는다. 문서 속 바깥 주소 그림은 보이지 않는다. 새 창 이동은 CSP 로 못 막는다(문서 속 스크립트는 DOMPurify 가 지운다).
 - **이름·기억**: 쓰려면 이름이 필요하다(작성자·보기 상태의 주인). `file://` 로 열면 고른 폴더를 기억하지 않는다(다른 로컬 HTML 이 꺼내 쓸 수 있어서).

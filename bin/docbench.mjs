@@ -4,9 +4,13 @@
  * docbench CLI — 사람과 터미널의 Claude Code 가 같은 작업 폴더를 다룬다.
  * 서버가 꺼져 있어도 파일만으로 동작하고, 서버가 켜져 있으면 화면이 실시간으로 따라온다.
  *
- *   docbench serve [폴더] [--port 4317] [--host 127.0.0.1] [--token T] [--allow-origin URL] [--allow-host 이름] [--no-claude]
+ *   docbench serve [폴더] [--data 기록폴더] [--port 4317] [--host 127.0.0.1] [--token T] [--allow-origin URL] [--allow-host 이름] [--no-claude]
  *                                              토큰은 환경 변수 DOCBENCH_TOKEN 으로도(명령줄은 프로세스 목록에 보인다)
- *   docbench init [폴더] [--claude]            작업 폴더 준비 (+ Claude Code 스킬 복사)
+ *   docbench init [폴더] [--data 기록폴더 | --inside] [--claude]
+ *                                              작업 폴더 준비. 기록은 기본으로 문서 폴더 밖(기록 보관함/<이름>),
+ *                                              --inside 면 문서 폴더 안 .docbench (팀이 git 으로 함께 쓸 때)
+ *   docbench link <폴더> --data 기록폴더 [--force]  문서 폴더 ↔ 기록 폴더 짝을 이 PC 의 설정에 (브라우저로 만든 기록.
+ *                                              문서 목록이 달라 다른 폴더의 기록으로 보이면 멈춘다 — 맞다면 --force)
  *   docbench status [--json]                   차례별 피드백 수 · Claude 작업(엔진·맡겨 둔 피드백)
  *   docbench fb list [--waiting assistant|owner] [--status open|resolved|declined|all] [--doc ID] [--json]
  *   docbench fb show <id> [--json]             피드백 + 지금 그 섹션 원문·판·인코딩
@@ -19,14 +23,15 @@
  *   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
  *   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
  *   docbench inbox [--clear] [--json]          "넘기기" 요청함 보기·비우기
- *   docbench runner [폴더] [--detach | --status | --stop] [--startup on|off]
+ *   docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
  *                                              Claude 작업 실행기 — 단일 HTML 화면의 "Claude 작업"을 이 PC 에서 띄운다
  *                                              (--detach 창 없이 뒤에서, --startup on 로그인 때 자동으로, Windows)
  *
- * 작업 폴더 찾기: --root 폴더 → 환경 변수 DOCBENCH_ROOT → 현재 폴더에서 위로 .docbench 가 있는 곳.
+ * 작업 폴더 찾기: --root 폴더 → 환경 변수 DOCBENCH_ROOT → 현재 폴더에서 위로(.docbench 가 있거나 기록 짝이 있는 문서 폴더, 또는 지금 자리가 기록 폴더).
+ * 기록 폴더 찾기: --data · DOCBENCH_DATA → 문서 폴더 안 .docbench → 이 PC 의 설정 workspaces[폴더].data → 기록 보관함(dataHome, 기본 <PC 설정 폴더>/data)/<폴더 이름>(같은 이름의 다른 폴더면 '<이름> (2)' …).
  * 작성자: --as human:이름 | assistant:이름 (기본 assistant:Claude, 또는 DOCBENCH_ACTOR)
  * 종료 코드: 0 성공 · 1 잘못된 입력 · 2 작업 폴더 없음 · 3 그 사이 바뀜(다시 읽고 고칠 것) · 4 읽기 전용
- * 설정: 문서 폴더 .docbench/config.json(함께 씀) + 이 PC 의 설정(문서 폴더 밖 — 실행 명령 assistant·notify.command 와 이름 user 는
+ * 설정: 기록 폴더 config.json(함께 씀) + 이 PC 의 설정(문서 폴더 밖 — 실행 명령 assistant·notify.command 와 이름 user 는
  *       여기에만, 폴더별은 "workspaces": { "<폴더 경로>": {…} }). 위치: Windows %LOCALAPPDATA%\docbench\config.json,
  *       macOS ~/Library/Application Support/docbench, Linux ~/.config/docbench. DOCBENCH_HOME 으로 옮김. status 가 위치를 보여 준다
  */
@@ -35,7 +40,7 @@ import os from 'node:os';
 import { promises as fs, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
-import { Workspace } from '../server/workspace.mjs';
+import { Workspace, locateData, claimDataDir, setPcMapping, defaultPcConfigFile } from '../server/workspace.mjs';
 import { decode } from '../server/textio.mjs';
 import { core } from '../server/core.mjs';
 
@@ -47,9 +52,13 @@ const SELF = fileURLToPath(import.meta.url);
 const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작업 폴더를 다룬다.
 서버가 꺼져 있어도 파일만으로 동작하고, 서버가 켜져 있으면 화면이 실시간으로 따라온다.
 
-  docbench serve [폴더] [--port 4317] [--host 127.0.0.1] [--token T] [--allow-origin URL] [--allow-host 이름] [--no-claude]
+  docbench serve [폴더] [--data 기록폴더] [--port 4317] [--host 127.0.0.1] [--token T] [--allow-origin URL] [--allow-host 이름] [--no-claude]
                                              토큰은 환경 변수 DOCBENCH_TOKEN 으로도(명령줄은 프로세스 목록에 보인다)
-  docbench init [폴더] [--claude]            작업 폴더 준비 (+ Claude Code 스킬 복사)
+  docbench init [폴더] [--data 기록폴더 | --inside] [--claude]
+                                             작업 폴더 준비. 기록은 기본으로 문서 폴더 밖(기록 보관함/<이름>),
+                                             --inside 면 문서 폴더 안 .docbench (팀이 git 으로 함께 쓸 때)
+  docbench link <폴더> --data 기록폴더 [--force]  문서 폴더 ↔ 기록 폴더 짝을 이 PC 의 설정에 (브라우저로 만든 기록.
+                                             문서 목록이 달라 다른 폴더의 기록으로 보이면 멈춘다 — 맞다면 --force)
   docbench status [--json]                   차례별 피드백 수 · Claude 작업(엔진·맡겨 둔 피드백)
   docbench fb list [--waiting assistant|owner] [--status open|resolved|declined|all] [--doc ID] [--json]
   docbench fb show <id> [--json]             피드백 + 지금 그 섹션 원문·판·인코딩
@@ -62,21 +71,22 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
   docbench inbox [--clear] [--json]          "넘기기" 요청함 보기·비우기
-  docbench runner [폴더] [--detach | --status | --stop] [--startup on|off]
+  docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
                                              Claude 작업 실행기 — 단일 HTML 화면의 "Claude 작업"을 이 PC 에서 띄운다
                                              (--detach 창 없이 뒤에서, --startup on 로그인 때 자동으로, Windows)
 
-작업 폴더 찾기: --root 폴더 → 환경 변수 DOCBENCH_ROOT → 현재 폴더에서 위로 .docbench 가 있는 곳.
+작업 폴더 찾기: --root 폴더 → 환경 변수 DOCBENCH_ROOT → 현재 폴더에서 위로(.docbench 가 있거나 기록 짝이 있는 문서 폴더, 또는 지금 자리가 기록 폴더).
+기록 폴더 찾기: --data · DOCBENCH_DATA → 문서 폴더 안 .docbench → 이 PC 의 설정 workspaces[폴더].data → 기록 보관함(dataHome, 기본 <PC 설정 폴더>/data)/<폴더 이름>(같은 이름의 다른 폴더면 '<이름> (2)' …).
 작성자: --as human:이름 | assistant:이름 (기본 assistant:Claude, 또는 DOCBENCH_ACTOR)
 종료 코드: 0 성공 · 1 잘못된 입력 · 2 작업 폴더 없음 · 3 그 사이 바뀜(다시 읽고 고칠 것) · 4 읽기 전용
-설정: 문서 폴더 .docbench/config.json(함께 씀) + 이 PC 의 설정(문서 폴더 밖 — 실행 명령 assistant·notify.command 와 이름 user 는
+설정: 기록 폴더 config.json(함께 씀) + 이 PC 의 설정(문서 폴더 밖 — 실행 명령 assistant·notify.command 와 이름 user 는
       여기에만, 폴더별은 "workspaces": { "<폴더 경로>": {…} }). 위치: Windows %LOCALAPPDATA%\\docbench\\config.json,
       macOS ~/Library/Application Support/docbench, Linux ~/.config/docbench. DOCBENCH_HOME 으로 옮김. status 가 위치를 보여 준다
 판: ${core.DOCBENCH_VERSION}
 `;
 
 /** 값을 받지 않는 플래그 — 뒤의 인자를 삼키지 않는다 */
-const BOOL = new Set(['json', 'stdin', 'resolve', 'ask', 'decline', 'claude', 'help', 'force', 'rename', 'convert-utf8', 'clear', 'detach', 'stop', 'no-claude']);
+const BOOL = new Set(['json', 'stdin', 'resolve', 'ask', 'decline', 'claude', 'help', 'force', 'rename', 'convert-utf8', 'clear', 'detach', 'stop', 'no-claude', 'inside']);
 /** --status 는 둘로 쓴다: fb list --status <open|resolved|declined|all>, runner --status (값 없음) */
 const STATUS_VALUES = new Set(['open', 'resolved', 'declined', 'all']);
 
@@ -101,20 +111,77 @@ function parse(argv) {
 }
 
 /**
- * 위로 .docbench 를 찾는다. 홈 폴더는 찾아낸 작업 폴더로 치지 않는다 — 홈 아래 아무 데서나 부른 CLI 가
- * 홈 전체(개인 문서)를 작업 폴더로 삼지 않게. 홈을 쓰려면 --root 로 분명히 준다.
- * @param {string} start @returns {string | null}
+ * 현재 폴더에서 위로 작업 폴더(문서 폴더)를 찾는다. 한 단계마다:
+ *   - <폴더>/.docbench 가 있다 (기록을 안에 둔 폴더)
+ *   - 이 PC 의 설정에 그 폴더의 기록 짝이 있다, 또는 기록 보관함의 그 이름 기록이 이 폴더를 가리킨다(표식 docsPath)
+ *   - 지금 자리가 기록 폴더다(표식 docsPath 의 문서 폴더로)
+ * 홈 폴더는 찾아낸 작업 폴더로 치지 않는다 — 홈 아래 아무 데서나 부른 CLI 가 홈 전체(개인 문서)를 작업 폴더로 삼지 않게.
+ * 홈을 쓰려면 --root 로 분명히 준다. 브라우저가 만든 기록(표식에 경로가 없다)은 --root 나 link 로 한 번 이어 준다.
+ * @param {string} start @returns {Promise<string | null>}
  */
-function findRoot(start) {
+async function findRoot(start) {
   let d = path.resolve(start);
   const home = path.resolve(os.homedir());
   const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const pcConfigFile = defaultPcConfigFile();
   for (;;) {
-    if (!same(d, home) && existsSync(path.join(d, '.docbench'))) return d;
+    if (!same(d, home)) {
+      if (existsSync(path.join(d, '.docbench'))) return d;
+      // 짝은 있는데 기록 폴더가 없으면(드라이브가 빠짐) 이 폴더가 맞다 — 찾은 뒤 그 까닭으로 멈춘다
+      const loc = /** @type {any} */ (await locateData(d, { pcConfigFile, create: false }).catch((e) => (e.code === 'DATA_MISSING' ? { source: 'pc' } : null)));
+      if (loc && (loc.source === 'pc' || (loc.source === 'home' && loc.claimed))) return d;
+      // 지금 자리가 기록 폴더면 표식의 문서 폴더 — 단 그 문서 폴더의 기록이 정말 여기일 때만(아무 폴더에 표식을 놓아 CLI 를 남의 폴더로 돌리지 못하게)
+      const here = core.parseDataMarker(await readJsonFile(path.join(d, core.DATA_MARKER)));
+      if (here?.docsPath && path.isAbsolute(here.docsPath)) {
+        const back = await locateData(here.docsPath, { pcConfigFile, create: false }).catch(() => null);
+        if (back && same(path.resolve(back.dir), d)) return path.resolve(here.docsPath);
+      }
+    }
     const up = path.dirname(d);
     if (up === d) return null;
     d = up;
   }
+}
+/** @param {string} f */
+const readJsonFile = (f) => fs.readFile(f, 'utf8').then((t) => core.parseJsonText(t), () => null);
+
+/** --data · DOCBENCH_DATA */
+const dataOpt = (a) => (a.data && a.data !== true ? path.resolve(String(a.data)) : process.env.DOCBENCH_DATA ? path.resolve(process.env.DOCBENCH_DATA) : undefined);
+
+/**
+ * 작업 폴더(문서 폴더)와 그 기록 폴더. 없으면 종료 코드 2 — 몰래 새 기록을 만들지 않는다(만들기는 init·link·serve).
+ * @param {any} a @returns {Promise<{ root: string, dataDir: string }>}
+ */
+async function findWorkspace(a) {
+  const pcConfigFile = defaultPcConfigFile();
+  const data = dataOpt(a);
+  let root = a.root ? path.resolve(String(a.root)) : process.env.DOCBENCH_ROOT ? path.resolve(process.env.DOCBENCH_ROOT) : null;
+  if (!root && data) root = core.parseDataMarker(await readJsonFile(path.join(data, core.DATA_MARKER)))?.docsPath || null;
+  if (!root) root = await findRoot(process.cwd());
+  if (!root) die(`작업 폴더를 찾지 못했습니다. --root <문서 폴더> 또는 DOCBENCH_ROOT 를 주거나, 먼저 docbench init <폴더>. 브라우저(docbench.html)로만 쓰던 폴더면: docbench link <문서 폴더> --data <기록 폴더>`, 2);
+  let loc;
+  try { loc = await locateData(root, { pcConfigFile, dataDir: data, create: false }); } catch (e) { die(e.message, 2); }
+  if (data && loc && loc.mode === 'outside') { try { await claimDataDir(loc.dir, root, { claim: false }); } catch (e) { die(e.message, 2); } }
+  if (!loc) die(`이 문서 폴더의 기록을 찾지 못했습니다: ${root}
+처음이면 docbench init "${root}", 브라우저로 만든 기록이 있으면 docbench link "${root}" --data <기록 폴더>.`, 2);
+  return { root, dataDir: loc.dir };
+}
+
+/**
+ * 문서 폴더 ↔ 기록 폴더 짝을 이 PC 의 설정에 적는다(link·runner --data). 기록 폴더 바로 위가 기록 보관함(표식)이고
+ * 보관함이 아직 없으면 dataHome 으로도 — 다음 문서 폴더는 짝 없이 찾게. 문서 폴더 안에 .docbench 가 있으면 거부(둘이 갈라진다).
+ * @param {string} root @param {string} dataDir @param {{ force?: boolean }} [o] force = 문서 목록이 달라 보여도 잇는다
+ */
+async function linkData(root, dataDir, o = {}) {
+  root = path.resolve(root);
+  dataDir = path.resolve(dataDir);
+  if (existsSync(path.join(root, '.docbench'))) die(`이 문서 폴더 안에 기록(.docbench)이 있어 밖의 기록과 이을 수 없습니다(둘이 갈라집니다). 안쪽을 옮기거나 지운 뒤 다시 하세요: ${path.join(root, '.docbench')}`);
+  await claimDataDir(dataDir, root, { claim: true, force: !!o.force });
+  const parent = path.dirname(dataDir);
+  const home = existsSync(path.join(parent, core.HOME_MARKER)) ? parent : null;
+  const file = defaultPcConfigFile();
+  await setPcMapping(file, root, dataDir, home ? { dataHome: home } : {});
+  return { file, home };
 }
 
 function actorOf(a) {
@@ -172,8 +239,8 @@ async function main() {
     if (BUNDLED) die('파일 하나로 받은 CLI 에는 서버 화면이 없습니다. 서버 화면은 저장소 설치본에서: git clone https://github.com/d-j-lee/docbench && npm install → node bin/docbench.mjs serve <폴더>. 서버 없이 쓰려면 docbench.html + docbench runner.');
     const { startServer } = await import('../server/index.mjs');
     const root = path.resolve(sub || a.root || process.env.DOCBENCH_ROOT || '.');
-    const s = await startServer({ root, port: a.port ? Number(a.port) : 4317, host: a.host, token: a.token || process.env.DOCBENCH_TOKEN || undefined, allowOrigins: a['allow-origin'] ? String(a['allow-origin']).split(',') : undefined, allowHosts: a['allow-host'] ? String(a['allow-host']).split(',') : undefined, runs: a['no-claude'] ? false : undefined });
-    process.stdout.write(`DocBench: ${s.url}  (작업 폴더 ${root})\n`);
+    const s = await startServer({ root, dataDir: dataOpt(a), port: a.port ? Number(a.port) : 4317, host: a.host, token: a.token || process.env.DOCBENCH_TOKEN || undefined, allowOrigins: a['allow-origin'] ? String(a['allow-origin']).split(',') : undefined, allowHosts: a['allow-host'] ? String(a['allow-host']).split(',') : undefined, runs: a['no-claude'] ? false : undefined });
+    process.stdout.write(`DocBench: ${s.url}  (작업 폴더 ${root})\n기록: ${s.ws.dir}${s.ws.dataMode === 'inside' ? ' (문서 폴더 안)' : ''}\n`);
     if (s.ws.git) process.stdout.write('git: 커밋 대비 변경 보기 사용\n');
     if (!a['no-claude']) {
       const eng = await s.handle.runs();
@@ -189,7 +256,13 @@ async function main() {
 
   if (cmd === 'init') {
     const root = path.resolve(sub || a.root || '.');
-    const ws = await new Workspace(root).init();
+    // 기본은 문서 폴더 밖(기록 보관함/<이름>), --inside 면 문서 폴더 안 .docbench (팀이 git 으로 함께 쓸 때)
+    const dataDir = a.inside ? path.join(root, '.docbench') : dataOpt(a);
+    let ws;
+    try { ws = await new Workspace(root, { dataDir }).init(); } catch (e) { die(e.message, e.code === 'DATA_CONFLICT' || e.code === 'DATA_MISSING' ? 2 : 1); }
+    if (ws.dataMode === 'outside' && dataDir) await linkData(root, ws.dir);
+    // 안에 두기로 했으면 예전 짝은 지운다(안쪽이 먼저지만 헷갈리지 않게)
+    if (ws.dataMode === 'inside') await setPcMapping(defaultPcConfigFile(), root, null).catch(() => undefined);
     const cfg = path.join(ws.dir, 'config.json');
     if (!existsSync(cfg)) {
       await fs.writeFile(cfg, JSON.stringify({ title: path.basename(root), groups: [], docs: {}, assistantName: 'Claude', notify: { inbox: true } }, null, 2) + '\n');
@@ -203,15 +276,27 @@ async function main() {
       for (const f of await fs.readdir(src)) await fs.copyFile(path.join(src, f), path.join(dst, f));
       skill = `\nClaude Code 스킬: ${path.relative(root, dst)} (터미널에서 /docbench-feedback)`;
     }
-    out(a, { root, docs: ws.docs.size }, `작업 폴더 준비: ${root}\n문서 ${ws.docs.size}개 · 설정 ${path.relative(root, cfg)}${skill}`);
+    out(a, { root, data: ws.dir, dataMode: ws.dataMode, docs: ws.docs.size }, `작업 폴더 준비: ${root}\n문서 ${ws.docs.size}개\n기록: ${ws.dir}${ws.dataMode === 'inside' ? ' (문서 폴더 안)' : ' (문서 폴더 밖 — 문서 폴더에는 아무것도 만들지 않았습니다)'}\n설정: ${cfg}${skill}`);
+    return;
+  }
+
+  if (cmd === 'link') {
+    // 문서 폴더 ↔ 기록 폴더 짝을 이 PC 에 적는다 — 브라우저(docbench.html)로 기록 보관함에 만든 기록을 CLI·실행기가 찾게
+    const root = path.resolve(sub || a.root || '.');
+    const dataDir = dataOpt(a);
+    if (!dataDir) die('기록 폴더를 --data 로 주세요: docbench link <문서 폴더> --data <기록 폴더>');
+    if (!existsSync(root)) die('문서 폴더가 없습니다: ' + root);
+    let r;
+    try { r = await linkData(root, dataDir, { force: !!a.force }); } catch (e) { die(e.message, 1); }
+    out(a, { root, data: dataDir, pcConfigFile: r.file, dataHome: r.home }, `이었습니다: ${root}\n기록: ${dataDir}\n이 PC 의 설정: ${r.file}${r.home ? `\n기록 보관함: ${r.home} (다음 문서 폴더는 짝 없이 찾습니다)` : ''}`);
     return;
   }
 
   if (cmd === 'runner') return runnerCmd(a, sub);
 
-  const root = a.root ? path.resolve(String(a.root)) : process.env.DOCBENCH_ROOT ? path.resolve(process.env.DOCBENCH_ROOT) : findRoot(process.cwd());
-  if (!root || !existsSync(path.join(root, '.docbench'))) die(`작업 폴더(.docbench)를 찾지 못했습니다${root ? ': ' + root : ''}. --root <폴더> 또는 DOCBENCH_ROOT 를 주거나, 먼저 docbench init <폴더>.`, 2);
-  const ws = await new Workspace(root, { actor: actorOf(a) }).init();
+  const { root, dataDir } = await findWorkspace(a);
+  let ws;
+  try { ws = await new Workspace(root, { actor: actorOf(a), dataDir, create: false }).init(); } catch (e) { die(e.message, ['NO_DATA', 'DATA_MISSING', 'DATA_CONFLICT'].includes(e.code) ? 2 : 1); }
 
   if (cmd === 'status') {
     const rows = await ws.listFeedback();
@@ -219,9 +304,9 @@ async function main() {
     for (const f of rows) { const t = turn(f); (by[f.docId || '(지도)'] ||= { owner: 0, assistant: 0, resolved: 0, declined: 0 })[t]++; }
     const c = core.countTurns(rows);
     const inbox = (await fs.readdir(path.join(ws.dir, 'inbox')).catch(() => [])).filter((n) => n.endsWith('.json')).length;
-    const warnings = ws.config.warnings || [];
+    const warnings = [...(ws.config.warnings || []), ...(ws.dataWarnings || [])];
     const { listRunners } = await import('../server/runs.mjs');
-    const runners = core.liveRunners(await listRunners(root)).map((r) => ({ id: r.id, kind: r.kind, pid: r.pid, claude: r.claude, busy: r.busy || null }));
+    const runners = core.liveRunners(await listRunners(ws.dir)).map((r) => ({ id: r.id, kind: r.kind, pid: r.pid, claude: r.claude, busy: r.busy || null }));
     // 맡겨 둔(대기·실행 중) Claude 작업 — 터미널에서 같은 피드백을 동시에 잡지 않게. 맡을 엔진이 꺼져 있으면 셈하지 않는다
     const runsDir = path.join(ws.dir, 'runs');
     const active = [];
@@ -236,8 +321,8 @@ async function main() {
       if (!req || !runners.some((r) => r.id === req.runner)) continue;
       active.push({ id, state, feedbackIds: Array.isArray(req.feedbackIds) ? req.feedbackIds : [] });
     }
-    out(a, { root, docs: ws.docs.size, feedback: c, byDoc: by, inbox, runners, activeRuns: active, warnings, pcConfigFile: ws.pcConfigFile }, () =>
-      (`작업 폴더 ${root} · 문서 ${ws.docs.size}개${inbox ? ` · 넘기기 요청 ${inbox}건` : ''}\nAI 차례 ${c.assistant} · 사람 차례 ${c.owner} · 반영됨 ${c.resolved} · 보류 ${c.declined}\n` +
+    out(a, { root, data: ws.dir, dataMode: ws.dataMode, docs: ws.docs.size, feedback: c, byDoc: by, inbox, runners, activeRuns: active, warnings, pcConfigFile: ws.pcConfigFile }, () =>
+      (`작업 폴더 ${root} · 문서 ${ws.docs.size}개${inbox ? ` · 넘기기 요청 ${inbox}건` : ''}\n기록: ${ws.dir}${ws.dataMode === 'inside' ? ' (문서 폴더 안)' : ''}\nAI 차례 ${c.assistant} · 사람 차례 ${c.owner} · 반영됨 ${c.resolved} · 보류 ${c.declined}\n` +
       `Claude 작업: ${runners.length ? runners.map((r) => `${r.kind === 'server' ? '서버' : '실행기'} ${r.id.split(':')[1]}${r.claude?.ok ? '' : ' (쓸 수 없음)'}${r.busy ? ' — 작업 중' : ''}`).join(', ') : '켜진 실행기·서버 없음'}\n` +
       active.map((r) => `  ${r.state === 'running' ? '실행 중' : '대기'} ${r.id}: 피드백 ${r.feedbackIds.join(', ')}\n`).join('') +
       `이 PC 의 설정: ${ws.pcConfigFile}${existsSync(ws.pcConfigFile) ? '' : ' (없음)'}\n` +
@@ -431,19 +516,23 @@ function fmtRunLog(l) {
 }
 
 async function runnerCmd(a, sub) {
-  const rootArg = sub || a.root || process.env.DOCBENCH_ROOT;
-  const root = rootArg ? path.resolve(String(rootArg)) : findRoot(process.cwd());
   if (a.startup === 'entry') return startupEntry(String(a.id || ''));
-  if (!root || !existsSync(path.join(root, '.docbench'))) die(`작업 폴더(.docbench)를 찾지 못했습니다${root ? ': ' + root : ''}. 브라우저의 DocBench 로 그 폴더를 한 번 열거나 docbench init <폴더>.`, 2);
+  // --data 를 주면 먼저 짝을 이 PC 의 설정에 적는다(브라우저로 기록 보관함에 만든 기록) — 다음부터는 문서 폴더만으로 찾는다
+  if ((sub || a.root) && dataOpt(a)) {
+    // --data 를 주면 먼저 짝을 이 PC 의 설정에 적는다(브라우저로 기록 보관함에 만든 기록) — 다음부터는 문서 폴더만으로 찾는다
+    try { await linkData(path.resolve(String(sub || a.root)), dataOpt(a), { force: !!a.force }); } catch (e) { die(e.message, 1); }
+  }
+  const { root, dataDir } = await findWorkspace({ ...a, root: sub || a.root, data: undefined });
   const { listRunners, engineId, localEngine, localEngineFile, pidAlive } = await import('../server/runs.mjs');
   // 엔진과 같은 규칙의 내 id (이 PC 의 설정 user 가 있으면 그것)
-  const ws0 = await new Workspace(root, { actor: { kind: 'assistant', name: 'Claude' } }).init();
+  let ws0;
+  try { ws0 = await new Workspace(root, { actor: { kind: 'assistant', name: 'Claude' }, dataDir, create: false }).init(); } catch (e) { die(e.message, 2); }
   const me = engineId(ws0, 'runner');
-  /** 문서 폴더의 심장 박동 중 내 id 인 것 (보여 주기·기다리기용 — 프로세스를 끝낼 때는 이 PC 의 기록만 믿는다) */
-  const mine = async () => (await listRunners(root)).filter((r) => core.runnerAlive(r) && r.id === me);
+  /** 기록 폴더의 심장 박동 중 내 id 인 것 (보여 주기·기다리기용 — 프로세스를 끝낼 때는 이 PC 의 기록만 믿는다) */
+  const mine = async () => (await listRunners(ws0.dir)).filter((r) => core.runnerAlive(r) && r.id === me);
 
   if (a.status) {
-    const all = core.liveRunners(await listRunners(root));
+    const all = core.liveRunners(await listRunners(ws0.dir));
     out(a, all, (rs) => rs.length ? rs.map((r) => `${r.id}  pid ${r.pid}  Claude Code ${r.claude?.version || '?'}${r.claude?.ok ? '' : ' (쓸 수 없음: ' + (r.claude?.problem || '') + ')'}${r.busy ? '  작업 중 ' + r.busy : ''}`).join('\n') : '켜진 실행기 없음');
     if (!all.length) process.exitCode = 1;
     return;
@@ -452,7 +541,7 @@ async function runnerCmd(a, sub) {
     const rec = await localEngine(ws0, root, 'runner');
     const beat = (await mine())[0];
     if (!rec && !beat) { out(a, { stopped: 0 }, '이 PC 에서 켜진 실행기가 없습니다'); return; }
-    const runnersDir = path.join(root, '.docbench', 'runners');
+    const runnersDir = path.join(ws0.dir, 'runners');
     const stopFile = path.join(runnersDir, core.runnerFileName(me).replace(/\.json$/, '.stop'));
     // 먼저 끄기 요청 파일로 (돌던 claude 까지 정리하고 끈다)
     await fs.writeFile(stopFile, new Date().toISOString());
@@ -485,6 +574,7 @@ async function runnerCmd(a, sub) {
     await fs.mkdir(path.dirname(logFile), { recursive: true });
     const fh = await fs.open(logFile, 'a');
     const { spawn } = await import('node:child_process');
+    // 뒤에서 도는 실행기도 같은 규칙으로 기록을 찾는다(짝은 이미 이 PC 의 설정에)
     const child = spawn(process.execPath, [SELF, 'runner', root], { detached: true, stdio: ['ignore', fh.fd, fh.fd], windowsHide: true, cwd: pcDir() });
     child.unref();
     await fh.close();
@@ -536,6 +626,7 @@ async function startupSet(root, on, a) {
   const script = lad && SELF.toLowerCase().startsWith(lad.toLowerCase() + path.sep) ? '%LOCALAPPDATA%' + pct(SELF.slice(lad.length)) : pct(SELF);
   if (!ascii(script)) die(`실행기 파일 경로에 영문이 아닌 글자가 있어 시작프로그램에 넣을 수 없습니다: ${SELF}\n%LOCALAPPDATA%\\docbench\\docbench.mjs 에 두고 다시 하세요.`);
   const node = ascii(process.execPath) ? pct(process.execPath) : 'node';
+  // 문서 폴더만 적는다 — 기록 자리는 켤 때마다 같은 규칙으로 찾는다(옮겨도 따라간다)
   list[key] = root;
   await fs.mkdir(pcDir(), { recursive: true });
   await fs.writeFile(listFile, JSON.stringify(list, null, 2) + '\n');
@@ -547,10 +638,11 @@ async function startupSet(root, on, a) {
 /** 시작프로그램의 .cmd 가 부르는 자리: 목록에서 폴더를 찾아 뒤에서 켠다 */
 async function startupEntry(key) {
   const list = JSON.parse(await fs.readFile(path.join(pcDir(), 'runner-startup.json'), 'utf8').catch(() => '{}') || '{}');
-  const root = list[key];
-  if (!root) die('자동 시작 목록에 없는 폴더입니다: ' + key);
-  process.argv = [process.argv[0], SELF, 'runner', root, '--detach'];
-  return runnerCmd(parse(['runner', root, '--detach']), root);
+  const ent = typeof list[key] === 'string' ? { root: list[key] } : list[key];
+  if (!ent?.root) die('자동 시작 목록에 없는 폴더입니다: ' + key);
+  const args = ['runner', ent.root, '--detach'];
+  process.argv = [process.argv[0], SELF, ...args];
+  return runnerCmd(parse(args), ent.root);
 }
 
 main().catch((e) => die(e?.message || String(e), e?.code === 'BAD_REQUEST' || e?.code === 'NOT_FOUND' ? 1 : 1));

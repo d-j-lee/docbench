@@ -257,8 +257,9 @@ export class RunDock {
     const t = this.t;
     const name = this.ad.setup?.folderName || this.app.manifest.project.name;
     try { await this.app.ad.notifier?.send({ count: rows.length, docs: [...new Set(rows.map((f) => this.app.docTitle(f.docId)))], feedbackIds: rows.map((f) => f.id) }); } catch { /* 요청함은 선택 */ }
-    const ok = await this.app.copy(terminalHandoffPrompt(name));
-    this.app.toast(ok ? t('run.terminal.copied') : t('run.terminal.manual', { cmd: terminalHandoffPrompt(name) }), { sticky: true });
+    const line = terminalHandoffPrompt(name, this.ad.setup);
+    const ok = await this.app.copy(line);
+    this.app.toast(ok ? t('run.terminal.copied') : t('run.terminal.manual', { cmd: line }), { sticky: true });
   }
 
   /** 실행기 판이 이 화면과 다르면 한 줄 — 설치 문구를 다시 붙여 넣으면 같은 판으로 바뀐다 */
@@ -285,7 +286,7 @@ export class RunDock {
       const prompt = runnerSetupPrompt(setup);
       const ta = h('textarea', { class: 'db-dock-prompt', readonly: true, rows: '6', 'aria-label': t('run.setup.prompt') }) as HTMLTextAreaElement;
       ta.value = prompt;
-      const runCmd = `node "%LOCALAPPDATA%\\docbench\\docbench.mjs" runner "<${t('run.setup.folder')}>" --detach`;
+      const runCmd = `node "%LOCALAPPDATA%\\docbench\\docbench.mjs" runner "<${t('run.setup.folder')}>"${setup.dataHome && setup.dataName ? ` --data "<${setup.dataHome}\\${setup.dataName}>"` : ''} --detach`;
       box.append(
         h('ol', { class: 'db-steps' },
           h('li', {}, h('b', { text: t('run.setup.step1') }), ' ', t('run.setup.step1.body')),

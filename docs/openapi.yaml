@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: DocBench REST
-  version: 0.3.0
+  version: 0.4.0
   description: |
     화면(createRestAdapters)과 저장소 서버 사이의 계약. 로컬 작업 폴더 서버(server/handler.mjs)가 구현하며,
     사내 백엔드가 같은 계약을 구현하면 화면을 그대로 붙일 수 있다.
@@ -35,7 +35,7 @@ components:
       description: src/types.ts Manifest (schema 2)
       properties:
         schema: { const: 2 }
-        project: { type: object, properties: { name: { type: string }, subtitle: { type: string }, links: { type: array } } }
+        project: { type: object, properties: { name: { type: string }, subtitle: { type: string }, links: { type: array }, storage: { type: string, description: '기록(피드백·이력)이 있는 자리 — 화면 아래 "기록: …" (D57)' } } }
         milestones: { type: array }
         trust: { type: object, additionalProperties: true }
         groups:
@@ -193,6 +193,7 @@ paths:
                   permissions: { type: array, items: { enum: [doc.edit, feedback.create, feedback.update, feedback.delete, assistant.propose, assistant.notify, assistant.run] } }
                   assistant: { type: [object, 'null'], properties: { name: { type: string } } }
                   notify: { type: [object, 'null'], properties: { label: { type: string } } }
+                  workspace: { type: object, description: '서버 방식(docbench serve·처리기)만', properties: { root: { type: string, description: 문서 폴더 }, git: { type: boolean }, data: { type: object, properties: { mode: { enum: [inside, outside], description: 'inside = 문서 폴더 안 .docbench, outside = 문서 폴더 밖 기록 폴더(D57)' }, dir: { type: string, description: 기록 폴더 } } } } }
                   features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean }, runs: { type: boolean, description: 'Claude 작업(/runs) — 없거나 false 면 화면이 작업 창을 숨긴다. docbench serve 는 기본 켬(--no-claude 로 끔), 대시보드에 끼우는 처리기는 기본 끔(runs: true 로 켬)' } } }
   /manifest:
     get:

@@ -23,9 +23,9 @@ import { decodeBytes, encodeText, createBrowserCp949, EncodingReadOnlyError, typ
 import {
   mergeConfig, isDocPath, walkable, buildManifest, parseChanges, lastChangeIs, changeLine, jsonFile, normalizeDocId, canonDocId,
   validFeedbackId, safeName, lockKey, requestFileName, titleFromText, parseJsonText, completeChangeLines, mergeGitignore, folderTally,
-  DOT_GITIGNORE, LOCK_STALE_MS, INVENTORY_FLAG_LABELS, type WorkspaceConfig,
+  DOT_GITIGNORE, LOCK_STALE_MS, INVENTORY_FLAG_LABELS, DATA_MARKER, newDataMarker, parseDataMarker, dataFolderName, docsSample, nextDocsSample, type WorkspaceConfig,
 } from '../core/workspace';
-import { FsReadOnlyError, type FsLike, type FsStat } from './folder-fs';
+import { FsReadOnlyError, subFs, type FsLike, type FsStat } from './folder-fs';
 import { cleanRunEntry, completeJsonLines, liveRunners, makeRunRequest, pickRunner, runnerAlive, runFiles, validRunId } from '../core/runs';
 import type { RunsAdapter, RunStatus, RunnerInfo, RunLogLine } from '../types';
 
@@ -41,15 +41,25 @@ export interface FolderOptions {
   locale?: 'ko' | 'en';
   /** 실행기 설치 안내에 넣을 CLI 주소·지문 (단일 HTML 빌드가 넣는다) */
   runnerSetup?: { version: string; cliUrl: string; sha256: string };
+  /**
+   * 기록 폴더 (D57). 주지 않으면 문서 폴더 안 .docbench. 밖에 둘 때는 기록 보관함 아래 <문서 폴더 이름>/ —
+   * subFs(fsFromHandle(보관함), dataFolderName(문서 폴더 이름)). 문서 폴더 안이나 문서 폴더를 품는 자리는 부르는 쪽이 막는다.
+   */
+  data?: FsLike;
+  /** 기록 보관함의 폴더 이름과 그 안의 기록 폴더 이름 (밖에 둘 때 — 설치 안내·화면 표시용) */
+  dataHome?: string;
+  dataName?: string;
 }
 
 export type FolderAdapters = DocBenchAdapters & { workspace: FolderWorkspace; close(): void };
 
-const D = '.docbench';
+/** 문서 폴더 안에 기록을 둘 때의 자리 (예전 판·팀 공유) */
+export const INSIDE_DIR = '.docbench';
+/** 기록 폴더 안의 자리 (기록 폴더 기준 — 안이든 밖이든 같은 모양, src/core/workspace.ts) */
 const P = {
-  config: `${D}/config.json`, changes: `${D}/changes.jsonl`, state: `${D}/state.json`, gitignore: `${D}/.gitignore`,
-  fb: `${D}/feedback`, blobs: `${D}/blobs`, viewstate: `${D}/viewstate`, inbox: `${D}/inbox`, locks: `${D}/locks`,
-  runs: `${D}/runs`, runners: `${D}/runners`,
+  config: 'config.json', changes: 'changes.jsonl', state: 'state.json', gitignore: '.gitignore', marker: DATA_MARKER,
+  fb: 'feedback', blobs: 'blobs', viewstate: 'viewstate', inbox: 'inbox', locks: 'locks',
+  runs: 'runs', runners: 'runners',
 };
 const utf8 = new TextDecoder();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -96,26 +106,45 @@ export class FolderWorkspace {
   /** 문서마다 마지막으로 디스크와 맞춰 본 시각 (화면의 "확인 n초 전") */
   readonly checked = new Map<string, number>();
 
+  /** 기록 폴더 — 안(.docbench)이든 밖이든 같은 모양 */
+  readonly data: FsLike;
+  readonly dataMode: 'inside' | 'outside';
+
   constructor(public fs: FsLike, private o: FolderOptions = {}) {
     this.ci = o.caseInsensitive ?? guessWindows();
     this.legacy = o.legacy === undefined ? createBrowserCp949() : o.legacy;
     this.config = mergeConfig({}, fs.name);
+    this.data = o.data || subFs(fs, INSIDE_DIR);
+    this.dataMode = o.data ? 'outside' : 'inside';
   }
 
-  get writable(): boolean { return this.fs.writable; }
+  get writable(): boolean { return this.fs.writable && this.data.writable; }
+  /** 화면에 보일 기록 자리 — '기획 문서/.docbench' 또는 '기록 보관함/기획 문서' */
+  get dataLabel(): string { return this.dataMode === 'inside' ? `${this.fs.name}/${INSIDE_DIR}` : this.o.dataHome ? `${this.o.dataHome}/${this.o.dataName || dataFolderName(this.fs.name)}` : this.data.name; }
   get userName(): string { return this.config.user || this.o.userName || (this.o.locale === 'en' ? 'Me' : '나'); }
   get me(): Person { return { kind: 'human', id: safeName(this.config.user || this.o.userName || 'me'), name: this.userName }; }
 
   async init(): Promise<this> {
     await this.loadConfig();
-    // 서버 init 과 같이 .docbench/ 를 만든다 — CLI 는 이 폴더가 있어야 작업 폴더로 알아본다
-    if (this.writable) {
+    if (this.writable && this.dataMode === 'inside') {
+      // 서버 init 과 같이 .docbench/ 를 만든다 — CLI 는 이 폴더가 있어야 작업 폴더로 알아본다.
       // 예전 판이 만든 .gitignore 에도 빠진 줄을 덧붙인다(사람이 더한 줄은 그대로)
       const gi = await this.readText(P.gitignore).catch(() => null);
       const next = gi == null ? DOT_GITIGNORE : mergeGitignore(gi);
-      if (next != null) await this.fs.write(P.gitignore, next);
+      if (next != null) await this.data.write(P.gitignore, next);
     }
     await this.scan();
+    if (this.writable && this.dataMode === 'outside') {
+      // 밖에 둔 기록: 어느 문서 폴더의 기록인지 표식(브라우저는 경로를 모른다 — 실행기·CLI 가 docsPath 를 채운다).
+      // 문서 표본은 문서가 늘고 줄어도 따라가게 연 때마다 고친다(이름이 같은 다른 문서 폴더를 가려내는 데 쓴다)
+      const m = parseDataMarker(await this.readJson<unknown>(P.marker, null));
+      if (!m) await this.writeJson(P.marker, newDataMarker(this.fs.name, undefined, docsSample(this.docs.keys())));
+      else {
+        if (m.docsName !== this.fs.name) this.markerMismatch = m.docsName;
+        const docs = nextDocsSample(m.docs, this.docs.keys());
+        if (!m.migrating && JSON.stringify(m.docs || []) !== JSON.stringify(docs)) await this.writeJson(P.marker, { ...m, docs });
+      }
+    }
     return this;
   }
 
@@ -124,15 +153,18 @@ export class FolderWorkspace {
     this.config = mergeConfig(await this.readJson(P.config, {}), this.fs.name);
   }
 
-  // ------------------------------------------------------------ 작은 파일 도우미
+  /** 기록 폴더의 표식이 다른 이름의 문서 폴더를 가리킨다(같은 기록 폴더를 다른 문서 폴더에 고름) — 화면이 알린다 */
+  markerMismatch: string | null = null;
+
+  // ------------------------------------------------------------ 작은 파일 도우미 (기록 폴더)
   async readText(path: string): Promise<string | null> {
-    const f = await this.fs.read(path);
+    const f = await this.data.read(path);
     return f ? utf8.decode(f.bytes) : null;
   }
   async readJson<T>(path: string, fallback: T): Promise<T> {
     try { const t = await this.readText(path); return t == null ? fallback : (parseJsonText(t) as T); } catch { return fallback; }
   }
-  async writeJson(path: string, obj: unknown): Promise<void> { await this.fs.write(path, jsonFile(obj)); }
+  async writeJson(path: string, obj: unknown): Promise<void> { await this.data.write(path, jsonFile(obj)); }
 
   // ------------------------------------------------------------ 줄 세우기
   /**
@@ -153,21 +185,21 @@ export class FolderWorkspace {
         const token = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const started = Date.now();
         for (;;) {
-          const st = await this.fs.stat(file);
+          const st = await this.data.stat(file);
           if (st && Date.now() - st.mtimeMs <= LOCK_STALE_MS) {
             // 죽은 잠금이 치워질 때(15초)보다 조금 더 기다린다
             if (Date.now() - started > LOCK_STALE_MS + 3000) throw new FolderError('BUSY', '다른 프로그램이 같은 문서를 쓰고 있습니다. 잠시 뒤 다시 시도하세요.');
             await sleep(30 + Math.random() * 40);
             continue;
           }
-          await this.fs.write(file, token);
+          await this.data.write(file, token);
           await sleep(25);
           if ((await this.readText(file)) === token) break;
         }
       }
       return await fn();
     } finally {
-      if (file) await this.fs.remove(file).catch(() => undefined);
+      if (file) await this.data.remove(file).catch(() => undefined);
       release();
       if (this.chains.get(key) === tail) this.chains.delete(key);
     }
@@ -274,7 +306,7 @@ export class FolderWorkspace {
         if (!(e instanceof DocConflictError)) await this.setKnown(id, cur.version);
         throw e;
       }
-      await this.fs.append(P.changes, changeLine({ at: updatedAt, docId: id, by: o.by || this.me, summary: o.summary || undefined, fromVersion: cur.version, toVersion: version, feedbackIds: o.feedbackIds?.length ? o.feedbackIds : undefined, sections: [...ds.changed, ...ds.added], removed: ds.removed.length ? ds.removed : undefined }));
+      await this.data.append(P.changes, changeLine({ at: updatedAt, docId: id, by: o.by || this.me, summary: o.summary || undefined, fromVersion: cur.version, toVersion: version, feedbackIds: o.feedbackIds?.length ? o.feedbackIds : undefined, sections: [...ds.changed, ...ds.added], removed: ds.removed.length ? ds.removed : undefined }));
     });
     const st = await this.fs.stat(this.resolve(id)).catch(() => null);
     if (st) this.docs.set(id, { ...st });
@@ -292,8 +324,8 @@ export class FolderWorkspace {
   async storeBlob(version: string, text: string): Promise<void> {
     if (!this.writable) return;
     const f = `${P.blobs}/${version}.md`;
-    if (await this.fs.stat(f)) return;
-    await this.fs.write(f, text);
+    if (await this.data.stat(f)) return;
+    await this.data.write(f, text);
   }
 
   // ------------------------------------------------------------ 외부 편집 감지
@@ -368,7 +400,7 @@ export class FolderWorkspace {
 
   /** 브라우저에는 O_APPEND 가 없어 파일을 바꿔 끼운다 — 탭 안·서버·CLI 와 같은 잠금 안에서 덧붙여야 줄이 사라지지 않는다 */
   async appendChange(entry: ChangeEntry): Promise<void> {
-    await this.withLock(lockKey.changes, () => this.fs.append(P.changes, changeLine(entry)));
+    await this.withLock(lockKey.changes, () => this.data.append(P.changes, changeLine(entry)));
   }
 
   // ------------------------------------------------------------ 매니페스트
@@ -397,7 +429,11 @@ export class FolderWorkspace {
   async manifest(): Promise<Manifest> {
     const info = new Map<string, { title: string; size: number; mtimeMs: number }>();
     for (const [id, d] of this.docs) info.set(id, { title: await this.titleOf(id), size: d.size, mtimeMs: d.mtimeMs });
-    return buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.fs.name, this.ci, { folders: this.folders, rootName: this.fs.name });
+    const m = buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.fs.name, this.ci, { folders: this.folders, rootName: this.fs.name });
+    // 기록 폴더의 표식이 다른 이름의 문서 폴더를 가리키면(같은 이름의 다른 폴더 등) 화면 아래 기록 자리 옆에 알린다
+    const mm = this.markerMismatch;
+    m.project.storage = this.dataLabel + (mm ? (this.o.locale === 'en' ? ` — marked as records of "${mm}"` : ` — "${mm}" 의 기록으로 표시됨`) : '');
+    return m;
   }
 
   // ------------------------------------------------------------ 피드백
@@ -406,7 +442,7 @@ export class FolderWorkspace {
     return `${P.fb}/${id}.json`;
   }
   async listFeedback(): Promise<Feedback[]> {
-    const names = (await this.fs.list(P.fb)) || [];
+    const names = (await this.data.list(P.fb)) || [];
     const out: Feedback[] = [];
     for (const n of names) {
       if (n.kind !== 'file' || !n.name.endsWith('.json')) continue;
@@ -444,7 +480,7 @@ export class FolderWorkspace {
       return next;
     });
   }
-  async deleteFeedback(id: string): Promise<void> { if (!this.writable) throw new FsReadOnlyError(); await this.fs.remove(this.fbPath(id)); }
+  async deleteFeedback(id: string): Promise<void> { if (!this.writable) throw new FsReadOnlyError(); await this.data.remove(this.fbPath(id)); }
 
   // ------------------------------------------------------------ 보기 상태·요청함
   viewStatePath(): string { return `${P.viewstate}/${safeName(this.me.id || 'me')}.json`; }
@@ -459,7 +495,7 @@ export class FolderWorkspace {
   // ------------------------------------------------------------ Claude 작업 (실행기와 파일로 주고받는다)
   async listRunners(): Promise<RunnerInfo[]> {
     const out: RunnerInfo[] = [];
-    for (const n of (await this.fs.list(P.runners).catch(() => null)) || []) {
+    for (const n of (await this.data.list(P.runners).catch(() => null)) || []) {
       if (n.kind !== 'file' || !n.name.endsWith('.json')) continue;
       const r = await this.readJson<RunnerInfo | null>(`${P.runners}/${n.name}`, null);
       if (r && typeof r === 'object' && typeof r.id === 'string') out.push(r);
@@ -467,7 +503,7 @@ export class FolderWorkspace {
     return out;
   }
   async listRuns(limit = 30): Promise<RunStatus[]> {
-    const names = ((await this.fs.list(P.runs).catch(() => null)) || []).map((n) => n.name);
+    const names = ((await this.data.list(P.runs).catch(() => null)) || []).map((n) => n.name);
     const ids = [...new Set(names.map((n) => n.replace(/\.(req\.json|json|log\.jsonl|cancel)$/, '')).filter(validRunId))].sort().reverse().slice(0, limit);
     const out: RunStatus[] = [];
     for (const id of ids) {
@@ -482,7 +518,7 @@ export class FolderWorkspace {
   }
   async runLog(id: string, from = 0): Promise<{ lines: RunLogLine[]; next: number }> {
     if (!validRunId(id)) throw new FolderError('BAD_REQUEST', '잘못된 작업 id');
-    const f = await this.fs.read(`${P.runs}/${runFiles(id).log}`).catch(() => null);
+    const f = await this.data.read(`${P.runs}/${runFiles(id).log}`).catch(() => null);
     if (!f) return { lines: [], next: 0 };
     if (from > f.bytes.length) from = 0;
     const { items, consumed } = completeJsonLines<RunLogLine>(f.bytes.subarray(from));
@@ -537,18 +573,18 @@ export class FolderWorkspace {
     const tick = async () => {
       tickN++;
       // 서명은 파일이 없을 때도 같은 값('none')이어야 한다 — 빈 값과 비교하면 매번 바뀐 것으로 보인다
-      const cfgNowSig = 'cfg:' + sigOf(await this.fs.stat(P.config).catch(() => null));
+      const cfgNowSig = 'cfg:' + sigOf(await this.data.stat(P.config).catch(() => null));
       if (cfgSig && cfgNowSig !== cfgSig) { await this.loadConfig(); await this.scan(); emit({ type: 'manifest' }); }
       cfgSig = cfgNowSig;
 
-      const ch = await this.fs.stat(P.changes).catch(() => null);
+      const ch = await this.data.stat(P.changes).catch(() => null);
       const size = ch?.size ?? 0;
       if (changesOffset < 0 || size < changesOffset) {
         // 처음이거나 파일이 줄었다(되돌림) — 지난 줄을 다시 알리지 않고 지금 끝부터 본다
         if (changesOffset >= 0) emit({ type: 'changes' });
         changesOffset = size;
       } else if (size > changesOffset) {
-        const f = await this.fs.read(P.changes).catch(() => null);
+        const f = await this.data.read(P.changes).catch(() => null);
         if (f) {
           const { entries, consumed } = completeChangeLines(f.bytes.subarray(changesOffset));
           changesOffset += consumed;
@@ -565,8 +601,8 @@ export class FolderWorkspace {
       }
 
       // Claude 작업: 요청·상태·로그 파일 묶음이 바뀌면 runs, 실행기가 켜지고 꺼지면 runner
-      const rn = ((await this.fs.list(P.runs).catch(() => null)) || []).filter((n) => n.kind === 'file').map((n) => n.name).sort();
-      const rsts = await Promise.all(rn.filter((n) => !n.endsWith('.req.json')).map((n) => this.fs.stat(`${P.runs}/${n}`).catch(() => null)));
+      const rn = ((await this.data.list(P.runs).catch(() => null)) || []).filter((n) => n.kind === 'file').map((n) => n.name).sort();
+      const rsts = await Promise.all(rn.filter((n) => !n.endsWith('.req.json')).map((n) => this.data.stat(`${P.runs}/${n}`).catch(() => null)));
       const runSigNow = rn.join('|') + '#' + rsts.map(sigOf).join('|');
       if (runSig && runSigNow !== runSig) emit({ type: 'runs' });
       runSig = runSigNow;
@@ -576,8 +612,8 @@ export class FolderWorkspace {
         runnerSig = alive;
       }
 
-      const names = ((await this.fs.list(P.fb).catch(() => null)) || []).filter((n) => n.name.endsWith('.json')).map((n) => n.name).sort();
-      const sts = await Promise.all(names.map((n) => this.fs.stat(`${P.fb}/${n}`).catch(() => null)));
+      const names = ((await this.data.list(P.fb).catch(() => null)) || []).filter((n) => n.name.endsWith('.json')).map((n) => n.name).sort();
+      const sts = await Promise.all(names.map((n) => this.data.stat(`${P.fb}/${n}`).catch(() => null)));
       const sig = names.map((n, i) => n + '@' + sigOf(sts[i])).join('|') || 'none';
       if (fbSig && sig !== fbSig) emit({ type: 'feedback' });
       fbSig = sig;
@@ -665,13 +701,13 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
     },
     async cancel(id) {
       if (!validRunId(id)) throw new FolderError('BAD_REQUEST', '잘못된 작업 id');
-      await ws.fs.write(`${P.runs}/${runFiles(id).cancel}`, new Date().toISOString());
+      await ws.data.write(`${P.runs}/${runFiles(id).cancel}`, new Date().toISOString());
       fire({ type: 'runs', id });
     },
     list: (limit) => ws.listRuns(limit),
     log: (id, from) => ws.runLog(id, from),
     choose(id) { chosenRunner = id || null; },
-    setup: o.runnerSetup ? { ...o.runnerSetup, folderName: fs.name } : undefined,
+    setup: o.runnerSetup ? { ...o.runnerSetup, folderName: fs.name, ...(ws.dataMode === 'outside' && o.dataHome ? { dataHome: o.dataHome, dataName: o.dataName || dataFolderName(fs.name) } : {}) } : undefined,
   };
   const adapters: FolderAdapters = {
     workspace: ws,

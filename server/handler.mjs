@@ -103,7 +103,7 @@ export function createDocBenchHandler(ws, opts = {}) {
         assistant: ws.config.assistant ? { name: ws.config.assistantName || 'Claude' } : null,
         notify: ws.config.notify?.inbox !== false || ws.config.notify?.command ? { label: (ws.config.assistantName || 'AI') + '에게 넘기기' } : null,
         features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn },
-        workspace: { root: ws.root, git: !!ws.git },
+        workspace: { root: ws.root, git: !!ws.git, data: { mode: ws.dataMode, dir: ws.dir } },
       });
     }
     if (m === 'GET' && p === '/manifest') { await ws.scan(); return send(res, 200, await ws.manifest()); }
@@ -193,7 +193,7 @@ export function createDocBenchHandler(ws, opts = {}) {
     if (!runsOn) return send(res, 404, { error: 'NOT_FOUND', message: '이 서버는 Claude 작업을 띄우지 않습니다' });
     await engineReady;
     if (m === 'GET' && p === '/runs/status') {
-      const others = core.liveRunners(await listRunners(ws.root)).filter((r) => r.id !== engine?.id);
+      const others = core.liveRunners(await listRunners(ws.dir)).filter((r) => r.id !== engine?.id);
       if (!engine) return send(res, 200, { available: false, reason: 'disabled', message: engineProblem || undefined, others });
       return send(res, 200, { ...engine.availability(), others });
     }

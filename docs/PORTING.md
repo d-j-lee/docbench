@@ -14,10 +14,10 @@
 | **B. 웹 컴포넌트 + 프록시** | `<doc-bench api="/docbench/api">` + `/docbench/api` → 4317 프록시 | 대시보드 안에 자연스럽게, 이벤트로 연동 | 프록시 설정 한 번 |
 | **C. 백엔드에 처리기 끼우기** (Node) | `app.use(handle)` 몇 줄 + 웹 컴포넌트 | 프로세스 하나, 같은 출처 | 대시보드 백엔드가 Node 일 때 |
 | **D. 계약만 구현** | 대시보드 백엔드가 `docs/openapi.yaml` 구현 | 저장소를 DB·사내 문서 시스템으로 | 일이 가장 많음 |
-| **E. 단일 HTML** | `release/docbench.html` 을 정적 파일로 내주고 `<iframe>` | 설치·서버 없음 | 몇 초 간격 확인, Claude 작업은 PC 마다 실행기(Node), 폴더를 사람이 한 번 고름, 엣지·크롬 + 보안 문맥(localhost·https·파일) |
+| **E. 단일 HTML** | `release/docbench.html` 을 정적 파일로 내주고 `<iframe>` | 설치·서버 없음 | 몇 초 간격 확인, Claude 작업은 PC 마다 실행기(Node), 문서 폴더·기록 보관함을 사람이 고름(파일로 열면 매번), 엣지·크롬 + 보안 문맥(localhost·https·파일) |
 
 **권장: 대시보드 백엔드가 Node 면 C, 아니면 B.** 둘 다 같은 출처라 CORS·토큰 고민이 줄고, 화면 이벤트(`docbench:doc:saved` 등)를 대시보드가 받아 터미널 패널과 엮을 수 있다.
-Node 를 못 깔거나 프로세스를 늘리기 싫으면 E. 오늘 바로 써 보려면 A 또는 `docbench.html` 을 그냥 열기. 모두 같은 `.docbench/` 를 쓰므로 나중에 방식을 바꿔도 피드백은 이어진다.
+Node 를 못 깔거나 프로세스를 늘리기 싫으면 E. 오늘 바로 써 보려면 A 또는 `docbench.html` 을 그냥 열기. 모두 같은 기록 폴더를 쓰므로 나중에 방식을 바꿔도 피드백은 이어진다.
 
 ## 2. 공통 준비 (Windows)
 
@@ -34,21 +34,24 @@ node bin\docbench.mjs init D:\work\docs --claude
 node bin\docbench.mjs serve D:\work\docs --port 4317
 ```
 
-- `init` 은 `D:\work\docs\.docbench\config.json` 과 `.claude\skills\docbench-feedback\` 를 만든다. 문서 파일은 건드리지 않는다. (`--claude` 의 스킬 복사는 터미널 Claude 가 그 문서 폴더에서 시작할 때만 쓸모 있다 — 아니면 플러그인으로 깐다.)
-- `config.json`(함께 쓰는 설정, 커밋): 그룹·문서별 제목·신뢰 표시·깊이(예: [examples/sample-workspace/.docbench/config.json](../examples/sample-workspace/.docbench/config.json)).
+- **기록 폴더**(피드백·이력·작업 기록): `init` 은 기본으로 문서 폴더 **밖**에 만든다 — 기록 보관함(이 PC 의 설정 `dataHome`, 없으면 `%LOCALAPPDATA%\docbench\data`) 아래 `<문서 폴더 이름>\`. 문서 폴더에는 아무것도 생기지 않는다(같은 폴더에서 일하는 다른 프로그램·다른 Claude 세션이 헷갈리지 않게, D57). 다른 자리면 `--data <폴더>`, 팀이 git 으로 함께 쓰려면 `--inside`(문서 폴더 안 `.docbench\`). 예전 판이 만든 `.docbench\` 가 있는 폴더는 그대로 안을 쓴다. `docbench status` 가 기록 자리를 보여 준다.
+- `--claude` 는 문서 폴더에 `.claude\skills\docbench-feedback\` 를 복사한다 — 터미널 Claude 가 그 문서 폴더에서 시작할 때만 쓸모 있다(아니면 플러그인으로 깐다).
+- `config.json`(기록 폴더, 함께 쓰는 설정): 그룹·문서별 제목·신뢰 표시·깊이(예: [examples/sample-workspace/.docbench/config.json](../examples/sample-workspace/.docbench/config.json)).
 - **이 PC 의 설정**(Windows `%LOCALAPPDATA%\docbench\config.json`, macOS `~/Library/Application Support/docbench/`, Linux `~/.config/docbench/` — 문서 폴더 밖, 로밍되지 않는 이 PC 자리. `DOCBENCH_HOME` 으로 옮김. `docbench status` 가 위치를 보여 준다): 실행 명령 `assistant`·`notify.command` 와 이름 `user`. **실행 명령·이름은 여기에만** — 문서 폴더 `config.json` 에 적으면 무시하고 `docbench status`·`serve` 가 경고한다. git·OneDrive·공유 폴더로 퍼지는 문서 폴더에 누가 명령을 넣어도 남의 PC 에서 돌지 않고, PC 마다 다른 경로가 공유 파일에 섞이지 않는다.
 
   ```json
   {
     "user": "김철수",
     "assistant": { "command": "C:/Users/me/.local/bin/claude.exe" },
+    "dataHome": "C:/tools/docbench/docbench-기록",
     "workspaces": {
-      "D:/work/docs": { "notify": { "command": ["node", "D:/dashboard/scripts/notify-terminal.mjs"] } }
+      "D:/work/docs": { "notify": { "command": ["node", "D:/dashboard/scripts/notify-terminal.mjs"] } },
+      "D:/team/spec": { "data": "E:/records/spec" }
     }
   }
   ```
 
-  맨 위 값이 이 PC 의 모든 작업 폴더 기본값, `workspaces["<문서 폴더 경로>"]` 가 그 폴더만 덮는다(`/`·`\\` 와 대소문자는 Windows 에서 같게 본다). 바꾸면 `serve` 를 다시 시작한다.
+  맨 위 값이 이 PC 의 모든 작업 폴더 기본값, `workspaces["<문서 폴더 경로>"]` 가 그 폴더만 덮는다(`/`·`\\` 와 대소문자는 Windows 에서 같게 본다). `dataHome` 은 기록 보관함, `workspaces[…].data` 는 그 폴더의 기록 폴더(`docbench link <폴더> --data <기록 폴더>`·실행기가 적는다). 바꾸면 `serve` 를 다시 시작한다.
 - 폴더가 git 저장소면 "커밋본 대비 변경"과 폴더 지도의 커밋 안 됨 표시가 자동으로 켜진다.
 - 상시 실행은 작업 스케줄러(로그온 시 시작)나 대시보드의 프로세스 관리자에 `node C:\tools\docbench\bin\docbench.mjs serve D:\work\docs` 를 등록한다.
 - `npm install` 이 막힌 PC: 방식 E 는 `release/docbench.html` 파일 하나면 된다. CLI·서버가 필요하면 인터넷이 되는 곳에서 `npm pack` 으로 만든 `docbench-<버전>.tgz`(빌드 포함)를 가져와 풀고, 그 폴더에서 `npm install --omit=dev --ignore-scripts`(iconv-lite 만 받는다. `--ignore-scripts` 가 없으면 다시 빌드하려다 실패).
@@ -97,7 +100,7 @@ SSE(`/api/events`)가 지나가야 하므로 프록시 버퍼링을 끈다(nginx
 ```js
 import { Workspace, createDocBenchHandler } from 'docbench/server';
 
-const ws = await new Workspace('D:/work/docs').init();
+const ws = await new Workspace('D:/work/docs').init();   // 기록은 문서 폴더 밖(기록 보관함/docs) — 다른 자리면 { dataDir: 'E:/records/docs' }
 await ws.reconcileAll();                      // 꺼져 있던 동안 바뀐 파일을 이력에 남긴다
 const docbench = createDocBenchHandler(ws, { base: '/docbench/api', ui: false /*, runs: true — Claude 작업(§6), 이 PC 사람 한 명이 쓸 때만 */ });
 
@@ -120,10 +123,12 @@ app.use((req, res, next) => docbench(req, res) || next());   // Express
 <iframe src="/docbench/?lang=ko" title="문서 작업대" style="border:0;width:100%;height:100%"></iframe>
 ```
 
-- 사람이 처음 한 번 **폴더 열기**로 문서 폴더를 고르고 권한을 허락한다. 브라우저가 "항상 허용"을 기억하면 다음부터 바로 열린다(아니면 "다시 열기" 한 번).
+- 사람이 처음 한 번 **폴더 열기**로 문서 폴더를, 이어서 **기록 보관함**(문서 폴더 밖 빈 폴더 — 예: HTML 옆 `docbench-기록`)을 고르고 권한을 허락한다. 보관함 아래에 문서 폴더 이름의 기록 폴더가 생기고 문서 폴더에는 아무것도 생기지 않는다. 팀이 git 으로 기록을 함께 쓰면 "문서 폴더 안에 두기"(`.docbench`). 예전 판의 안쪽 기록이 있으면 "보관함으로 옮기기"를 고를 수 있다.
+- 대시보드 주소로 내주면 두 폴더를 기억해 다음부터 바로 열린다(브라우저가 "항상 허용"을 기억하지 않으면 "다시 열기" 한 번). 파일로 바로 열면 기억하지 않아 매번 두 폴더를 고른다(고르기 창은 지난 자리에서 열린다).
 - 같은 출처여야 한다(다른 출처 iframe 은 폴더 고르기가 막힌다). 그 경로에는 대시보드의 전역 CSP 대신 파일 안의 CSP(인라인 스크립트 허용·네트워크 차단)가 적용되게 한다.
 - 터미널의 Claude Code 는 같은 폴더를 CLI 로 다룬다(§5). 화면은 몇 초 안에 따라온다.
 - 대시보드 없이 파일을 바로 열어도 된다(`file://` 도 쓰기 가능). 주소창 `?pick` = 기억한 폴더 대신 처음 화면, `?lang=en`, `?name=이름`.
+- 터미널 Claude·실행기가 그 기록을 찾으려면 문서 폴더 ↔ 기록 폴더 짝을 이 PC 의 설정에 한 번 적는다: 실행기 설치 문구가 하고, 손으로는 `docbench link "<문서 폴더>" --data "<보관함>\<문서 폴더 이름>"`.
 
 ### D. 계약만 구현
 
@@ -152,7 +157,7 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 
 기본 흐름(권장): 사람이 화면에서 피드백 → **"Claude에게 넘기기"** → 대시보드 터미널의 Claude Code 에서 `/docbench-feedback`.
 
-- 넘기기는 `.docbench/inbox/req-*.json` 에 요청을 남긴다. 스킬이 `docbench inbox` 로 그것부터 읽고 끝나면 비운다.
+- 넘기기는 기록 폴더 `inbox/req-*.json` 에 요청을 남긴다. 스킬이 `docbench inbox` 로 그것부터 읽고 끝나면 비운다.
 - 대시보드 터미널의 현재 폴더가 문서 폴더가 아니면 터미널 환경에 `DOCBENCH_ROOT=D:\work\docs` 를 넣어 둔다(CLI 가 거기서 찾는다).
 - 터미널을 자동으로 깨우려면 **이 PC 의 설정**(§2)의 `workspaces["<문서 폴더>"].notify.command` 에 명령을 적는다(서버 방식 A·B·C). 명령은 문서 폴더를 현재 폴더로, 서버 프로세스의 환경 변수를 물려받아 셸 없이 실행된다. 넘기기 때 그 명령이
   `DOCBENCH_REQUEST`(요청 파일 경로)·`DOCBENCH_ROOT` 환경변수를 받고 실행된다. **대시보드가 이미 Claude 터미널을 띄워 두고 입력을 밀어 넣을 수 있으면**
@@ -165,7 +170,7 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 ```json
 "workspaces": { "D:/work/docs": { "notify": {
   "command": ["C:/Users/me/.local/bin/claude.exe", "-p",
-    "docbench-feedback 스킬 순서대로 .docbench/inbox 의 요청을 처리하라. 확실하지 않으면 고치지 말고 되물어라.",
+    "docbench-feedback 스킬 순서대로 넘기기 요청(docbench inbox)을 처리하라. 확실하지 않으면 고치지 말고 되물어라.",
     "--permission-mode", "acceptEdits",
     "--allowedTools", "Bash(docbench *)", "Bash(node *docbench.mjs *)", "Read",
     "--max-turns", "40", "--permission-prompts", "none", "--no-session-persistence"]
@@ -174,7 +179,7 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 
 화면에 보일 안내는 함께 쓰는 문서 폴더 `config.json` 에: `"notify": { "message": "Claude 가 백그라운드에서 처리합니다. 결과는 이 화면에 뜹니다." }`.
 
-명령은 한 번에 하나만 돈다. 출력은 `.docbench/inbox/req-*.json.log` 에 남으니, 무인 실행이 실패하면 거기서 원인을 본다. 실행 파일을 못 찾으면 화면에 그 이유가 바로 뜬다.
+명령은 한 번에 하나만 돈다. 출력은 기록 폴더 `inbox/req-*.json.log` 에 남으니, 무인 실행이 실패하면 거기서 원인을 본다. 실행 파일을 못 찾으면 화면에 그 이유가 바로 뜬다.
 플래그는 Claude Code CLI 문서 기준이다(code.claude.com/docs/en/cli-reference). `-p` 에서 스킬이 자동으로 쓰이는지는 환경에서 한 번 확인한다 — 안 되면 프롬프트에 스킬 순서를 직접 적는다.
 `--permission-prompts none` 은 v2.1.259 이상.
 
@@ -187,7 +192,7 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 |---|---|---|
 | A·B (`docbench serve`) | serve 가 직접 | 없음 — `claude` 가 PATH 에 있으면 켜진다(다른 곳이면 이 PC 의 설정 `assistant.command`). 끄려면 `--no-claude` |
 | C (처리기 끼우기) | 대시보드 서버 프로세스가 직접 | **기본 끔** — 이 PC 사람 한 명이 쓰는 대시보드면 `createDocBenchHandler(ws, { …, runs: true })` |
-| E (단일 HTML) | 이 PC 의 **실행기**(`docbench runner`) | 한 번 켜 둔다 — 화면의 Claude 작업 창이 Claude Code 에 붙여 넣을 설치 문구를 준다(CLI 파일 하나를 받아 지문 확인 → `runner --detach` → 원하면 `--startup on`) |
+| E (단일 HTML) | 이 PC 의 **실행기**(`docbench runner`) | 한 번 켜 둔다 — 화면의 Claude 작업 창이 Claude Code 에 붙여 넣을 설치 문구를 준다(CLI 파일 하나를 받아 지문 확인 → `runner <문서 폴더> --data <기록 폴더> --detach`(기록 짝을 이 PC 의 설정에 적는다) → 원하면 `--startup on`) |
 
 단일 HTML 은 **화면 이름과 같은 사용자의 실행기만** 저절로 고른다(실행기의 사용자 = 이 PC 의 설정 `user`, 없으면 Windows 로그인 이름). 이름이 다르면 창이 "내 실행기 아님"으로 알리고, 내 것이면 한 번 고르면 기억한다 — 폴더를 함께 쓰는 동료의 실행기가 내 작업을 집어 가지 않게.
 | D (계약 구현) | 그 백엔드 | 선택 — `/runs*` 를 구현하면 창이 켜진다(`session.features.runs`). 없으면 창 없이 예전 "넘기기"·"AI 제안" |
@@ -203,7 +208,7 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 
   `command` 는 PATH 의 `claude` 면 빼도 된다(npm 설치본 `claude.cmd` 는 옆의 `cli.js` 를 node 로 부른다). `timeoutSec` 는 작업 하나의 상한(기본 900), `model` 은 화면에서 "기본"을 골랐을 때.
 - 실행기 명령: `docbench runner <폴더>`(앞에서, Ctrl+C 로 끔) · `--detach`(창 없이 뒤에서, 로그는 이 PC 의 설정 폴더 `logs/`) · `--status` · `--stop` · `--startup on|off`(Windows 로그인 때 자동). 실행기 하나 = 폴더 하나.
-- 문제를 살펴볼 때 `DOCBENCH_RUN_DEBUG=1` 로 켜면 Claude 의 결과를 `.docbench/runs/<id>.out.json` 에 그대로 남긴다.
+- 문제를 살펴볼 때 `DOCBENCH_RUN_DEBUG=1` 로 켜면 Claude 의 결과를 기록 폴더 `runs/<id>.out.json` 에 그대로 남긴다.
 
 **예전 "AI 제안"**(`POST /assistant/propose`, 섹션 하나 → 제안 하나)은 REST 계약을 위해 남아 있다. 화면은 Claude 작업이 있으면 그 길을 쓴다. 이 길도 이제 문서 폴더 밖에서 `--restricted --safe-mode` 로 띄운다(0.2.0 은 문서 폴더 안에서 띄워 그 폴더의 훅이 실행될 수 있었다 — SECURITY.md).
 
@@ -225,7 +230,9 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 ## 8. 문제 풀이
 
 - **`claude 실행 파일을 찾지 못했습니다`**: `where claude` 로 경로를 찾아 이 PC 의 설정 `assistant.command` 에 `.exe` 전체 경로.
-- **Claude 작업 창이 "실행기 꺼짐"**(단일 HTML): `docbench runner --status "<폴더>"` 로 확인, `--detach` 로 켠다. 켰는데도 꺼짐이면 같은 폴더를 골랐는지(실행기는 그 폴더의 `.docbench/runners/` 에 4초마다 적는다), 로그(`%LOCALAPPDATA%\docbench\logs\`)를 본다.
+- **Claude 작업 창이 "실행기 꺼짐"**(단일 HTML): `docbench runner --status "<폴더>"` 로 확인, `--detach` 로 켠다. 켰는데도 꺼짐이면 실행기와 화면이 같은 기록 폴더를 보는지(실행기는 기록 폴더 `runners/` 에 4초마다 적는다 — `docbench status` 의 "기록:" 과 화면 왼쪽 아래 "기록:" 을 맞춰 본다), 로그(`%LOCALAPPDATA%\docbench\logs\`)를 본다.
+- **CLI 가 "이 문서 폴더의 기록을 찾지 못했습니다"**(종료 코드 2): 브라우저로만 쓰던 폴더라 기록 짝이 아직 없다 — `docbench link "<문서 폴더>" --data "<기록 보관함>\<문서 폴더 이름>"`(실행기 설치 문구도 이것을 한다).
+- **"다른 문서 폴더의 기록입니다"**: 이름이 같은 다른 문서 폴더가 이미 보관함의 그 이름을 쓰고 있다 — `link … --data <다른 자리>` 로 따로 둔다.
 - **"Claude Code 업데이트 필요"**: `claude update` — `--restricted`·`--safe-mode` 가 없는 판. 1분 안에 다시 확인한다.
 - **작업이 "실패: 고친 글(text)이 비어 있습니다"**: 모델이 고친 글을 빼먹었다(작은 모델·낮은 노력에서 가끔 — 실측). 피드백은 Claude 차례로 남아 있으니 모델·노력을 올려 다시 넘긴다.
 - **제안·넘기기 명령이 안 돈다, `status` 에 "주의"**: 명령을 문서 폴더 `config.json` 에 적었다 → 이 PC 의 설정(`%LOCALAPPDATA%\docbench\config.json`)으로 옮긴다. `docbench status` 가 그 파일 위치를 보여 준다.

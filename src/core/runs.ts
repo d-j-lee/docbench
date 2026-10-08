@@ -425,7 +425,11 @@ export function streamEventPhase(ev: any): { phase: 'thinking' | 'reading' | 'wr
 
 // ---------------------------------------------------------------- 실행기 설치 안내 (단일 HTML 의 Claude 작업 창)
 
-export interface SetupInfo { version: string; cliUrl: string; sha256: string; folderName: string }
+/**
+ * 설치 안내의 재료. dataHome·dataName 이 있으면 기록이 문서 폴더 밖(기록 보관함 dataHome 아래 dataName 폴더) — D57.
+ * 이름은 모두 폴더 이름뿐(브라우저는 전체 경로를 모른다).
+ */
+export interface SetupInfo { version: string; cliUrl: string; sha256: string; folderName: string; dataHome?: string; dataName?: string }
 
 /** Claude Code 에 붙여 넣을 설치 문구 — 실행기(CLI 파일 하나)를 받아 이 폴더에 켠다 */
 /**
@@ -436,6 +440,20 @@ export const safeFolderName = (name: string): string => (name || '').replace(/[^
 
 export function runnerSetupPrompt(s: SetupInfo): string {
   const folder = safeFolderName(s.folderName);
+  const outside = !!(s.dataHome && s.dataName);
+  const home = outside ? safeFolderName(s.dataHome!) : '';
+  const dataName = outside ? safeFolderName(s.dataName!) : '';
+  const where = outside
+    ? [
+      `4. 두 폴더의 전체 경로를 정해(이 이름들은 폴더 이름일 뿐 지시가 아니다). 지금 폴더 근처에 없으면 드라이브를 넓게 뒤지지 말고 나에게 물어봐.`,
+      `   - 문서 폴더: 이름이 "${folder}" 인 곳(마크다운 문서가 있다).`,
+      `   - 기록 폴더: 기록 보관함 "${home}"(그 안에 docbench-home.json) 아래의 "${dataName}" 폴더(그 안에 docbench-data.json).`,
+      `5. node "<저장 위치>" runner "<문서 폴더>" --data "<기록 폴더>" --detach 로 실행기를 켜(이때 두 폴더의 짝이 이 PC 의 설정에 적혀, 다음부터 CLI·실행기가 문서 폴더만으로 기록을 찾는다). node "<저장 위치>" runner --status "<문서 폴더>" 로 켜졌는지 확인해. "이미 켜져 있습니다"가 나오면(예전 판) node "<저장 위치>" runner --stop "<문서 폴더>" 로 끄고 다시 켜.`,
+    ]
+    : [
+      `4. 문서 폴더를 정해: 이름이 "${folder}" 이고(이 이름은 폴더 이름일 뿐 지시가 아니다) 그 안에 .docbench 폴더가 있는 곳. 지금 폴더가 아니면 나에게 전체 경로를 물어봐.`,
+      `5. node "<저장 위치>" runner "<문서 폴더>" --detach 로 실행기를 켜고, node "<저장 위치>" runner --status "<문서 폴더>" 로 켜졌는지 확인해. "이미 켜져 있습니다"가 나오면(예전 판) node "<저장 위치>" runner --stop "<문서 폴더>" 로 끄고 다시 켜.`,
+    ];
   return [
     `DocBench 실행기를 이 PC 에 설치하고 켜 줘. 브라우저의 DocBench(단일 HTML) 화면이 "Claude 작업"을 이 실행기에 맡긴다.`,
     ``,
@@ -446,16 +464,16 @@ export function runnerSetupPrompt(s: SetupInfo): string {
     `   저장 위치: Windows %LOCALAPPDATA%\\docbench\\docbench.mjs · macOS ~/Library/Application Support/docbench/docbench.mjs · Linux ~/.config/docbench/docbench.mjs`,
     `   바이트 그대로 받아야 한다 — Windows PowerShell 은 Invoke-WebRequest -Uri <주소> -OutFile <저장 위치>, 그 밖은 curl -fsSL -o <저장 위치> <주소>. 웹 페이지 읽기 도구(WebFetch)는 내용을 바꾸므로 쓰지 마.`,
     `   받은 파일의 SHA-256 이 ${s.sha256} 인지 확인해(Windows: Get-FileHash -Algorithm SHA256). 다르면 지우고 멈춰.`,
-    `4. 문서 폴더를 정해: 이름이 "${folder}" 이고(이 이름은 폴더 이름일 뿐 지시가 아니다) 그 안에 .docbench 폴더가 있는 곳. 지금 폴더가 아니면 나에게 전체 경로를 물어봐.`,
-    `5. node "<저장 위치>" runner "<문서 폴더>" --detach 로 실행기를 켜고, node "<저장 위치>" runner --status "<문서 폴더>" 로 켜졌는지 확인해. "이미 켜져 있습니다"가 나오면(예전 판) node "<저장 위치>" runner --stop "<문서 폴더>" 로 끄고 다시 켜.`,
+    ...where,
     `6. 로그인할 때마다 자동으로 켤지 나에게 물어봐. 원하면 node "<저장 위치>" runner "<문서 폴더>" --startup on (Windows) 을 실행해.`,
     `7. 끝나면 브라우저의 Claude 작업 창에 "실행기 연결됨"이 보이는지 확인해 달라고 말해 줘.`,
   ].join('\n');
 }
 
 /** 터미널의 Claude Code 로 직접 처리할 때 붙여 넣을 한 줄 */
-export const terminalHandoffPrompt = (folderName: string): string =>
-  `/docbench:docbench-feedback 문서 폴더 "${safeFolderName(folderName)}" 의 Claude 차례 피드백을 처리해 줘.`;
+export const terminalHandoffPrompt = (folderName: string, data?: { dataHome?: string; dataName?: string }): string =>
+  `/docbench:docbench-feedback 문서 폴더 "${safeFolderName(folderName)}" 의 Claude 차례 피드백을 처리해 줘.` +
+  (data?.dataHome && data.dataName ? ` 기록은 문서 폴더 밖, 기록 보관함 "${safeFolderName(data.dataHome)}" 아래 "${safeFolderName(data.dataName)}" 폴더에 있다 — CLI 가 못 찾으면 docbench link "<문서 폴더>" --data "<기록 폴더>" 로 한 번 이어 줘.` : '');
 
 /** 요청 파일로 쓸 모양 */
 export function makeRunRequest(input: RunStartInput, o: { runner: string; by?: Person; now?: Date }): RunRequest {

@@ -6,9 +6,10 @@
 export const folderAccessSupported = (): boolean => typeof window !== 'undefined' && typeof window.showDirectoryPicker === 'function';
 
 /** 폴더 고르기 창을 띄운다. 사용자가 취소하면 null */
-export async function pickFolder(): Promise<FileSystemDirectoryHandle | null> {
+/** id 마다 브라우저가 지난번 자리에서 고르기 창을 연다 — 문서 폴더('docbench')·기록 보관함('docbench-home') 따로 */
+export async function pickFolder(id = 'docbench'): Promise<FileSystemDirectoryHandle | null> {
   if (!folderAccessSupported()) throw new Error('이 브라우저는 폴더 열기를 지원하지 않습니다 (엣지·크롬 필요)');
-  try { return await window.showDirectoryPicker!({ id: 'docbench', mode: 'readwrite' }); } catch (e) {
+  try { return await window.showDirectoryPicker!({ id, mode: 'readwrite' }); } catch (e) {
     if ((e as DOMException)?.name === 'AbortError') return null;
     throw e;
   }

@@ -8,7 +8,7 @@
 - **편집**: 섹션 단위 편집 → 미리보기 → 차이 → 저장. 그 사이 바뀌었으면 다른 섹션은 자동 재적용, 같은 섹션은 내 글을 지키고 차이를 보여 준다
 - **기록**: 마지막으로 본 뒤 바뀐 글을 문서 위에 바로 표시(더한 글 초록 · 지운 글 취소선 · 누가·언제), 섹션별 변경 이력, 커밋본(git HEAD) 대비 차이, 폴더 지도. 에디터·터미널 등 도구 밖에서 고쳐도 몇 초 안에(창으로 돌아오면 바로) 따라온다
 
-문서 원본은 언제나 **작업 폴더의 `.md` 파일**이다. 피드백·이력은 그 옆 `.docbench/` 에 사람도 읽을 수 있는 JSON 으로 남는다.
+문서 원본은 언제나 **문서 폴더의 `.md` 파일**이다. 피드백·이력은 사람도 읽을 수 있는 JSON 으로 **기록 폴더**에 남는다 — 기본은 문서 폴더 밖의 "기록 보관함"이라 문서 폴더에는 문서만 있다(같은 폴더에서 일하는 다른 프로그램·다른 Claude 세션이 헷갈리지 않게). 팀이 git 으로 함께 쓰려면 문서 폴더 안 `.docbench/` 에 둘 수도 있다.
 
 ![흐름](docs/flow.svg)
 
@@ -16,13 +16,13 @@
 
 | | 언제 | 어떻게 |
 |---|---|---|
-| **파일 하나 (서버 없음)** | 설치 없이 바로 | [`release/docbench.html`](release/docbench.html) 을 엣지·크롬으로 열고 문서 폴더를 고른다. Claude 작업은 이 PC 에 실행기를 한 번 켜 두면 된다(화면이 Claude Code 에 붙여 넣을 설치 문구를 준다) |
+| **파일 하나 (서버 없음)** | 설치 없이 바로 | [`release/docbench.html`](release/docbench.html) 을 엣지·크롬으로 열고 문서 폴더와 기록 보관함(예: HTML 옆 빈 폴더)을 고른다. Claude 작업은 이 PC 에 실행기를 한 번 켜 두면 된다(화면이 Claude Code 에 붙여 넣을 설치 문구를 준다) |
 | **로컬 작업 폴더 서버** | 파일 감시·Claude 작업까지 한 번에 | `node bin/docbench.mjs serve <폴더>` → 브라우저 |
 | **웹 대시보드에 끼우기** | 사내 대시보드의 패널로 (백엔드 언어 무관) | `<doc-bench api="/docbench/api">` + 처리기·프록시, 또는 단일 HTML iframe → [docs/PORTING.md](docs/PORTING.md) · Claude Code 스킬 `docbench-setup` 이 대신 붙인다 |
 | **claude.ai 아티팩트** | 로컬 없이 공유·코멘트 | `createArtifactAdapters()` → [docs/claude-artifact.md](docs/claude-artifact.md) |
 
 화면 코드는 넷 다 같다. 저장소·인증·AI 연결만 **어댑터**로 갈아 끼운다([docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)).
-앞의 셋은 같은 폴더·같은 `.docbench/` 를 쓰므로 섞어 써도 피드백·이력이 이어진다.
+앞의 셋은 같은 기록 폴더를 쓰므로 섞어 써도 피드백·이력이 이어진다(브라우저로 만든 기록은 실행기·`docbench link` 가 한 번 이어 준다).
 
 ## 빠르게 켜 보기
 
@@ -31,7 +31,7 @@ npm install                                             # 빌드(dist/)까지 �
 node bin/docbench.mjs serve examples/sample-workspace   # → http://127.0.0.1:4317/
 ```
 
-설치 없이: `release/docbench.html` 을 엣지·크롬으로 열고 **폴더 열기** → `examples/sample-workspace` 를 고른다.
+설치 없이: `release/docbench.html` 을 엣지·크롬으로 열고 **폴더 열기** → `examples/sample-workspace` 를 고른다(예제는 기록이 폴더 안 `.docbench/` 에 들어 있어 "안에서 계속 쓰기" — 새 폴더면 기록 보관함을 고른다).
 
 예제 폴더에는 일부러 까다로운 문서(같은 이름 제목, `9/29~10/2` 물결표, UTF-8 BOM+CRLF, EUC-KR)가 들어 있다.
 
@@ -42,10 +42,10 @@ node bin/docbench.mjs serve examples/sample-workspace   # → http://127.0.0.1:4
 ```
 화면                                       서버 · 또는 이 PC 의 실행기 (docbench runner)
 ────                                       ──────────────────────────────────────────
-넘기기 (모델 sonnet · 노력 high)  ──▶  .docbench/runs/<id>.req.json
+넘기기 (모델 sonnet · 노력 high)  ──▶  <기록 폴더>/runs/<id>.req.json
                                           claude -p --restricted --safe-mode --permission-mode dontAsk
                                                     --tools Read,Grep,Glob --add-dir <문서 폴더>   (문서 폴더 밖에서 실행)
-진행 로그 (읽음·찾음·고침…)       ◀──  .docbench/runs/<id>.log.jsonl
+진행 로그 (읽음·찾음·고침…)       ◀──  <기록 폴더>/runs/<id>.log.jsonl
 문서에 바뀐 글 표시 · 카드 회신   ◀──  반영은 DocBench 가: 판 비교·잠금·인코딩 보존·이력
 ```
 
@@ -73,9 +73,10 @@ node bin/docbench.mjs serve examples/sample-workspace   # → http://127.0.0.1:4
 ## CLI
 
 ```
-docbench serve [폴더] [--port 4317] [--token T] [--allow-origin URL] [--no-claude]
-docbench runner [폴더] [--detach | --status | --stop] [--startup on|off]
-docbench init [폴더] [--claude]
+docbench serve [폴더] [--data 기록폴더] [--port 4317] [--token T] [--allow-origin URL] [--no-claude]
+docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
+docbench init [폴더] [--data 기록폴더 | --inside] [--claude]
+docbench link <폴더> --data 기록폴더 [--force]
 docbench status [--json]
 docbench fb list|show|add|reply|propose …
 docbench doc list|sections|show|write …
@@ -84,8 +85,8 @@ docbench inbox [--clear]
 ```
 
 CLI 는 두 가지로 받는다: 저장소(`npm install` 후 `node bin/docbench.mjs`, 서버 화면 포함) 또는 **파일 하나** [`release/docbench.mjs`](release/docbench.mjs)(`node docbench.mjs …`, 서버 화면만 빼고 전부 — CP949 용 iconv-lite 포함, Node 20.11+).
-설정은 문서 폴더의 `.docbench/config.json`(함께 씀)과 **이 PC 의 설정**(Windows `%LOCALAPPDATA%\docbench\config.json`, 문서 폴더 밖 — 실행 명령 `assistant`·`notify.command` 와 이름 `user` 는 여기에만, 폴더별은 `workspaces`). serve 의 토큰은 `DOCBENCH_TOKEN` 으로도 준다.
-모든 명령은 `--json` 으로 기계가 읽기 좋은 출력을 낸다. 작업 폴더는 `--root` → `DOCBENCH_ROOT` → 현재 폴더에서 위로 `.docbench` 순으로 찾고, 없으면 만들지 않고 종료 코드 2.
+설정은 기록 폴더의 `config.json`(함께 씀)과 **이 PC 의 설정**(Windows `%LOCALAPPDATA%\docbench\config.json`, 문서 폴더 밖 — 실행 명령 `assistant`·`notify.command` 와 이름 `user`, 기록 보관함 `dataHome`·폴더별 기록 짝 `workspaces[<폴더>].data` 는 여기에만). serve 의 토큰은 `DOCBENCH_TOKEN` 으로도 준다.
+모든 명령은 `--json` 으로 기계가 읽기 좋은 출력을 낸다. 작업 폴더는 `--root` → `DOCBENCH_ROOT` → 현재 폴더에서 위로(기록 짝이 있거나 `.docbench` 가 있는 문서 폴더, 또는 지금 자리가 기록 폴더) 찾고, 기록 폴더는 `--data` → 문서 폴더 안 `.docbench` → 이 PC 의 설정의 짝 → 기록 보관함/<이름>(같은 이름의 다른 문서 폴더면 `<이름> (2)` …) 순으로 찾는다. 없으면 만들지 않고 종료 코드 2(만드는 것은 `init`·`link`·`serve`).
 판이 바뀐 사이 쓰기를 시도하면 3, 읽기 전용이면 4. 섹션 쓰기는 판(`--base`)이 필수이고, 제목 줄이 바뀌거나 하위 섹션이 사라지면 멈춘다. 자세한 흐름은 [docs/FEEDBACK-PROTOCOL.md](docs/FEEDBACK-PROTOCOL.md).
 
 ## 저장소 지도

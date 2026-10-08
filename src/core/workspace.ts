@@ -1,9 +1,14 @@
 /**
  * 작업 폴더 규약 — 서버(Node)·CLI 와 브라우저 폴더 어댑터가 같은 규칙을 쓴다.
  *
- *   <작업 폴더>/
- *     *.md                    문서 (정본은 언제나 이 파일들)
- *     .docbench/
+ * 문서 폴더(*.md, 정본은 언제나 이 파일들)와 **기록 폴더**(아래 모양)는 따로다. 기록 폴더는 둘 중 한 곳:
+ *   - 밖(기본, D57): 기록 보관함/<문서 폴더 이름>/ — 문서 폴더에는 아무것도 만들지 않는다.
+ *     보관함 = 이 PC 의 설정 dataHome(없으면 <PC 설정 폴더>/data), 브라우저는 사람이 고른 폴더(예: HTML 옆).
+ *     기록 폴더에는 표식 docbench-data.json { protocol, docsName, docsPath? } — 어느 문서 폴더의 기록인지.
+ *   - 안: <문서 폴더>/.docbench/ (예전 판·팀이 git 으로 함께 쓸 때)
+ * 서버·CLI 가 찾는 순서는 server/workspace.mjs locateData (D58).
+ *
+ *   <기록 폴더>/
  *       config.json           그룹·제목·규칙 (선택, 함께 쓰는 설정 — 커밋·동기화돼도 된다)
  *       feedback/<id>.json    피드백 한 건 = 파일 하나
  *       changes.jsonl         변경 이력 (한 줄 = 한 번 저장)
@@ -25,6 +30,80 @@
  */
 import type { ChangeEntry, Manifest } from '../types';
 import { headingPlain } from './markdown';
+
+/** 밖에 둔 기록 폴더의 표식 — 어느 문서 폴더의 기록인지 */
+export const DATA_MARKER = 'docbench-data.json';
+/** 기록 보관함(문서 폴더마다 기록 폴더를 하나씩 담는 곳)의 표식 */
+export const HOME_MARKER = 'docbench-home.json';
+export const DATA_PROTOCOL = 1;
+
+/**
+ * 기록 폴더 표식. docs = 그 문서 폴더의 문서 몇 개(정렬, 최대 DATA_SAMPLE) — 이름이 같은 다른 문서 폴더를 가려낸다(브라우저는 경로를 모른다).
+ * migrating = 문서 폴더 안 기록을 옮기는 중(끝나지 않았으면 다시 옮길 수 있다).
+ */
+export interface DataMarker { protocol: number; docsName: string; docsPath?: string; createdAt: string; docs?: string[]; migrating?: boolean }
+export const DATA_SAMPLE = 40;
+
+/** 기록 보관함 안의 폴더 이름 = 문서 폴더 이름 (파일 이름에 못 쓰는 글자만 바꾼다). 드라이브 뿌리처럼 이름이 없으면 'root' */
+export function dataFolderName(docsName: string): string {
+  const s = (docsName || '').replace(/[<>:"/\\|?*\u0000-\u001f]/g, '_').replace(/[. ]+$/, '').trim();
+  return s && !/^\.+$/.test(s) ? s.slice(0, 120) : 'root';
+}
+
+/** 표식 파일 → 모양이 맞으면 DataMarker */
+export function parseDataMarker(x: unknown): DataMarker | null {
+  if (!x || typeof x !== 'object' || Array.isArray(x)) return null;
+  const o = x as Record<string, unknown>;
+  if (typeof o.docsName !== 'string') return null;
+  const docs = Array.isArray(o.docs) ? o.docs.filter((x): x is string => typeof x === 'string').slice(0, DATA_SAMPLE) : undefined;
+  return { protocol: Number(o.protocol) || 1, docsName: o.docsName, docsPath: typeof o.docsPath === 'string' && o.docsPath ? o.docsPath : undefined, createdAt: typeof o.createdAt === 'string' ? o.createdAt : '', ...(docs?.length ? { docs } : {}), ...(o.migrating === true ? { migrating: true } : {}) };
+}
+
+export const newDataMarker = (docsName: string, docsPath?: string, docs?: string[]): DataMarker => ({ protocol: DATA_PROTOCOL, docsName, ...(docsPath ? { docsPath } : {}), createdAt: new Date().toISOString(), ...(docs?.length ? { docs: docsSample(docs) } : {}) });
+
+/** 표식에 적을 문서 표본 — 정렬해서 앞의 DATA_SAMPLE 개 */
+export const docsSample = (ids: Iterable<string>): string[] => [...ids].sort().slice(0, DATA_SAMPLE);
+
+/** 어느 폴더에나 흔한 이름 — 같은 폴더인지 가리는 데 쓰지 않는다 */
+const COMMON_DOC = /(^|\/)(readme|index|changelog|license|todo|notes?)\.(md|markdown)$/i;
+
+/**
+ * 표식의 문서 표본이 지금 문서 폴더와 같은 폴더의 것인가 (D61).
+ *  - 표식에 표본이 없으면(빈 문서 폴더로 만들어짐) 가릴 수 없어 같다고 본다. 지금 폴더가 비었는데 표식에 표본이 있으면 다르다.
+ *  - README·index 같은 흔한 이름은 빼고 비교한다(어느 한쪽이 그것뿐이면 둘 다 빼지 않고).
+ *  - 표본은 정렬한 앞 DATA_SAMPLE 개라, 꽉 찬 표본끼리는 서로 겹치는 범위 안에서만 본다.
+ *  - 겹친 수가 작은 쪽의 절반 이상이고, 2개 이상(작은 쪽이 1개면 1개) — 문서가 늘어도 같은 폴더로 남는다.
+ */
+export function sameDocsFolder(marker: DataMarker | null, ids: Iterable<string>): boolean {
+  const a0 = marker?.docs || [];
+  const b0 = docsSample(ids);
+  if (!a0.length) return true;
+  if (!b0.length) return false;
+  // 흔한 이름을 빼되, 어느 한쪽이 흔한 이름뿐이면(README 하나로 시작한 폴더) 둘 다 빼지 않고 비교한다
+  const fa = a0.filter((x) => !COMMON_DOC.test(x)), fb = b0.filter((x) => !COMMON_DOC.test(x));
+  let a = fa.length && fb.length ? fa : a0, b = fa.length && fb.length ? fb : b0;
+  if (a0.length >= DATA_SAMPLE && b0.length >= DATA_SAMPLE) {
+    const hi = a[a.length - 1] < b[b.length - 1] ? a[a.length - 1] : b[b.length - 1];
+    a = a.filter((x) => x <= hi); b = b.filter((x) => x <= hi);
+    if (!a.length || !b.length) return false;
+  }
+  const set = new Set(b);
+  const hit = a.filter((x) => set.has(x)).length;
+  const small = Math.min(a.length, b.length);
+  return hit >= Math.min(2, small) && hit / small >= 0.5;
+}
+
+/** 표본을 고칠 때: 비어 있지 않은 표본을 빈 표본으로 덮지 않는다(문서 폴더가 잠깐 비었거나 다른 빈 폴더가 열었을 때) */
+export const nextDocsSample = (prev: string[] | undefined, ids: Iterable<string>): string[] => {
+  const next = docsSample(ids);
+  return next.length || !prev?.length ? next : prev;
+};
+
+/** 기록 보관함 안에서 이 문서 폴더 이름이 쓸 수 있는 폴더 이름들 — 같은 이름의 다른 문서 폴더가 있으면 '이름 (2)' … */
+export const dataFolderCandidates = (docsName: string, n = 9): string[] => {
+  const base = dataFolderName(docsName);
+  return [base, ...Array.from({ length: n - 1 }, (_, i) => `${base} (${i + 2})`)];
+};
 
 export const IGNORE_DIRS = new Set(['.git', 'node_modules', '.docbench', '.svn', '.hg', '__pycache__', '.venv', 'dist', 'build', '.idea', '.vscode']);
 
@@ -91,6 +170,21 @@ export interface PcSettings {
   user?: string;
   assistant?: WorkspaceConfig['assistant'];
   notify?: { command?: string[] | null };
+  /** 이 문서 폴더의 기록 폴더 (workspaces[<폴더>].data) */
+  data?: string;
+}
+
+/**
+ * 이 PC 의 설정에서 기록 자리: 이 문서 폴더의 짝(workspaces[<폴더>].data)과 기록 보관함(dataHome).
+ * 경로 비교는 pcSettingsFor 와 같다.
+ */
+export function pcDataFor(file: unknown, rootPaths: string[], ci = false): { data?: string; dataHome?: string } {
+  const f = (file && typeof file === 'object' ? file : {}) as { dataHome?: unknown; workspaces?: Record<string, PcSettings> };
+  const norm = (p: string) => { const x = p.replace(/\\/g, '/').replace(/\/+$/, ''); return ci ? x.toLowerCase() : x; };
+  const want = new Set(rootPaths.map(norm));
+  let data: string | undefined;
+  for (const [k, v] of Object.entries(f.workspaces || {})) if (want.has(norm(k)) && v && typeof v === 'object' && typeof v.data === 'string' && v.data) data = v.data;
+  return { data, dataHome: typeof f.dataHome === 'string' && f.dataHome ? f.dataHome : undefined };
 }
 
 /**

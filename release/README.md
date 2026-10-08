@@ -3,7 +3,7 @@
 두 파일. 둘 다 `npm run release` 로만 만든다(`dist/` 복사본). `npm run check` 가 빌드와 같은지 확인한다.
 
 `docbench.html` — DocBench 를 **파일 하나**로. 서버·설치 없이 엣지·크롬으로 열고 **폴더 열기**로 문서 폴더를 고르면
-그 폴더의 `.md` 를 접어 보고·피드백하고·고친다. 피드백·이력은 그 폴더의 `.docbench/` 에 남아 터미널의 Claude Code(`docbench` CLI)가 이어받는다.
+그 폴더의 `.md` 를 접어 보고·피드백하고·고친다. 피드백·이력은 **기록 보관함**(처음에 고르는 문서 폴더 밖 폴더 — 예: 이 HTML 옆 `docbench-기록`) 아래 문서 폴더 이름의 폴더에 남아, 터미널의 Claude Code(`docbench` CLI)·실행기가 이어받는다. 문서 폴더에는 아무것도 생기지 않는다(팀이 git 으로 함께 쓰려면 문서 폴더 안 `.docbench/` 를 고를 수도 있다).
 
 - 받기: GitHub 에서 이 파일을 열고 Download(raw). 다른 파일은 필요 없다.
 - 문서를 어디로도 보내지 않고, 페이지 안에서 요청·그림으로 새는 길도 막아 두었다(CSP `connect-src 'none'`·`img-src data: blob:`). 그래서 문서 속 바깥 주소 그림은 보이지 않는다.

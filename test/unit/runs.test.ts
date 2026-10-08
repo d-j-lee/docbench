@@ -155,6 +155,15 @@ describe('설치 안내', () => {
     expect(s).toContain('"기획 문서"');
     expect(s).toMatch(/--restricted 와 --safe-mode/);
     expect(s).toMatch(/runner "<문서 폴더>" --detach/);
+    expect(s).toContain('.docbench');
+  });
+  it('기록이 문서 폴더 밖이면: 보관함·기록 폴더 이름과 --data (짝을 이 PC 의 설정에)', () => {
+    const s = runnerSetupPrompt({ version: '0.4.0', cliUrl: 'u', sha256: 's', folderName: '기획 문서', dataHome: 'docbench-기록', dataName: '기획 문서' });
+    expect(s).toContain('"docbench-기록"');
+    expect(s).toContain('docbench-data.json');
+    expect(s).toMatch(/runner "<문서 폴더>" --data "<기록 폴더>" --detach/);
+    expect(s).not.toContain('.docbench 폴더가 있는 곳');
+    expect(terminalHandoffPrompt('기획 문서', { dataHome: 'docbench-기록', dataName: '기획 문서' })).toMatch(/docbench link/);
   });
 });
 
@@ -187,5 +196,36 @@ describe('작업 파일은 남이 꾸밀 수 있다', () => {
     t.file('__proto__/a.png', false);
     expect(t.result()['__proto__']).toEqual({ files: 1 });
     expect(({} as Record<string, unknown>).files).toBeUndefined();
+  });
+});
+
+describe('기록 폴더 이름 (같은 이름의 다른 문서 폴더)', () => {
+  it('문서 표본이 절반 이상 겹치면 같은 폴더, 표본이 없으면 같다고 본다', async () => {
+    const { sameDocsFolder, dataFolderCandidates, docsSample, parseDataMarker, nextDocsSample } = await import('../../src/core/workspace');
+    const m = (docs: string[]) => parseDataMarker({ protocol: 1, docsName: 'docs', createdAt: '', docs });
+    expect(sameDocsFolder(m(['a.md', 'b.md', 'c.md', 'd.md']), ['a.md', 'b.md', 'c.md', 'e.md'])).toBe(true);
+    expect(sameDocsFolder(m(['a.md', 'b.md', 'c.md']), ['x.md', 'y.md', 'z.md'])).toBe(false);
+    expect(sameDocsFolder(m([]), ['x.md'])).toBe(true);
+    expect(sameDocsFolder(null, ['x.md'])).toBe(true);
+    // 흔한 이름 하나만 같으면 다른 폴더(독립 검토 재현)
+    expect(sameDocsFolder(m(['README.md', 'guide/a.md', 'guide/b.md']), ['README.md', 'api/y.md', 'api/z.md'])).toBe(false);
+    expect(sameDocsFolder(m(['README.md', 'api.md']), ['README.md', 'guide.md'])).toBe(false);
+    // 빈 문서 폴더는 표본이 있는 기록과 다르다, 그리고 표본을 비우지 않는다
+    expect(sameDocsFolder(m(['plan.md', 'spec.md']), [])).toBe(false);
+    expect(nextDocsSample(['plan.md'], [])).toEqual(['plan.md']);
+    // 문서가 늘어도 같은 폴더
+    expect(sameDocsFolder(m(['a.md', 'b.md', 'c.md']), ['a.md', 'b.md', 'c.md', 'd.md', 'e.md', 'f.md', 'g.md'])).toBe(true);
+    expect(sameDocsFolder(m(['README.md']), ['README.md'])).toBe(true);
+    expect(sameDocsFolder(m(['plan.md']), ['plan.md', 'x.md'])).toBe(true);
+    // README 하나로 시작한 폴더에 문서가 늘어도 제 기록 (재검증에서 찾은 것)
+    expect(sameDocsFolder(m(['README.md']), ['README.md', 'plan.md'])).toBe(true);
+    expect(sameDocsFolder(m(['index.md']), ['a.md', 'b.md', 'index.md'])).toBe(true);
+    expect(sameDocsFolder(m(['README.md']), ['other.md'])).toBe(false);
+    // 표본은 앞의 40개 — 문서가 많아도 같은 폴더면 같다고 본다
+    const many = Array.from({ length: 100 }, (_, i) => `d/${String(i).padStart(3, '0')}.md`);
+    expect(sameDocsFolder(m(docsSample(many)), [...many.slice(3), 'new.md'])).toBe(true);
+    expect(dataFolderCandidates('docs').slice(0, 3)).toEqual(['docs', 'docs (2)', 'docs (3)']);
+    expect(dataFolderCandidates('a/b:c')[0]).toBe('a_b_c');
+    expect(dataFolderCandidates('..')[0]).toBe('root');
   });
 });

@@ -66,7 +66,7 @@ docbench fb reply <id> -m "<질문>" --ask
 |---|---|---|
 | 0 | 성공 | |
 | 1 | 잘못된 입력·없는 문서·안전장치에 걸림(제목 줄 없음, 하위 섹션 사라짐, `--base` 없음) | 메시지 확인 |
-| 2 | 작업 폴더(.docbench)를 못 찾음 | `--root` 또는 `DOCBENCH_ROOT` |
+| 2 | 작업 폴더·기록 폴더를 못 찾음 | `--root`(`DOCBENCH_ROOT`)·`--data`(`DOCBENCH_DATA`), 브라우저로 만든 기록이면 `docbench link <문서 폴더> --data <기록 폴더>` |
 | 3 | 그 사이 문서가 바뀜 | `fb show` 로 다시 읽고 고친다 |
 | 4 | 읽기 전용 (EUC-KR + iconv 없음, 설정) | 사람에게 UTF-8 변환(`--convert-utf8`) 여부를 묻는다 |
 
@@ -75,7 +75,7 @@ docbench fb reply <id> -m "<질문>" --ask
 
 **안전장치**: 섹션 쓰기(`doc write --section`, `fb propose`)는 새 글의 첫 줄이 같은 단계의 제목이어야 하고, 하위 섹션이 사라지면 멈춘다. 제목을 바꾸려면 `--rename`, 하위 섹션을 지우려면 `--force`. 입력 파일의 BOM·UTF-16 은 풀어서 받고, 깨진 글자가 있으면 거부한다.
 
-**요청함**: 화면의 "넘기기"는 `.docbench/inbox/req-*.json` 을 남긴다. `docbench inbox` 로 보고, 처리한 뒤 `docbench inbox --clear`.
+**요청함**: 화면의 "넘기기"는 기록 폴더 `inbox/req-*.json` 을 남긴다. `docbench inbox` 로 보고, 처리한 뒤 `docbench inbox --clear`.
 
 **작성자 표시**: CLI 는 기본으로 `assistant:Claude` 로 기록한다. 사람이 CLI 를 쓰면 `--as human:<이름>` 또는 `DOCBENCH_ACTOR=human:<이름>`.
 
@@ -95,7 +95,9 @@ $ docbench doc sections docs/설계-노트.md
 
 ## 파일 모양
 
-`.docbench/feedback/<id>.json` — 한 건 = 한 파일. 손으로 고치지 말고 CLI·화면을 쓴다(판 번호 `version` 관리).
+아래 경로는 모두 **기록 폴더** 기준이다. 기록 폴더는 기본으로 문서 폴더 밖 "기록 보관함/<문서 폴더 이름>/"(표식 `docbench-data.json`), 팀이 git 으로 함께 쓰면 문서 폴더 안 `.docbench/` 다. `docbench status` 가 어디인지 보여 준다.
+
+`feedback/<id>.json` — 한 건 = 한 파일. 손으로 고치지 말고 CLI·화면을 쓴다(판 번호 `version` 관리).
 
 ```json
 {
@@ -114,15 +116,15 @@ $ docbench doc sections docs/설계-노트.md
 }
 ```
 
-`.docbench/changes.jsonl` — 한 줄 = 한 번 저장.
+`changes.jsonl` — 한 줄 = 한 번 저장.
 
 ```json
 {"at":"…","docId":"docs/설계-노트.md","by":{"kind":"assistant","name":"Claude"},"summary":"한도 미확인 명시","fromVersion":"4f9f…","toVersion":"b298…","feedbackIds":["fb-…"],"sections":["알림 서비스 설계 노트 › 위험 › 메모"]}
 ```
 
-`.docbench/inbox/req-<시각>.json` — "넘기기" 요청 `{ at, count, docs, feedbackIds }`. 처리한 뒤 지운다.
+`inbox/req-<시각>.json` — "넘기기" 요청 `{ at, count, docs, feedbackIds }`. 처리한 뒤 지운다.
 
-`.docbench/runs/` — Claude 작업. 화면이 요청을 쓰고, 엔진만 상태·로그를 쓴다. 최근 60건만 남긴다.
+`runs/` — Claude 작업. 화면이 요청을 쓰고, 엔진만 상태·로그를 쓴다. 최근 60건만 남긴다.
 
 | 파일 | 누가 | 내용 |
 |---|---|---|
@@ -131,8 +133,10 @@ $ docbench doc sections docs/설계-노트.md
 | `<id>.log.jsonl` | 엔진(덧붙이기) | 진행 로그 한 줄씩 — 읽은 파일, 막힌 접근, 반영 결과 |
 | `<id>.cancel` | 화면 | 멈춤 요청 |
 
-`.docbench/runners/<엔진>.json` — 엔진이 4초마다 고쳐 쓰는 살아 있음 표시(`id`, `kind: server|runner`, `user`, `host`, `protocol`, `claude: { ok, version?, reason? }`, `seenAt` …). 20초 넘게 안 바뀌면 꺼진 것으로 본다. `<엔진>.stop` 이 생기면 실행기가 스스로 끈다.
-`runs/`·`runners/` 는 `.docbench/.gitignore` 에 들어 있다(이 PC 의 상태라 공유하지 않는다).
+`runners/<엔진>.json` — 엔진이 4초마다 고쳐 쓰는 살아 있음 표시(`id`, `kind: server|runner`, `user`, `host`, `protocol`, `claude: { ok, version?, reason? }`, `seenAt` …). 20초 넘게 안 바뀌면 꺼진 것으로 본다. `<엔진>.stop` 이 생기면 실행기가 스스로 끈다.
+`runs/`·`runners/` 는 이 PC 의 상태라 공유하지 않는다(기록이 문서 폴더 안이면 `.docbench/.gitignore` 에 들어 있다).
+
+`docbench-data.json` — 기록을 밖에 둘 때 어느 문서 폴더의 것인지 `{ protocol, docsName, docsPath? }`. 브라우저는 경로를 몰라 `docsPath` 를 비워 두고, 실행기·`docbench link` 가 채운다. 다른 폴더를 가리키는 기록에는 이어지지 않는다.
 
 ## 지킬 것 (AI 쪽)
 

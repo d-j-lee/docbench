@@ -456,6 +456,8 @@ export class App {
     const mode = this.fbMode;
     const st = mode === 'live' ? ['live', 'rail.storage.live'] : mode === 'poll' ? ['live', 'rail.storage.poll'] : mode === 'error' ? ['warn', 'rail.storage.error'] : mode === 'pending' ? ['', 'fb.loading'] : ['warn', 'rail.storage.local'];
     const foot = h('div', { class: 'db-rail-foot' }, h('div', { class: 'db-status ' + st[0] }, h('i'), t(st[1])));
+    const where = this.manifest.project.storage;
+    if (where) foot.append(h('div', { class: 'db-rail-store', title: where, text: t('rail.storage.where', { where }) }));
     for (const l of this.manifest.project.links || []) foot.append(h('a', { href: l.url, target: '_blank', rel: 'noopener noreferrer', text: l.label + ' ↗' }));
     rail.append(foot);
   }

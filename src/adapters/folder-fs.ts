@@ -27,6 +27,42 @@ export interface FsLike {
    */
   append(path: string, text: string): Promise<void>;
   remove(path: string): Promise<void>;
+  /** 폴더를 통째로 지운다 (예전 안쪽 기록을 밖으로 옮긴 뒤). 없으면 아무 일 없음 */
+  removeDir?(path: string): Promise<void>;
+}
+
+/**
+ * 한 폴더 아래만 보이는 창 — 문서 폴더 안 .docbench 를 기록 폴더로 쓸 때(subFs(docs, '.docbench')),
+ * 기록 보관함 아래 <문서 폴더 이름>/ 을 기록 폴더로 쓸 때(subFs(home, name)). 이름은 바탕 폴더 이름 + 경로.
+ */
+export function subFs(base: FsLike, prefix: string): FsLike {
+  const pre = split(prefix).join('/');
+  const at = (p: string) => (p ? `${pre}/${split(p).join('/')}` : pre);
+  return {
+    name: `${base.name}/${pre}`,
+    get writable() { return base.writable; },
+    list: (dir) => base.list(at(dir)),
+    read: (p, max) => base.read(at(p), max),
+    stat: (p) => base.stat(at(p)),
+    write: (p, d) => base.write(at(p), d),
+    append: (p, t) => base.append(at(p), t),
+    remove: (p) => base.remove(at(p)),
+    removeDir: base.removeDir ? (p) => base.removeDir!(at(p)) : undefined,
+  };
+}
+
+/** 한 폴더 아래를 통째로 다른 폴더로 복사한다(같은 바이트). 옮긴 파일 수 */
+export async function copyTree(from: FsLike, to: FsLike, dir = ''): Promise<number> {
+  let n = 0;
+  for (const e of (await from.list(dir)) || []) {
+    const p = dir ? `${dir}/${e.name}` : e.name;
+    if (e.kind === 'directory') { n += await copyTree(from, to, p); continue; }
+    const f = await from.read(p);
+    if (!f) continue;
+    await to.write(p, f.bytes);
+    n++;
+  }
+  return n;
 }
 
 export class FsReadOnlyError extends Error {
@@ -104,6 +140,14 @@ export function fsFromHandle(root: FileSystemDirectoryHandle, opts: { writable?:
       const d = name ? await dirOf(segs, false) : null;
       if (!d || !name) return;
       try { await d.removeEntry(name); } catch (e) { if (!isNotFound(e)) throw e; }
+    },
+    async removeDir(path) {
+      guard();
+      const segs = split(path);
+      const name = segs.pop();
+      const d = name ? await dirOf(segs, false) : null;
+      if (!d || !name) return;
+      try { await d.removeEntry(name, { recursive: true }); } catch (e) { if (!isNotFound(e)) throw e; }
     },
   };
 }
@@ -184,5 +228,6 @@ export function fsFromMemory(init: Record<string, string | Uint8Array> = {}, nam
       files.set(path, { bytes: next, mtimeMs: tick() });
     },
     async remove(path) { guard(); files.delete(path); },
+    async removeDir(path) { guard(); const pre = split(path).join('/') + '/'; for (const k of [...files.keys()]) if (k.startsWith(pre)) files.delete(k); },
   };
 }

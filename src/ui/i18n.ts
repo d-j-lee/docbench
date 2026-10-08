@@ -338,6 +338,30 @@ const ko: Dict = {
   'start.title': '문서 폴더 열기',
   'start.lead': '폴더 안의 마크다운 문서를 제목 깊이별로 접어 보고, 섹션에 피드백을 달고, 바로 고칩니다.',
   'start.where': '피드백·이력은 그 폴더의 {dir} 에 남아 터미널의 Claude Code가 그대로 이어받습니다. 문서는 이 PC 밖으로 나가지 않습니다.',
+  'start.where2': '피드백·이력은 문서 폴더 밖 "기록 보관함"에 남깁니다(다음 단계에서 고릅니다). 문서는 이 PC 밖으로 나가지 않습니다.',
+  'data.q': '기록을 어디에 둘까요?',
+  'data.lead': '피드백·이력·Claude 작업 기록을 문서 폴더 밖 "기록 보관함"에 둡니다. 문서 폴더에는 아무것도 생기지 않아, 같은 폴더에서 일하는 다른 프로그램(다른 Claude 세션 등)이 헷갈리지 않습니다. 이 HTML 옆(남과 함께 쓰거나 동기화하지 않는 내 폴더)에 "docbench-기록" 같은 빈 폴더를 만들어 고르면 관리하기 쉽습니다(고르기 창의 "새 폴더").',
+  'data.q.hasInside': '이 문서 폴더 안에 예전 기록(.docbench)이 있습니다',
+  'data.lead.hasInside': '기록 보관함으로 옮기면 문서 폴더가 깨끗해집니다(복사해서 같은지 확인한 뒤 안쪽을 지웁니다). git 으로 팀과 함께 쓰는 기록이면 안에서 계속 쓰세요.',
+  'data.home.pick': '기록 보관함 고르기',
+  'data.home.use': '기록 보관함 "{name}" 에 두기',
+  'data.home.other': '다른 보관함 고르기',
+  'data.home.notEmpty': '"{name}" 폴더에 다른 파일이 있습니다. 여기를 기록 보관함으로 쓸까요? (안에는 문서 폴더마다 폴더 하나와 표식 파일만 생깁니다)',
+  'data.inside': '문서 폴더 안에 두기 (.docbench — git 으로 팀과 함께 쓸 때)',
+  'data.inside.keep': '안에서 계속 쓰기',
+  'data.move': '기록 보관함으로 옮기기',
+  'data.move.doing': '기록을 옮기는 중…',
+  'data.move.busy': '이 폴더의 기록을 실행기·서버가 쓰고 있습니다. 끄고 다시 하세요(docbench runner --stop).',
+  'data.move.exists': '기록 보관함에 같은 이름의 기록이 이미 있습니다. 다른 보관함을 고르거나 안에서 계속 쓰세요.',
+  'data.move.verify': '옮긴 기록이 원본과 다릅니다({path}) — 안쪽 기록은 지우지 않았습니다.',
+  'data.note': '고른 보관함은 기억합니다. 다음에는 묻지 않고 엽니다.',
+  'data.note.file': '파일로 열면 고른 폴더를 기억하지 않아 다음에도 두 폴더를 고릅니다(고르기 창은 지난번 자리에서 열립니다). 자주 쓰면 대시보드 주소로 여세요.',
+  'data.bad.same': '문서 폴더와 같은 폴더입니다. 따로 된 빈 폴더를 고르세요.',
+  'data.bad.full': '기록 보관함에 "{name}" 이름의 자리가 모두 다른 문서 폴더의 기록입니다. 다른 보관함을 고르세요.',
+  'data.move.removeFail': '기록은 보관함에 옮겼지만 문서 폴더 안쪽(.docbench)을 다 지우지 못했습니다({msg}). 파일을 잡고 있는 프로그램을 닫고 다시 "옮기기"를 누르면 이어서 끝냅니다.',
+  'data.bad.insideDocs': '문서 폴더 안은 기록 보관함이 될 수 없습니다(문서로 섞여 보입니다). 문서 폴더 밖을 고르세요.',
+  'data.bad.holdsDocs': '문서 폴더를 품은 폴더는 기록 보관함이 될 수 없습니다. "docbench-기록" 같은 빈 폴더를 새로 만들어 고르세요.',
+  'rail.storage.where': '기록: {where}',
   'start.name': '내 이름',
   'start.name.hint': '피드백 작성자·보기 상태가 이 이름으로 남습니다.',
   'start.name.important': '서버·CLI·실행기와 같은 사람으로 남으려면 Windows 로그인 이름을 적으세요.',
@@ -409,6 +433,18 @@ const en: Dict = {
   'changes.removed': 'Removed sections: {list}', 'changes.title': 'Change log', 'changes.role': 'One entry per save: who changed what, from which feedback.', 'changes.empty': 'No changes yet.', 'changes.fb': '{n} feedback applied', 'changes.sections': 'Sections: {list}', 'changes.open': 'Open', 'changes.diff': 'What changed', 'changes.external': 'External edit',
   'help.title': 'Shortcuts', 'help.j': 'Next section', 'help.k': 'Previous section', 'help.o': 'Toggle current section', 'help.e': 'Edit current section', 'help.c': 'Feedback on current section', 'help.slash': 'Find', 'help.f': 'Feedback panel', 'help.num': 'Depth 1·2·3 / 0 = all', 'help.q': 'This help', 'help.esc': 'Close',
   'time.now': 'just now', 'time.min': '{n} min ago', 'time.hour': '{n} h ago', 'err.generic': 'Something went wrong: {msg}', 'close': 'Close',
+  'start.where2': 'Feedback and history stay in a "records home" outside the docs folder (you pick it next). Documents never leave this PC.',
+  'data.q': 'Where should the records go?', 'data.lead': 'Feedback, history and Claude job records go to a "records home" outside the docs folder, so nothing appears in the docs folder and other programs working there (another Claude session, say) are not distracted. An empty folder such as "docbench-records" next to this HTML (in your own, unshared and unsynced space) is easy to manage ("New folder" in the picker).',
+  'data.q.hasInside': 'This docs folder has records inside (.docbench)', 'data.lead.hasInside': 'Moving them to a records home leaves the docs folder clean (copied, verified, then removed inside). Keep them inside if your team shares them via git.',
+  'data.home.pick': 'Choose a records home', 'data.home.use': 'Keep records in "{name}"', 'data.home.other': 'Choose another home',
+  'data.home.notEmpty': 'The folder "{name}" has other files. Use it as the records home? (Only one folder per docs folder and a marker file are added.)',
+  'data.inside': 'Keep inside the docs folder (.docbench — to share via git)', 'data.inside.keep': 'Keep using them inside',
+  'data.move': 'Move to a records home', 'data.move.doing': 'Moving records…', 'data.move.busy': 'A runner or server is using these records. Stop it first (docbench runner --stop).',
+  'data.move.exists': 'The records home already has records with this name. Choose another home or keep them inside.', 'data.move.verify': 'The moved copy differs from the original ({path}) — the inside records were left in place.',
+  'data.note': 'The chosen home is remembered; next time it opens without asking.', 'data.note.file': 'Opened as a file, folders are not remembered, so you pick both again next time (the picker opens where you left off). Open it from a dashboard address if you use it often.',
+  'data.bad.same': 'That is the docs folder itself. Choose a separate, empty folder.', 'data.bad.full': 'Every "{name}" slot in this records home belongs to another docs folder. Choose another home.', 'data.move.removeFail': 'Records were moved to the home, but the inside copy (.docbench) could not be fully removed ({msg}). Close the program holding the files and press "Move" again to finish.', 'data.bad.insideDocs': 'A folder inside the docs folder cannot be the records home (it would show up as documents). Choose one outside.',
+  'data.bad.holdsDocs': 'A folder containing the docs folder cannot be the records home. Create an empty folder such as "docbench-records" and choose it.',
+  'rail.storage.where': 'Records: {where}',
   'start.title': 'Open a docs folder', 'start.lead': 'Fold Markdown docs by heading depth, leave feedback on sections, and edit them in place.',
   'start.where': 'Feedback and history stay in {dir} inside that folder, so Claude Code in your terminal picks them up as-is. Documents never leave this PC.',
   'start.name': 'Your name', 'start.name.hint': 'Feedback author and view state are kept under this name.', 'start.name.need': 'Enter your name first — feedback author and folds are kept under it.', 'start.forget': 'Opened as a file, the folder is not remembered (other local HTML files in this browser could reuse it).', 'start.open': 'Open folder', 'start.reopen': 'Reopen — {name}', 'start.readonly': 'Read only',
@@ -419,6 +455,8 @@ const en: Dict = {
 };
 
 const DICTS: Record<string, Dict> = { ko, en };
+/** 시험용: 두 말의 낱말이 같은지 */
+export const dictKeys = (): Record<string, string[]> => ({ ko: Object.keys(ko).sort(), en: Object.keys(en).sort() });
 
 export type T = (key: string, vars?: Record<string, unknown>) => string;
 

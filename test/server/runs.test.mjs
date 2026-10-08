@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { promises as fs } from 'node:fs';
+import { promises as fs, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
@@ -330,4 +330,25 @@ test('대시보드에 끼우는 처리기는 Claude 작업 기본 끔 (runs: tru
   assert.ok(!sess.permissions.includes('assistant.run'));
   assert.equal((await fetch(base + '/runs/status')).status, 404);
   await assert.rejects(fs.stat(path.join(dir, '.docbench/runners')).then((st) => { if (st.isDirectory()) return fs.readdir(path.join(dir, '.docbench/runners')).then((n) => { if (!n.length) throw new Error('empty'); }); }));
+});
+
+test('기록을 문서 폴더 밖에 두면(기본) Claude 작업도 그 기록으로 — 문서 폴더에는 문서 말고 아무것도 생기지 않는다', async (t) => {
+  env(t, { FAKE_CLAUDE_RUN: 'edit' });
+  const dir = await tempWorkspace(null, { assistant: { command: [process.execPath, fakeClaude], timeoutSec: 30 } });
+  await fs.rm(path.join(dir, '.docbench'), { recursive: true });
+  const listAll = async (d, pre = '') => (await Promise.all((await fs.readdir(d, { withFileTypes: true })).map((e) => (e.isDirectory() ? listAll(path.join(d, e.name), pre + e.name + '/') : [pre + e.name])))).flat().sort();
+  const before = await listAll(dir);
+  const s = await startServer({ root: dir, port: 0, pcConfigFile: pcFileFor(dir) });
+  t.after(async () => { await s.close(); await fs.rm(s.ws.dir, { recursive: true, force: true }); await rm(dir); });
+  assert.equal(s.ws.dataMode, 'outside');
+  assert.ok(!s.ws.dir.startsWith(dir + path.sep));
+  const base = `http://127.0.0.1:${s.port}/api`;
+  const api = async (method, p, body) => { const r = await fetch(base + p, { method, headers: { ...(method !== 'GET' ? { 'X-DocBench': '1' } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined }); const tx = await r.text(); return { status: r.status, data: tx ? JSON.parse(tx) : null }; };
+  assert.equal((await api('GET', '/session')).data.workspace.data.mode, 'outside');
+  const f = (await api('POST', '/feedback', { docId: doc, target: { kind: 'section', path: key.split(' › '), heading: '배포 전 확인' }, body: '롤백 기준', waitingOn: 'assistant' })).data;
+  const r = await api('POST', '/runs', { kind: 'handoff', feedbackIds: [f.id] });
+  const end = await until(async () => { const x = (await api('GET', '/runs')).data.items.find((y) => y.id === r.data.id); return x && x.state === 'done' ? x : null; }, 8000);
+  assert.equal(end.summary.edited, 1);
+  assert.ok(existsSync(path.join(s.ws.dir, 'runs', r.data.id + '.json')), '작업 파일은 기록 폴더에');
+  assert.deepEqual(await listAll(dir), before, '문서 폴더의 파일 목록은 그대로(문서 내용만 바뀜)');
 });

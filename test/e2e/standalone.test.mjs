@@ -348,3 +348,70 @@ test('브라우저 CP949 역표 = iconv-lite cp949 (BMP 전체·2바이트 전�
   pairs.forEach(([a, b], i) => { const exp = iconv.decode(Buffer.from([a, b]), 'cp949'); if (exp.length === 1 && exp !== '�' && exp !== dec[i]) ddiff.push(`${a.toString(16)}${b.toString(16)} iconv=${exp} browser=${dec[i]}`); });
   assert.deepEqual(ddiff.slice(0, 20), [], `다르게 읽는 쌍 ${ddiff.length}개`);
 });
+
+test('기록 보관함: 예전 안쪽 기록은 옮기고, 다음 문서 폴더는 묻지 않고 보관함에 — 문서 폴더에는 아무것도 생기지 않는다', async (t) => {
+  const { page, errors } = await newPage(t, base + '?pick&lang=ko');
+  await page.locator('.db-start').waitFor();
+  const name = await seed(page);   // 예제처럼 .docbench/config.json 이 안에 있다
+  const home = 'home-' + Math.random().toString(36).slice(2, 8);
+  const ls = (p) => page.evaluate(async (p) => { let d = await navigator.storage.getDirectory(); for (const s of p.split('/').filter(Boolean)) d = await d.getDirectoryHandle(s); const out = []; for await (const k of d.keys()) out.push(k); return out.sort(); }, p);
+  await page.evaluate(async ([n, h]) => {
+    const root = await navigator.storage.getDirectory();
+    const d = await root.getDirectoryHandle(n);
+    const hh = await root.getDirectoryHandle(h, { create: true });
+    window.__start = window.DocBenchStandalone.startWith(document.getElementById('app'), d, '김철수', async () => hh);
+  }, [name, home]);
+  const step = page.locator('.db-start-data');
+  await step.waitFor();
+  assert.match(await step.innerText(), /예전 기록/);
+  await step.getByRole('button', { name: '기록 보관함으로 옮기기' }).click();
+  await page.waitForSelector('.db-sec');
+  assert.ok(!(await ls(name)).includes('.docbench'), '안쪽 기록은 옮긴 뒤 지운다');
+  assert.deepEqual(await ls(home), ['docbench-home.json', name]);
+  assert.ok((await ls(home + '/' + name)).includes('config.json'), '설정도 옮긴다');
+  assert.ok((await ls(home + '/' + name)).includes('docbench-data.json'));
+  assert.match(await page.locator('.db-rail-store').innerText(), new RegExp(`기록: ${home}/${name}`));
+  // 화면에서 단 피드백은 보관함 아래로
+  const fid = await page.evaluate(async () => (await window.DocBenchStandalone.adapters.feedback.create({ docId: 'docs/운영-런북.md', target: { kind: 'doc' }, body: '확인' })).id);
+  assert.ok((await ls(home + '/' + name + '/feedback')).includes(fid + '.json'));
+  assert.ok(!(await ls(name)).includes('.docbench'));
+
+  // 같은 브라우저에서 다른 문서 폴더: 기억한 보관함으로 묻지 않고 연다
+  const name2 = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const n = 'ws2-' + Math.random().toString(36).slice(2, 8);
+    const d = await root.getDirectoryHandle(n, { create: true });
+    const w = await (await d.getFileHandle('메모.md', { create: true })).createWritable(); await w.write('# 메모\n\n본문\n'); await w.close();
+    return n;
+  });
+  await page.evaluate(async (n) => {
+    const d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
+    window.__start2 = window.DocBenchStandalone.startWith(document.getElementById('app'), d, '김철수', async () => { throw new Error('묻지 않아야 한다'); });
+  }, name2);
+  await page.waitForFunction((n) => document.title.startsWith(n), name2);
+  await page.waitForSelector('.db-sec');
+  assert.deepEqual(await ls(name2), ['메모.md'], '문서 폴더에는 문서만');
+  assert.deepEqual((await ls(home)).sort(), ['docbench-home.json', name, name2].sort());
+
+  // 이름이 같은 다른 문서 폴더(다른 곳의 '기획') — 문서 목록이 달라 보관함에서 '기획 (2)' 로 따로, 다시 열면 각자 제 기록으로
+  const mk = (parent, files) => page.evaluate(async ([parent, files]) => {
+    const root = await navigator.storage.getDirectory();
+    const d = await (await root.getDirectoryHandle(parent, { create: true })).getDirectoryHandle('기획', { create: true });
+    for (const f of files) { const w = await (await d.getFileHandle(f, { create: true })).createWritable(); await w.write('# ' + f + '\n\n본문\n'); await w.close(); }
+  }, [parent, files]);
+  const pa = 'pa-' + Math.random().toString(36).slice(2, 6), pb = 'pb-' + Math.random().toString(36).slice(2, 6);
+  await mk(pa, ['가.md', '나.md', '다.md']);
+  await mk(pb, ['라.md', '마.md', '바.md']);
+  const openSub = async (parent) => {
+    await page.evaluate(async (parent) => {
+      const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(parent)).getDirectoryHandle('기획');
+      window.__s = window.DocBenchStandalone.startWith(document.getElementById('app'), d, '김철수', async () => { throw new Error('묻지 않아야 한다'); });
+    }, parent);
+    await page.waitForFunction(() => /기록: /.test(document.querySelector('.db-rail-store')?.textContent || '') && window.DocBenchStandalone.adapters);
+    return page.evaluate(() => document.querySelector('.db-rail-store').textContent);
+  };
+  assert.match(await openSub(pa), new RegExp(`${home}/기획$`));
+  assert.match(await openSub(pb), new RegExp(`${home}/기획 \\(2\\)$`));
+  assert.match(await openSub(pa), new RegExp(`${home}/기획$`), '다시 열면 제 기록');
+  assert.deepEqual(errors, []);
+});

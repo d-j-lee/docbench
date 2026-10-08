@@ -146,8 +146,8 @@ export function localEngineFile(ws, root, kind) {
  * 이 PC 에서 그 폴더의 엔진이 돌고 있나. 셋 다 맞아야 한다:
  *  - 이 PC 의 기록이 있고 그 pid 가 살아 있다
  *  - 기록이 이번 부팅 뒤의 것이다 (꺼짐·재부팅으로 남은 기록의 pid 를 다른 프로그램이 다시 받았을 수 있다)
- *  - 문서 폴더의 내 심장 박동이 최근이고 같은 pid 다 (엔진은 4초마다 적는다)
- * @param {{ pcConfigFile: string, config: any }} ws @param {string} root @param {'runner' | 'server'} kind
+ *  - 기록 폴더의 내 심장 박동이 최근이고 같은 pid 다 (엔진은 4초마다 적는다)
+ * @param {{ pcConfigFile: string, config: any, dir: string }} ws @param {string} root @param {'runner' | 'server'} kind
  * @returns {Promise<any | null>}
  */
 export async function localEngine(ws, root, kind) {
@@ -157,7 +157,7 @@ export async function localEngine(ws, root, kind) {
   if (!isFinite(started) || started < Date.now() - os.uptime() * 1000 - 5000) return null;
   const id = engineId(ws, kind);
   if (rec.id !== id) return null;
-  const beat = /** @type {any} */ (await readJson(path.join(root, '.docbench', 'runners', core.runnerFileName(id))));
+  const beat = /** @type {any} */ (await readJson(path.join(ws.dir, 'runners', core.runnerFileName(id))));
   return beat && core.runnerAlive(beat) && beat.id === id && beat.pid === rec.pid ? rec : null;
 }
 
@@ -711,8 +711,9 @@ export class RunEngine {
  * 이 폴더의 실행기 심장 박동들
  * @param {string} root
  */
-export async function listRunners(root) {
-  const dir = path.join(root, '.docbench', 'runners');
+/** 기록 폴더의 실행기 심장 박동들 (보여 주기·고르기용 — 남이 꾸밀 수 있다) @param {string} dataDir 기록 폴더(Workspace.dir) */
+export async function listRunners(dataDir) {
+  const dir = path.join(dataDir, 'runners');
   const out = [];
   for (const n of await fs.readdir(dir).catch(() => [])) {
     if (!n.endsWith('.json')) continue;

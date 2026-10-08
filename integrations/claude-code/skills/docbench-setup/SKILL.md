@@ -6,7 +6,7 @@ description: DocBench(사람과 AI 가 같은 마크다운 문서를 접어 보�
 # DocBench 붙이기
 
 DocBench 는 문서 폴더의 `.md` 를 제목 깊이별로 접어 보고, 섹션·문구에 피드백을 달고, 섹션 단위로 고치는 작업대다.
-피드백·이력은 문서 옆 `.docbench/` 에 사람이 읽는 파일로 남는다. Claude 는 두 길로 처리한다: 화면 아래 **Claude 작업**(백그라운드 `claude -p`, 모델·노력 선택, 진행 로그 — 읽기만 하고 반영은 DocBench 가 판 비교로) 또는 터미널의 Claude Code 가 `docbench` CLI 로.
+피드백·이력은 사람이 읽는 파일로 **기록 폴더**에 남는다 — 기본은 문서 폴더 밖(기록 보관함/<문서 폴더 이름>, 문서 폴더에는 문서만), 팀이 git 으로 함께 쓰면 문서 폴더 안 `.docbench/`. Claude 는 두 길로 처리한다: 화면 아래 **Claude 작업**(백그라운드 `claude -p`, 모델·노력 선택, 진행 로그 — 읽기만 하고 반영은 DocBench 가 판 비교로) 또는 터미널의 Claude Code 가 `docbench` CLI 로.
 원본: https://github.com/d-j-lee/docbench (MIT). 세부 계약은 받은 사본의 `docs/PORTING.md`·`docs/openapi.yaml` 이 정본이다 — 이 스킬과 다르면 그 버전의 문서를 따른다.
 
 ## 0. 먼저 지킬 것
@@ -46,7 +46,7 @@ DocBench 는 문서 폴더의 `.md` 를 제목 깊이별로 접어 보고, 섹�
 - **E 가 못 하는 것**: 넘기기 명령 실행(요청함 파일만 남김), 파일 감시(몇 초 간격 확인 + 창으로 돌아오면 바로), 바깥 주소 그림. 사용자가 "넘기기 때 터미널에 입력"을 원하면 E 는 빠진다.
 - **E 의 Claude 작업**은 PC 마다 **실행기**(`docbench runner`, Node 20.11+)를 한 번 켜 둬야 한다 — 화면의 Claude 작업 창이 Claude Code 에 붙여 넣을 설치 문구(CLI 파일 하나 받기·지문 확인·켜기·로그인 때 자동)를 준다. B·C 는 서버가 직접 띄우므로 따로 할 일이 없다.
 - E 는 **보안 문맥**에서만 쓰기가 된다(`file://`·`http://localhost`·https). `http://사내호스트` 는 읽기만 → B. 브라우저는 엣지·크롬.
-- 모든 방식이 같은 `.docbench/` 를 쓰므로 나중에 바꿔도 피드백은 이어진다.
+- 모든 방식이 같은 기록 폴더를 쓰므로 나중에 바꿔도 피드백은 이어진다.
 
 ## 3. DocBench 받기 — 버전을 고정해 대시보드 안에
 
@@ -70,8 +70,13 @@ DocBench 는 문서 폴더의 `.md` 를 제목 깊이별로 접어 보고, 섹�
 node vendor\docbench\bin\docbench.mjs init "D:\work\docs"
 ```
 
-- `.docbench\config.json`(함께 쓰는 설정, 커밋 대상): 그룹·문서 제목·처음 펼칠 깊이·신뢰 표시. 예: 사본의 `examples/sample-workspace/.docbench/config.json`.
-- **이 PC 의 설정** `%LOCALAPPDATA%\docbench\config.json`(문서 폴더 밖, macOS `~/Library/Application Support/docbench/config.json`, Linux `~/.config/docbench/config.json`, `DOCBENCH_HOME` 으로 옮김): 실행 명령 `assistant`·`notify.command` 와 이름 `user`. **실행 명령·이름은 여기에만** — 문서 폴더 `config.json` 에 적으면 무시하고 경고한다(git·OneDrive·공유 폴더로 퍼지는 폴더에 누가 명령을 넣어 남의 PC 에서 돌리지 못하게). 맨 위 값이 기본, 폴더별은 `"workspaces": { "D:/work/docs": { "notify": { "command": [...] } } }`. `docbench status` 가 그 파일 위치를 보여 준다. 바꾸면 `serve`·대시보드를 다시 시작한다.
+- **기록 자리를 정한다**(사용자에게 한 번 묻는다 — 되돌리려면 옮겨야 하는 선택):
+  - 기본(권장): 문서 폴더 **밖** — `init` 이 기록 보관함(이 PC 의 설정 `dataHome`, 없으면 `%LOCALAPPDATA%\docbench\data`) 아래 `<문서 폴더 이름>\` 에 만든다. 문서 폴더에는 아무것도 생기지 않아 대시보드·터미널의 다른 Claude 세션이 헷갈리지 않는다. 보관함을 사람이 보기 쉬운 곳에 두려면 먼저 이 PC 의 설정에 `"dataHome": "C:/tools/docbench/docbench-기록"`(단일 HTML 을 함께 쓰면 그 화면에서 고를 보관함과 같은 곳).
+  - 팀이 git 으로 기록을 함께 쓸 때: `init "<문서 폴더>" --inside`(문서 폴더 안 `.docbench\`). 그 폴더가 대시보드 저장소 안이면 커밋 정책도 묻는다.
+  - 예전 판이 만든 `.docbench\` 가 이미 있으면 그대로 안을 쓴다(밖으로 옮기려면 단일 HTML 의 "보관함으로 옮기기").
+  - `docbench status` 가 "기록:" 자리를 보여 준다. §7 기록에 적는다.
+- 기록 폴더의 `config.json`(함께 쓰는 설정): 그룹·문서 제목·처음 펼칠 깊이·신뢰 표시. 예: 사본의 `examples/sample-workspace/.docbench/config.json`.
+- **이 PC 의 설정** `%LOCALAPPDATA%\docbench\config.json`(문서 폴더 밖, macOS `~/Library/Application Support/docbench/config.json`, Linux `~/.config/docbench/config.json`, `DOCBENCH_HOME` 으로 옮김): 실행 명령 `assistant`·`notify.command` 와 이름 `user`. **실행 명령·이름은 여기에만** — 문서 폴더 `config.json` 에 적으면 무시하고 경고한다(git·OneDrive·공유 폴더로 퍼지는 폴더에 누가 명령을 넣어 남의 PC 에서 돌리지 못하게). 맨 위 값이 기본, 폴더별은 `"workspaces": { "D:/work/docs": { "notify": { "command": [...] }, "data": "<기록 폴더>" } }`(`data` 는 `docbench link`·실행기가 적는다). `docbench status` 가 그 파일 위치를 보여 준다. 바꾸면 `serve`·대시보드를 다시 시작한다.
 - `init --claude` 는 문서 폴더에 피드백 스킬을 복사한다 — 터미널 Claude 가 **문서 폴더에서 시작할 때만** 쓴다(§5).
 
 ### C. Node 백엔드에 끼우기
@@ -104,7 +109,7 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 - **순서**: 처리기는 요청 본문을 직접 읽는다 — `express.json()` 이 먼저 읽으면 PUT·POST 가 응답 없이 멈춘다. 압축은 실시간 알림(SSE)을 모아 버린다. 대시보드 순서가 "압축 → 파서 → 인증" 이면 위처럼 인증을 함수로 꺼내 DocBench 경로 안에서 부른다.
 - `app.use('/docbench/api', …)` 로 걸지 않는다 — Express 가 `req.url` 에서 그 경로를 떼어 처리기가 못 알아본다.
 - 브라우저 주소의 호스트 이름이 `localhost`·`127.0.0.1` 이 아니면 `allowHosts` 에 넣는다(DNS rebinding 막기용 Host 검사).
-- 대시보드의 시험이 서버를 띄우면 이제 DocBench 도 실제 문서 폴더로 뜬다(`.docbench/state.json` 등을 쓴다). 시험용 폴더를 쓰게 하거나 그 사실을 기록한다.
+- 대시보드의 시험이 서버를 띄우면 이제 DocBench 도 실제 문서 폴더로 뜬다(그 기록 폴더의 `state.json` 등을 쓴다). 시험용 폴더를 쓰게 하거나 그 사실을 기록한다.
 - **Claude 작업**: 처리기는 **기본 끔**. 이 PC 사람 한 명이 쓰는 대시보드면 `createDocBenchHandler(ws, { …, runs: true })` 로 켠다(`claude` 가 PATH 나 이 PC 의 설정 `assistant.command` 에 있어야). 여러 사람이 붙는 대시보드면 켜지 않는다 — 서버 PC 의 claude 가 그 계정·구독으로 돈다. 켰는지·끌지는 사용자에게 묻는다.
 
 ### B. 곁 프로세스 + 프록시 (Node 아닌 백엔드)
@@ -140,10 +145,10 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 <iframe src="/docbench/?lang=ko" title="문서 작업대" style="border:0;width:100%;height:100%"></iframe>
 ```
 
-- 사람이 처음에 이름을 적고 "폴더 열기"로 문서 폴더를 고른다. 같은 출처 iframe 이어야 한다(다른 출처는 폴더 고르기가 막힌다).
-- 파일로 바로 열면(`file://`) 폴더를 기억하지 않는다 — 같은 브라우저로 연 다른 로컬 HTML 이 꺼내 쓸 수 있어서. 대시보드가 내주면 기억한다.
+- 사람이 처음에 이름을 적고 "폴더 열기"로 문서 폴더를, 이어서 **기록 보관함**(문서 폴더 밖 빈 폴더)을 고른다. 서버·CLI 와 같은 보관함을 쓰게 하려면 이 PC 의 설정 `dataHome` 과 같은 폴더를 고르라고 안내한다. 같은 출처 iframe 이어야 한다(다른 출처는 폴더 고르기가 막힌다).
+- 파일로 바로 열면(`file://`) 두 폴더를 기억하지 않는다 — 같은 브라우저로 연 다른 로컬 HTML 이 꺼내 쓸 수 있어서. 대시보드가 내주면 기억한다.
 - 문서 속 바깥 주소 그림은 보이지 않는다(그림 주소로 새는 길 차단). `data:` 그림만.
-- Claude 작업: 화면 아래 Claude 작업 창의 설치 문구를 그 PC 의 Claude Code 에 붙여 넣는다(실행기 = 그 PC·그 폴더 하나). 이 스킬로 붙이는 중이면 그 문구의 단계를 대신 해도 된다 — CLI 는 사본의 `release/docbench.mjs`(받기·지문 확인 대신 복사), 켜기 `node <위치>/docbench.mjs runner "<문서 폴더>" --detach`, 로그인 때 자동은 묻고 `--startup on`.
+- Claude 작업: 화면 아래 Claude 작업 창의 설치 문구를 그 PC 의 Claude Code 에 붙여 넣는다(실행기 = 그 PC·그 폴더 하나). 이 스킬로 붙이는 중이면 그 문구의 단계를 대신 해도 된다 — CLI 는 사본의 `release/docbench.mjs`(받기·지문 확인 대신 복사), 켜기 `node <위치>/docbench.mjs runner "<문서 폴더>" --data "<보관함>/<문서 폴더 이름>" --detach`(기록 짝을 이 PC 의 설정에 적는다 — 기록을 문서 폴더 안에 두기로 했으면 `--data` 없이), 로그인 때 자동은 묻고 `--startup on`.
 
 ### A. iframe 만
 
@@ -152,8 +157,8 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 ## 5. 터미널의 Claude 와 잇기
 
 - **피드백 스킬이 터미널 Claude 에 보이게**: 플러그인(`claude plugin install docbench@docbench`)이면 어디서든 보인다. 아니면 터미널 Claude 가 **시작하는 폴더**의 `.claude/skills/docbench-feedback/` 또는 사용자 폴더(`%USERPROFILE%\.claude\skills\`)에 사본의 `integrations/claude-code/skills/docbench-feedback` 를 둔다. 이름은 `/docbench-feedback`(플러그인은 `/docbench:docbench-feedback` 도). 실제로 터미널에서 불러지는지 확인한다.
-- **작업 폴더 찾기**: CLI 는 현재 폴더에서 위로 `.docbench` 를 찾는다. 터미널이 문서 폴더 밖에서 시작하면 그 시작 환경에 `DOCBENCH_ROOT=<문서 폴더>` 를 넣고, 시작부를 못 고치면 대시보드 `CLAUDE.md` 에 "CLI 는 `node vendor/docbench/bin/docbench.mjs --root <문서 폴더 상대 경로> …`" 한 줄을 남긴다(없으면 종료 코드 2).
-- **"Claude에게 넘기기"** 는 `.docbench/inbox/req-*.json` 을 남긴다. 알리는 방법:
+- **작업 폴더 찾기**: CLI 는 현재 폴더에서 위로 문서 폴더를 찾는다(기록 짝·`.docbench` 가 있는 곳, 또는 기록 폴더 안이면 그 표식의 문서 폴더). 기록 폴더는 스스로 찾는다(`init` 으로 만든 것·`link` 로 이은 것). 터미널이 문서 폴더 밖에서 시작하면 그 시작 환경에 `DOCBENCH_ROOT=<문서 폴더>` 를 넣고, 시작부를 못 고치면 대시보드 `CLAUDE.md` 에 "CLI 는 `node vendor/docbench/bin/docbench.mjs --root <문서 폴더 상대 경로> …`" 한 줄을 남긴다(없으면 종료 코드 2).
+- **"Claude에게 넘기기"** 는 기록 폴더 `inbox/req-*.json` 을 남긴다. 알리는 방법:
   1. 그대로: 사람이 터미널에서 `/docbench-feedback` (기본, E 는 이것만).
   2. **대시보드가 Claude 터미널에 입력을 밀어 넣을 수 있으면**(B·C) 그 API 를 부르는 작은 스크립트를 이 PC 의 설정 `workspaces["<문서 폴더>"].notify.command`(배열, 셸 없이 실행)에 건다. 알아 둘 것: 현재 폴더 = 문서 폴더(상대 경로는 거기 기준) · 환경 변수 = 서버 프로세스의 것(C 는 대시보드 환경, B 는 곁 프로세스 환경 — 대시보드 주소·인증 값은 곁 프로세스를 띄울 때 넘긴다) + `DOCBENCH_REQUEST`·`DOCBENCH_ROOT` · 한 번에 하나만 돌고 출력은 `inbox/req-*.json.log` · 터미널 API 가 Enter 를 붙이는지(`\r` 필요 여부). 그 API 는 이제 자동 입력 통로이므로 다른 사이트가 부를 수 없게(전용 헤더 검사 등) 되어 있는지 확인한다.
   3. 무인 처리(`claude -p` 를 명령으로): 사본 `docs/PORTING.md` §5. 피드백을 신뢰하는 사람만 다는 폴더에서만.
