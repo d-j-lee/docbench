@@ -131,7 +131,7 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 - 화면은 내 것이면 지금 표시 이름(없으면 "나"), 남의 것은 적힌 이름, 이름이 없으면 "사용자 xxxx"(계정 끝 4자)로 보인다.
 - 계정은 구분이지 인증이 아니다(보안 문서). CLI 는 `assistant:Claude` 로, 사람이 쓰면 `--as human:<이름>`(계정 없이 이름만) 으로 적는다.
 - **실행기 짝**: 단일 HTML 의 연결 문구가 `docbench link … --owner <계정>` 으로 이 PC 의 설정 `workspaces[<문서 폴더>].owners`(최대 20)에 계정을 적는다(`core.safeAccountId` — 모양이 틀리면 고쳐 쓰지 않고 거부).
-  엔진은 그것을 15초마다 다시 읽어 심장 박동에 `owners` 로 싣는다. 화면의 `pickRunner`: 사람이 고른 것 → **내 것**(`runnerIsMine`: `owners` 에 내 계정이 있거나, 엔진의 사용자 이름이 내 계정·표시 이름과 같다 — 대소문자 무시)
+  엔진은 그것을 15초마다 다시 읽어 심장 박동에 `owners` 로 싣는다. 화면의 `pickRunner`: 사람이 고른 것 → **내 것**(`runnerIsMine`: `owners` 에 내 계정이 있거나, 엔진의 사용자 이름이 내 계정과 같다(예전 판의 이름 = 계정) — 대소문자 무시. 표시 이름으로는 가리지 않는다)
   중 앱·실행기 먼저(서버는 뒤), Claude 를 쓸 수 있는 것, 최근 순. 남의 것은 저절로 고르지 않는다(D54).
 
 ## 큰 폴더: 펼친 폴더만 읽는다 (D64)
@@ -193,14 +193,14 @@ CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적�
 
 이 PC 에 하나 도는 서비스가 여러 작업 공간과 그 Claude 작업을 맡는다. 폴더마다 `serve`·`runner` 를 켜지 않는다(둘은 예전 연결을 위해 남는다).
 
-- **켜기**: `docbench app`(앞에서) · `--detach`(뒤에서, 로그 `logs/app.log`) · `--status` · `--stop` · `--open`(열쇠 붙은 주소로 브라우저) · `--startup on`(Windows 시작프로그램 `DocBench-app.cmd`) · `--shortcut on`(시작 메뉴 `DocBench.cmd`) · `--allow-origin <출처>`.
+- **켜기**: `docbench app`(앞에서) · `--detach`(뒤에서, 로그 `logs/app.log`) · `--status` · `--stop` · `--open`(한 번 쓰는 열기 코드 `?c=` 붙은 주소로 브라우저 — 열쇠는 명령 줄·로그에 싣지 않는다) · `--startup on`(Windows 시작프로그램 `DocBench-app.cmd`) · `--shortcut on`(시작 메뉴 `DocBench.cmd`) · `--allow-origin <출처>`.
   `127.0.0.1:4317`(쓰이고 있으면 다음 포트, 10개까지 — `--port` 를 주면 그 포트만). 켜진 앱은 이 PC 의 설정 폴더 `app.json`(pid·포트·주소·판)에 적힌다. `--detach` 는 판이 다른 앱이 켜져 있으면 새 판으로 다시 켠다.
 - **작업 공간 목록**: 이 PC 의 설정 `workspaces[<폴더>]` 중 `added`(앱에서 더함) 또는 `owners`(`docbench link` 로 이음 — 단일 HTML 의 연결 문구). 설정 파일이 바뀌면(5초마다 확인) 새 것은 켜고 빠진 것은 끈다.
   작업 공간마다 `Workspace`(더한 것은 보관함에 기록을 만들고, 이은 것은 찾기만) + `RunEngine`(kind `app`) + 처리기 `createDocBenchHandler(ws, { base: '/api/w/<id>', ui: false, engine, allowOrigins })`. id 는 폴더 경로 sha1 앞 12자(주소에 경로를 싣지 않는다).
 - **앱 API**(`/api/app/*`): `info`(판·나·허용 출처·작업 공간과 Claude 상태), `browse?path=`(폴더 이름만 — 시작점은 드라이브·홈·문서·바탕 화면·OneDrive), `POST workspaces`(더하기, 아래 "범위와 합치기"), `DELETE workspaces/<id>`(앱에서 빼기 — `added`·`owners` 만 지우고 기록과 기록 짝은 그대로), `PUT me`, `POST shutdown`.
 - **화면 파일**: `scripts/build.mjs` 가 `src/app-shell.ts` 를 `dist/app.js` 로 묶는다. 저장소 설치본은 `server/app-assets.mjs` 가 `dist/`·`server/static/host.js` 에서 읽고, CLI 파일 하나(`release/docbench.mjs`)는 빌드가 그 모듈을 묶어 넣은 글(`dist/app-assets.bundle.mjs`)로 바꿔 끼운다 — 파일 하나만 받아도 앱 화면이 뜬다.
 - **앱 화면**(`/`): 작업 공간 메뉴(바꾸기·폴더 추가·빼기·시작하기). 폴더 추가는 고르기 창 대신 이 PC 의 폴더를 둘러보는 창(드라이브도 바로 — 펼친 곳만 읽는다). 작업 공간은 rest 어댑터(`/api/w/<id>`, SSE 실시간). 작업 공간이 없으면 시작하기.
-  사람은 이 PC 의 로그인, 기록은 이 PC 의 기록 보관함(`locateData`) — 묻지 않는다. 열쇠는 처음 연 주소의 `?t=` 를 이 출처의 localStorage 에 두고 주소에서 지운다(D70, 보안 문서). 열쇠가 없거나 틀리면 여는 방법(`docbench app --open`)을 보여 준다.
+  사람은 이 PC 의 로그인, 기록은 이 PC 의 기록 보관함(`locateData`) — 묻지 않는다. 열쇠는 열기 코드(`?c=` → `POST /api/app/redeem`)나 앱이 맞다고 한 `?t=` 로 받아 이 출처의 localStorage 에 두고 주소에서 지운다(D70, 보안 문서). 같은 폴더를 동시에 준비하면 하나만 준비하고 기다리며(엔진 하나), 이 PC 의 설정·기록 보관함을 품는 폴더는 더하지 않는다. 열쇠가 없거나 틀리면 여는 방법(`docbench app --open`)을 보여 준다.
 
 **대시보드 탭** (`server/static/host.js` · `/embed`, D68) — 대시보드가 어떤 언어든 백엔드를 고치지 않고 탭에 꽂는다.
 

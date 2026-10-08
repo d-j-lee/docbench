@@ -67,11 +67,21 @@ test('앱 화면: 열쇠 없이는 여는 방법 → 처음 연 주소의 열쇠
   await page.locator('.db-locked h1', { hasText: 'DocBench 앱 열기' }).waitFor();
   assert.match(await page.locator('.db-locked pre').innerText(), /app --open/);
 
-  await page.goto(app.openUrl + '&lang=ko');
+  // docbench app --open 은 한 번 쓰는 열기 코드로 연다 — 열쇠가 명령 줄·주소·기록에 남지 않는다
+  const link = app.openLink();
+  await page.goto(link + '&lang=ko');
   await page.waitForSelector('.db-sec');
-  assert.ok(!page.url().includes(app.token), '주소에서 열쇠를 지운다');
+  assert.ok(!page.url().includes('c='), '주소에서 코드를 지운다');
   assert.equal(await page.evaluate(() => localStorage.getItem('docbench:app:key')), app.token);
   assert.deepEqual((await page.context().cookies()).map((c) => c.name), [], '쿠키 없음');
+  // 아무 사이트가 틀린 열쇠(?t=)로 열어도 기억한 열쇠를 지우지 않는다(로그아웃시키지 못한다)
+  await page.goto(base + '/?t=' + 'a'.repeat(48) + '&lang=ko');
+  await page.waitForSelector('.db-sec');
+  assert.equal(await page.evaluate(() => localStorage.getItem('docbench:app:key')), app.token);
+  // 맞는 ?t= 는 받아들이고 주소에서 지운다(손으로 여는 길)
+  await page.goto(app.openUrl + '&lang=ko');
+  await page.waitForSelector('.db-sec');
+  assert.ok(!page.url().includes(app.token));
   await page.locator('.db-toast', { hasText: '아직 작업 공간이 없습니다' }).waitFor();
 
   // 폴더를 더하고(대시보드·CLI 와 같은 API) 다시 열면 그 작업 공간 — 열쇠는 기억한 것으로

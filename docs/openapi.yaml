@@ -302,7 +302,7 @@ paths:
                   permissions: { type: array, items: { enum: [doc.edit, feedback.create, feedback.update, feedback.delete, assistant.propose, assistant.notify, assistant.run] } }
                   assistant: { type: [object, 'null'], properties: { name: { type: string } } }
                   notify: { type: [object, 'null'], properties: { label: { type: string } } }
-                  identity: { enum: [pc, host], description: '사람이 어디서 왔나. pc = 이 PC 의 로그인 — 화면의 "나"에서 표시 이름을 바꾼다(PUT /me). host 또는 없음 = 대시보드 로그인처럼 호스트가 정한 사람 — 이름 바꾸기를 숨긴다. docbench serve·처리기·앱은 pc' }
+                  identity: { enum: [pc, host], description: '사람이 어디서 왔나. pc = 이 PC 의 로그인 — 화면의 "나"에서 표시 이름을 바꾼다(PUT /me). host 또는 없음 = 대시보드 로그인처럼 호스트가 정한 사람 — 이름 바꾸기를 숨긴다. docbench serve·앱은 pc, 대시보드에 끼운 처리기는 기본 host(createDocBenchHandler 의 identity 옵션)' }
                   workspace: { type: object, description: '서버 방식(docbench serve·처리기)만', properties: { root: { type: string, description: 문서 폴더 }, git: { type: boolean }, data: { type: object, properties: { mode: { enum: [inside, outside], description: 'inside = 문서 폴더 안 .docbench, outside = 문서 폴더 밖 기록 폴더(D57)' }, dir: { type: string, description: 기록 폴더 } } } } }
                   features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean }, runs: { type: boolean, description: 'Claude 작업(/runs) — 없거나 false 면 화면이 작업 창을 숨긴다. docbench serve 는 기본 켬(--no-claude 로 끔), 대시보드에 끼우는 처리기는 기본 끔(runs: true 로 켬), 앱은 작업 공간의 엔진이 켜졌으면 켬' }, tree: { type: boolean, description: '펼친 폴더만 읽기(GET /tree) — 없거나 false 면 화면이 manifest.docs 로만 목록을 그린다(예전 방식)' } } }
   /me:
@@ -312,9 +312,11 @@ paths:
       description: |
         이 PC 의 설정(문서 폴더 밖) name 에 적는다 — 문서 폴더의 config.json 에는 적지 않는다. 계정(id)은 그대로다(D63).
         앞뒤 공백을 떼고 60자에서 자른다. name 이 없거나 비면 지워 로그인 이름으로 돌아간다.
+        identity 가 host 인 처리기(대시보드에 끼운 것 — 여러 사람이 붙을 수 있다)는 403 — 웹에서 이 PC 의 설정을 고치지 않는다.
       requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { name: { type: string } } } } } }
       responses:
         '200': { description: 바뀐 나, content: { application/json: { schema: { $ref: '#/components/schemas/Person' } } } }
+        '403': { description: 이 처리기는 이름을 바꾸지 않는다(identity host), content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
   /manifest:
     get:
       tags: [workspace]
@@ -602,6 +604,31 @@ paths:
         '202': { description: 끄는 중, content: { application/json: { schema: { type: object, properties: { ok: { const: true } } } } } }
         '401': { $ref: '#/components/responses/AppUnauthorized' }
         '403': { $ref: '#/components/responses/AppForbidden' }
+  /api/app/open-code:
+    servers: [{ url: 'http://127.0.0.1:4317', description: DocBench 앱 }]
+    post:
+      tags: [app]
+      summary: 한 번 쓰는 열기 주소 (docbench app --open·바로가기)
+      description: 2분 동안 한 번 쓸 수 있는 코드를 실은 화면 주소. 열쇠를 브라우저를 띄우는 명령 줄·방문 기록·로그에 싣지 않으려고 쓴다(D71).
+      security: [{ bearer: [] }]
+      responses:
+        '200': { description: 열기 주소, content: { application/json: { schema: { type: object, required: [url], properties: { url: { type: string, description: 'http://127.0.0.1:<포트>/?c=<코드 32자>' } } } } } }
+        '401': { $ref: '#/components/responses/AppUnauthorized' }
+        '403': { $ref: '#/components/responses/AppForbidden' }
+  /api/app/redeem:
+    servers: [{ url: 'http://127.0.0.1:4317', description: DocBench 앱 }]
+    post:
+      tags: [app]
+      summary: 열기 코드 → 열쇠 (열쇠 없이, 한 번)
+      description: 화면이 주소의 ?c= 를 열쇠와 바꾼다. X-DocBench 헤더가 있어야 하고(교차 출처는 사전 요청에서 막힌다 — CORS 를 열지 않는다), 코드는 한 번만·2분 안에만 맞다.
+      security: [{}]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [code], properties: { code: { type: string, pattern: '^[a-f0-9]{32}$' } } } } }
+      responses:
+        '200': { description: 앱 열쇠, content: { application/json: { schema: { type: object, required: [key], properties: { key: { type: string } } } } } }
+        '400': { description: 코드가 맞지 않거나 지났다, content: { application/json: { schema: { $ref: '#/components/schemas/AppError' } } } }
+        '403': { $ref: '#/components/responses/AppForbidden' }
   /:
     servers: [{ url: 'http://127.0.0.1:4317', description: DocBench 앱 }]
     get:
@@ -609,11 +636,13 @@ paths:
       summary: 앱 화면 껍데기 — 열쇠 없이 (/index.html 도 같다)
       description: |
         비밀이 없는 HTML(화면은 /assets/app.js·/assets/docbench.css — 이것도 열쇠 없이). 서버는 이 주소에서 열쇠를 보지도 싣지도 않고 쿠키도 남기지 않는다.
-        처음 여는 주소 /?t=<열쇠>(docbench app --open·바로가기)의 열쇠는 화면이 이 출처의 localStorage 에 두고 주소에서 지운다(D70). 화면은 그 열쇠로 /api/* 를 부른다.
+        docbench app --open·바로가기는 /?c=<열기 코드>로 연다 — 화면이 /api/app/redeem 으로 열쇠와 바꿔 이 출처의 localStorage 에 두고 주소에서 지운다(D70·D71).
+        손으로 연 /?t=<열쇠> 는 화면이 /api/app/info 로 맞는지 본 뒤에만 기억한다(틀린 열쇠로 기억한 열쇠를 지우지 못하게). 화면은 그 열쇠로 /api/* 를 부른다.
         끼울 수 없다(CSP frame-ancestors 'none').
       security: [{}]
       parameters:
-        - { name: t, in: query, description: '앱 열쇠 — 화면이 읽어 두고 주소에서 지운다', schema: { type: string, pattern: '^[a-f0-9]{32,128}$' } }
+        - { name: c, in: query, description: '한 번 쓰는 열기 코드 — 화면이 열쇠와 바꾸고 주소에서 지운다', schema: { type: string, pattern: '^[a-f0-9]{32}$' } }
+        - { name: t, in: query, description: '앱 열쇠 — 화면이 맞는지 본 뒤 기억하고 주소에서 지운다', schema: { type: string, pattern: '^[a-f0-9]{32,128}$' } }
         - { name: w, in: query, description: 처음 열 작업 공간 id (없으면 지난번 것), schema: { type: string } }
         - { name: scope, in: query, description: "그 작업 공간에서 이 폴더 아래만 — 작업 공간 기준 '/' 경로", schema: { type: string } }
         - { name: lang, in: query, description: 'ko 로 시작하면 한국어, 아니면 영어 (없으면 브라우저 언어)', schema: { type: string } }

@@ -29,6 +29,18 @@ export class Dialogs {
     this.dlg.replaceChildren(content);
     if (!this.dlg.open) { try { this.dlg.showModal(); } catch { this.dlg.setAttribute('open', ''); } }
   }
+  /** 띄워 둔 창(쓰던 피드백 등) 위에 잠깐 묻는다 — 끝나면 앞의 창을 쓰던 그대로 되살린다 */
+  private stack: Node[][] = [];
+  private push(content: HTMLElement): void {
+    if (this.dlg.open && this.dlg.childNodes.length) this.stack.push([...this.dlg.childNodes]);
+    this.show(content);
+  }
+  private pop(): void {
+    const prev = this.stack.pop();
+    if (!prev) { this.close(); return; }
+    this.dlg.replaceChildren(...prev);
+    if (!this.dlg.open) { try { this.dlg.showModal(); } catch { this.dlg.setAttribute('open', ''); } }
+  }
   close(): void { if (this.dlg.open) this.dlg.close(); }
 
   confirm(text: string, ok?: string): Promise<boolean> {
@@ -49,9 +61,9 @@ export class Dialogs {
     const t = this.app.t;
     return new Promise((resolve) => {
       let done = false;
-      const fin = (v: string | null) => { if (done) return; done = true; this.close(); resolve(v); };
+      const fin = (v: string | null) => { if (done) return; done = true; this.pop(); resolve(v); };
       const btns = o.choices.map((c) => h('button', { class: 'db-btn' + (c.primary ? ' primary' : ''), type: 'button', onclick: () => fin(c.id) }, c.label));
-      this.show(h('div', { class: 'db-sheet db-ask' },
+      this.push(h('div', { class: 'db-sheet db-ask' },
         h('h3', { text: o.title }),
         o.body ? h('p', { class: 'db-ask-body', text: o.body }) : null,
         h('div', { class: 'db-ask-choices' }, ...btns),

@@ -232,3 +232,25 @@ test('앱: 팀 기록(.docbench)을 쓰는 안쪽 작업 공간은 합치지 않
   const me = await call('PUT', `/api/w/${team.id}/me`, { name: '디제이' });
   assert.deepEqual([me.status, me.data.name], [200, '디제이']);
 });
+
+test('앱: 한 번 쓰는 열기 코드 — 열쇠를 주소·명령 줄에 싣지 않는다, 설정·보관함을 품는 폴더는 더하지 않는다', async (t) => {
+  const { app, base, call, pcHome } = await boot(t);
+  const code = new URL(app.openLink()).searchParams.get('c');
+  assert.match(code, /^[a-f0-9]{32}$/);
+  const redeem = (c, h = { 'X-DocBench': '1' }) => fetch(base + '/api/app/redeem', { method: 'POST', headers: { 'Content-Type': 'application/json', ...h }, body: JSON.stringify({ code: c }) });
+  assert.equal((await redeem(code, {})).status, 403, 'CSRF 헤더 없이는 안 된다');
+  const r = await redeem(code);
+  assert.equal(r.status, 200);
+  assert.equal((await r.json()).key, app.token);
+  assert.equal((await redeem(code)).status, 400, '한 번만');
+  assert.equal((await redeem('0'.repeat(32))).status, 400);
+  // CLI 가 켜진 앱에서 받는 길
+  const oc = await call('POST', '/api/app/open-code');
+  assert.match(oc.data.url, /\?c=[a-f0-9]{32}$/);
+  assert.ok(!oc.data.url.includes(app.token));
+  // 이 PC 의 설정(열쇠·기록 보관함)을 품는 폴더
+  const bad = await call('POST', '/api/app/workspaces', { path: path.dirname(pcHome) });
+  assert.deepEqual([bad.status, bad.data.error], [400, 'BAD_REQUEST']);
+  assert.match(bad.data.message, /통째로 더할 수 없습니다/);
+  assert.deepEqual((await call('GET', '/api/app/info')).data.workspaces, [], '목록에 남기지 않는다');
+});

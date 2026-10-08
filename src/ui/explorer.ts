@@ -32,19 +32,26 @@ export class Explorer {
   }
   isOpen(dir: string): boolean { return dir === this.root || this.openSet().has(dir); }
 
-  /** 다시 읽기 — 목록이 바뀌었을 때(문서 추가·삭제). 펼친 상태는 그대로 */
+  /** 다시 읽을 폴더 — 보이던 목록은 그대로 두고 뒤에서 다시 읽어, 달라졌을 때만 다시 그린다(깜박임 없이) */
+  private stale = new Set<string>();
+  private inflight = new Set<string>();
+  /** 다시 읽기 — 목록이 바뀌었을 때(문서 추가·삭제)·창으로 돌아왔을 때. 펼친 상태는 그대로 */
   invalidate(): void {
-    for (const [k, v] of this.cache) if (v !== 'loading') this.cache.delete(k);
+    for (const k of this.cache.keys()) this.stale.add(k);
   }
 
   private async load(dir: string): Promise<void> {
     const hit = this.cache.get(dir);
-    if (hit && hit !== 'missing') return;
-    this.cache.set(dir, 'loading');
+    if (this.inflight.has(dir) || (hit && hit !== 'loading' && hit !== 'missing' && !this.stale.has(dir))) return;
+    const keep = hit && hit !== 'loading' && hit !== 'missing' ? hit : null;
+    this.inflight.add(dir);
+    this.stale.delete(dir);
+    if (!keep) this.cache.set(dir, 'loading');
     let items: TreeEntry[] | null = null;
     try { items = await this.app.ad.docs.tree!(dir); } catch { items = null; }
+    this.inflight.delete(dir);
     this.cache.set(dir, items ? { items } : 'missing');
-    this.app.renderRail();
+    if (!keep || !items || JSON.stringify(keep.items.map((x) => x.path)) !== JSON.stringify(items.map((x) => x.path))) this.app.renderRail();
   }
 
   /** 이 문서·폴더가 보이게 위 폴더들을 펼친다 */
@@ -69,6 +76,7 @@ export class Explorer {
     const box = h('div', { class: 'db-ftree db-explorer', role: 'tree' });
     const walk = (dir: string, depth: number) => {
       const got = this.cache.get(dir);
+      if (this.stale.has(dir)) void this.load(dir);
       if (!got || got === 'loading') {
         if (!got) void this.load(dir);
         box.append(h('div', { class: 'db-tree-note', style: `--d:${depth}`, text: this.t('tree.loading') }));
@@ -87,7 +95,8 @@ export class Explorer {
         box.append(h('div', { class: 'db-tree-row', style: `--d:${depth}` },
           h('button', {
             class: 'db-dir', type: 'button', style: `--d:${depth}`, title: d.path + '/', role: 'treeitem', 'aria-expanded': String(open),
-            onclick: () => { this.setOpen(d.path, !open); if (!open) void this.load(d.path); this.app.renderRail(); },
+            // 펼칠 때마다 다시 읽는다 — 그 사이 생기거나 지워진 파일이 보이게(큰 폴더는 감시하지 않는다)
+            onclick: () => { this.setOpen(d.path, !open); if (!open) { this.stale.add(d.path); void this.load(d.path); } this.app.renderRail(); },
           },
             h('span', { class: 'car', 'aria-hidden': 'true', text: open ? '▾' : '▸' }),
             h('span', { class: 'ic', html: icon(open ? 'folderOpen' : 'folder') }),

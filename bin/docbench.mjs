@@ -515,6 +515,12 @@ function appCall(rec, token, p, method = 'GET') {
   });
 }
 
+/** 켜진 앱에서 한 번 쓰는 열기 주소를 받는다(열쇠를 명령 줄에 싣지 않게). 옛 판의 앱이면 주소만 @param {any} rec @param {string} token */
+async function openLinkOf(rec, token) {
+  const r = /** @type {any} */ (await appCall(rec, token, '/api/app/open-code', 'POST'));
+  return r?.status === 200 && typeof r.data?.url === 'string' ? r.data.url : rec.url;
+}
+
 /** 브라우저로 주소를 연다 (운영체제의 기본 브라우저) @param {string} url */
 async function openBrowser(url) {
   const { spawn } = await import('node:child_process');
@@ -577,7 +583,7 @@ async function appCmd(a) {
   }
   if (a.detach || (a.open && !rec)) {
     if (rec && info?.version === core.DOCBENCH_VERSION) {
-      if (a.open) await openBrowser(`${rec.url}?t=${token}`);
+      if (a.open) await openBrowser(await openLinkOf(rec, token));
       out(a, { running: true, url: rec.url, pid: rec.pid }, `이미 켜져 있습니다: ${rec.url} (pid ${rec.pid})${a.open ? '' : '\n열기: docbench app --open'}`);
       return;
     }
@@ -589,7 +595,8 @@ async function appCmd(a) {
     }
     const logFile = path.join(pcDir(), 'logs', 'app.log');
     await fs.mkdir(path.dirname(logFile), { recursive: true });
-    const fh = await fs.open(logFile, 'a');
+    const fh = await fs.open(logFile, 'a', 0o600);   // 로그는 이 사용자만 (다른 사용자가 읽지 못하게)
+    await fs.chmod(logFile, 0o600).catch(() => undefined);
     const { spawn } = await import('node:child_process');
     const child = spawn(process.execPath, [SELF, 'app', ...(a.port ? ['--port', String(a.port)] : [])], { detached: true, stdio: ['ignore', fh.fd, fh.fd], windowsHide: true, cwd: pcDir() });
     child.unref();
@@ -602,11 +609,11 @@ async function appCmd(a) {
       if (now.rec?.pid === child.pid) up = now;
     }
     if (!up) die(`DocBench 앱이 켜지지 않았습니다. 로그: ${logFile}`, 1);
-    if (a.open) await openBrowser(`${up.rec.url}?t=${token}`);
+    if (a.open) await openBrowser(await openLinkOf(up.rec, token));
     out(a, { running: true, url: up.rec.url, pid: up.rec.pid, workspaces: up.info.workspaces.length }, `DocBench 앱을 켰습니다: ${up.rec.url} (pid ${up.rec.pid})\n작업 공간 ${up.info.workspaces.length}개 · 로그: ${logFile}\n열기: docbench app --open · 끄기: docbench app --stop`);
     return;
   }
-  if (a.open && rec) { await openBrowser(`${rec.url}?t=${token}`); out(a, { url: rec.url }, `열었습니다: ${rec.url}`); return; }
+  if (a.open && rec) { await openBrowser(await openLinkOf(rec, token)); out(a, { url: rec.url }, `열었습니다: ${rec.url}`); return; }
 
   // 앞에서 돌기 — 창을 닫거나 Ctrl+C 로 끈다
   if (rec) die(`이미 켜져 있습니다: ${rec.url} (pid ${rec.pid}) — 끄려면 docbench app --stop`, 3);
@@ -615,8 +622,9 @@ async function appCmd(a) {
   try {
     app = await startApp({ port: a.port ? Number(a.port) : undefined, pcConfigFile, log: (s) => process.stdout.write(s + '\n'), onShutdown: () => process.exit(0) });
   } catch (e) { die(e.code === 'EADDRINUSE' ? `포트 ${a.port} 를 다른 프로그램이 씁니다 — --port 로 바꾸세요` : e.message, 1); }
-  process.stdout.write(`열쇠 붙은 주소(처음 한 번): ${app.openUrl}\n작업 공간 ${app.registry.size}개 · 끄기: Ctrl+C\n`);
-  if (a.open) await openBrowser(app.openUrl);
+  // 열쇠는 출력하지 않는다(--detach 면 이 출력이 로그 파일로 간다) — 화면은 한 번 쓰는 열기 코드로
+  process.stdout.write(`DocBench 앱: ${app.url}\n작업 공간 ${app.registry.size}개 · 열기: docbench app --open · 끄기: Ctrl+C\n`);
+  if (a.open) await openBrowser(app.openLink());
   process.on('SIGINT', stop); process.on('SIGTERM', stop); process.on('SIGHUP', stop);
   await new Promise(() => undefined);
 }
@@ -744,7 +752,8 @@ async function runnerCmd(a, sub) {
     if (already) { out(a, { ...((await mine())[0] || {}), pid: already.pid }, `이미 켜져 있습니다 (pid ${already.pid})`); return; }
     const logFile = path.join(pcDir(), 'logs', `runner-${short(root)}.log`);
     await fs.mkdir(path.dirname(logFile), { recursive: true });
-    const fh = await fs.open(logFile, 'a');
+    const fh = await fs.open(logFile, 'a', 0o600);   // 로그는 이 사용자만 (다른 사용자가 읽지 못하게)
+    await fs.chmod(logFile, 0o600).catch(() => undefined);
     const { spawn } = await import('node:child_process');
     // 뒤에서 도는 실행기도 같은 규칙으로 기록을 찾는다(짝은 이미 이 PC 의 설정에)
     const child = spawn(process.execPath, [SELF, 'runner', root], { detached: true, stdio: ['ignore', fh.fd, fh.fd], windowsHide: true, cwd: pcDir() });

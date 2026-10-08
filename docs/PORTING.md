@@ -57,7 +57,7 @@ node $cli app --status                                 # 주소·작업 공간·
 - `--port N`: 기본 4317. `--port` 없이 켰는데 4317 을 다른 프로그램이 쓰면 다음 번호로 켠다(10번까지) — 실제 주소는 `--status` 와 `app.json`. 그래서 대시보드는 주소를 `app.json` 에서 읽는다. `--port` 를 줬는데 쓰이고 있으면 켜지 않는다.
 - `--allow-origin` 은 이 PC 의 설정 `app.allowOrigins` 에 **더한다**(쌓인다). 켜진 앱은 몇 초 안에 따른다. 빼는 명령은 없다 — 이 PC 의 설정 `config.json` 에서 지운다. `scheme://host[:port]` 모양만 받는다(경로 없이). `http://localhost:3000` 과 `http://127.0.0.1:3000` 은 다른 출처다.
 - `--startup on|off`·`--shortcut on|off`(시작 메뉴 "DocBench" — 꺼져 있으면 켜고 연다)는 Windows 만. macOS·Linux 는 로그인 항목·systemd 에 `app --detach` 를 건다.
-- `--open` 열쇠 붙은 주소로 앱 화면을 연다(폴더 더하기·합치기·빼기, 표시 이름). `--stop` 끈다. 로그는 이 PC 의 설정 폴더 `logs\app.log`.
+- `--open` 앱 화면을 연다(폴더 더하기·합치기·빼기, 표시 이름) — 열쇠 대신 2분 동안 한 번 쓰는 열기 코드를 실어 명령 줄·방문 기록에 열쇠가 남지 않는다. C:\·홈처럼 이 PC 의 DocBench 설정을 품는 폴더는 더하지 않는다(그 아래 폴더를 더한다). `--stop` 끈다. 로그는 이 PC 의 설정 폴더 `logs\app.log`.
 - 앱의 사람은 이 PC 의 로그인(이 PC 의 설정 `user` 가 있으면 그것), 표시 이름은 화면 오른쪽 위 "나". Claude 작업 조건은 §6.
 
 ### 2.2 대시보드 백엔드 — 열쇠를 읽어 페이지에 넣기
@@ -226,7 +226,7 @@ import { Workspace, createDocBenchHandler } from 'docbench/server';
 
 const ws = await new Workspace('D:/work/docs').init();   // 기록은 문서 폴더 밖(기록 보관함/docs) — 다른 자리면 { dataDir: 'E:/records/docs' }
 await ws.reconcileAll();                      // 꺼져 있던 동안 바뀐 파일을 이력에 남긴다
-const docbench = createDocBenchHandler(ws, { base: '/docbench/api', ui: false /*, runs: true — Claude 작업(§6), 이 PC 사람 한 명이 쓸 때만 */ });
+const docbench = createDocBenchHandler(ws, { base: '/docbench/api', ui: false /*, runs: true — Claude 작업(§6), identity: 'pc' — 화면의 "나"에서 이 PC 의 표시 이름 바꾸기: 둘 다 이 PC 사람 한 명이 쓸 때만 */ });
 
 app.use((req, res, next) => docbench(req, res) || next());   // Express
 // Fastify: fastify.addHook('onRequest', (req, reply, done) => docbench(req.raw, reply.raw) ? reply.hijack() : done());

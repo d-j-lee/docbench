@@ -129,13 +129,13 @@ describe('stream-json → 로그', () => {
 describe('실행기 고르기', () => {
   const now = Date.parse('2026-10-08T06:00:00Z');
   const r = (id: string, o: Partial<RunnerInfo> = {}): RunnerInfo => ({ id, kind: 'runner', user: 'dj', host: 'pc', pid: 1, version: '0.3.0', protocol: RUN_PROTOCOL, startedAt: '', seenAt: new Date(now - 1000).toISOString(), claude: { ok: true }, models: [], efforts: [], ...o });
-  it('살아 있는 것 중: 고른 것 > 내 이름(실행기 > 서버). 이름이 다른 실행기는 저절로 고르지 않는다', () => {
+  it('살아 있는 것 중: 고른 것 > 내 계정(실행기 > 서버). 다른 계정의 실행기는 저절로 고르지 않는다', () => {
     expect(runnerAlive(r('a', { seenAt: new Date(now - 60000).toISOString() }), now)).toBe(false);
     expect(runnerAlive(r('a', { protocol: 99 }), now)).toBe(false);
     const list = [r('server:dj@pc', { kind: 'server' }), r('runner:kim@pc', { user: 'kim' }), r('runner:dj@pc')];
-    expect(pickRunner(list, { me: 'DJ', now })?.id).toBe('runner:dj@pc');
-    expect(pickRunner(list, { me: 'nobody', now })).toBeNull(); // 동료의 실행기(그 사람 PC·구독)로 가지 않게
-    expect(pickRunner(list, { me: 'nobody', chosen: 'runner:kim@pc', now })?.id).toBe('runner:kim@pc'); // 사람이 고르면 쓴다
+    expect(pickRunner(list, { meId: 'DJ', now })?.id).toBe('runner:dj@pc');   // 계정(예전 판의 이름 = 계정)이 실행기 사용자와 같다
+    expect(pickRunner(list, { meId: 'nobody', now })).toBeNull(); // 동료의 실행기(그 사람 PC·구독)로 가지 않게
+    expect(pickRunner(list, { meId: 'nobody', chosen: 'runner:kim@pc', now })?.id).toBe('runner:kim@pc'); // 사람이 고르면 쓴다
     expect(pickRunner(list, { chosen: 'server:dj@pc', now })?.id).toBe('server:dj@pc');
     expect(pickRunner([r('x', { seenAt: '2020-01-01T00:00:00Z' })], { now })).toBeNull();
   });

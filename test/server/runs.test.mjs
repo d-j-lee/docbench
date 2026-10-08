@@ -374,3 +374,28 @@ test('기록을 문서 폴더 밖에 두면(기본) Claude 작업도 그 기록�
   assert.ok(existsSync(path.join(s.ws.dir, 'runs', r.data.id + '.json')), '작업 파일은 기록 폴더에');
   assert.deepEqual(await listAll(dir), before, '문서 폴더의 파일 목록은 그대로(문서 내용만 바뀜)');
 });
+
+test('큰 작업 공간(드라이브·홈)에서는 Claude 가 이번 문서들이 든 폴더만 읽는다 (D71)', async (t) => {
+  const argsFile = path.join(os.tmpdir(), `docbench-args-big-${process.pid}-${Date.now()}.jsonl`);
+  const promptFile = argsFile + '.prompt';
+  env(t, { FAKE_CLAUDE_RUN: 'edit', FAKE_CLAUDE_ARGS: argsFile, FAKE_CLAUDE_PROMPT: promptFile });
+  t.after(() => Promise.all([fs.rm(argsFile, { force: true }), fs.rm(promptFile, { force: true })]));
+  const dir = await tempWorkspace(null, { assistant: { command: [process.execPath, fakeClaude], timeoutSec: 30 } });
+  // 드라이브 맨 위처럼 보이게
+  for (const d of ['Windows', 'Program Files']) await fs.mkdir(path.join(dir, d));
+  const s = await startServer({ root: dir, port: 0, pcConfigFile: pcFileFor(dir) });
+  t.after(async () => { await s.close(); await rm(dir); });
+  const base = `http://127.0.0.1:${s.port}/api`;
+  const api = async (method, p, body) => { const r = await fetch(base + p, { method, headers: { ...(method !== 'GET' ? { 'X-DocBench': '1' } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined }); const x = await r.text(); return { status: r.status, data: x ? JSON.parse(x) : null }; };
+  assert.equal((await api('GET', '/manifest')).data.index.reason, 'big-root');
+  await api('GET', '/tree?dir=docs');
+  const f = (await api('POST', '/feedback', { docId: doc, target: { kind: 'section', path: key.split(' › '), heading: '배포 전 확인' }, body: '롤백 시간 기준을 넣어 줘', waitingOn: 'assistant' })).data;
+  const r = await api('POST', '/runs', { kind: 'handoff', feedbackIds: [f.id] });
+  assert.equal(r.status, 202, JSON.stringify(r.data));
+  const end = await until(async () => { const x = (await api('GET', '/runs')).data.items.find((y) => y.id === r.data.id); return x && !['queued', 'running'].includes(x.state) ? x : null; }, 8000);
+  assert.equal(end.state, 'done', end.error);
+  const c = (await fs.readFile(argsFile, 'utf8')).trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.args.includes('-p')).at(-1);
+  const dirs = c.args.flatMap((a, i) => (a === '--add-dir' ? [c.args[i + 1]] : []));
+  assert.deepEqual(dirs, [path.join(dir, 'docs')], '드라이브 전체가 아니라 그 문서의 폴더만');
+  assert.match(await fs.readFile(promptFile, 'utf8'), /You can read only these folders/);
+});

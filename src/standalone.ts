@@ -218,9 +218,16 @@ function addSwitchLink(ad: FolderAdapters): void {
 
 const isDir = async (dir: FileSystemDirectoryHandle, name: string) => { try { await dir.getDirectoryHandle(name); return true; } catch { return false; } };
 
-/** 묻지 않고 정할 수 있는 보관함: 주소로 열었을 때 기억한 보관함(권한이 이미 있고 쓸 수 있는 자리) */
+/**
+ * 이 창에서 고른 보관함 — 파일로 열면(기억하지 않음) 창을 닫을 때까지만 쓴다(창마다 한 번 묻기, D65).
+ * 그래야 같은 창에서 다른 폴더를 열거나 안쪽 기록을 옮긴 뒤에도 보관함의 기록이 그대로 보인다.
+ */
+let sessionHome: FileSystemDirectoryHandle | null = null;
+const rememberedHome = async (): Promise<FileSystemDirectoryHandle | null> => (persist ? await recallFolder('home') : null) || sessionHome;
+
+/** 묻지 않고 정할 수 있는 보관함: 기억한(주소로 열었을 때)·이 창에서 고른 보관함(권한이 이미 있고 쓸 수 있는 자리) */
 async function quietHome(docs: FileSystemDirectoryHandle): Promise<{ home: FileSystemDirectoryHandle; name: string } | null> {
-  const home = persist ? await recallFolder('home') : null;
+  const home = await rememberedHome();
   if (!home || !(await ensurePermission(home, 'readwrite', false).catch(() => false)) || (await homeProblem(home, docs))) return null;
   try { return { home, name: await prepareHome(home, docs) }; } catch { return null; }
 }
@@ -238,7 +245,7 @@ function htmlFolder(): string {
  * 안에 두기(.docbench)는 팀이 git 으로 함께 쓸 때. 취소하면 null(저장하지 않음).
  */
 async function askData(docs: FileSystemDirectoryHandle): Promise<DataAttach | null> {
-  const remembered = persist ? await recallFolder('home') : null;
+  const remembered = await rememberedHome();
   const near = htmlFolder();
   for (;;) {
     const choice = await bench!.ask({
@@ -270,6 +277,7 @@ async function askData(docs: FileSystemDirectoryHandle): Promise<DataAttach | nu
       }
       const dn = await prepareHome(home, docs);
       if (persist) await rememberFolder(home, 'home');
+      sessionHome = home;
       store.set(INSIDE_KEY(docs.name), '');
       if (current) current.home = home;
       setTimeout(tellMerged, 300);
@@ -366,13 +374,13 @@ async function prepareHome(home: FileSystemDirectoryHandle, docs: FileSystemDire
  */
 async function mergeCandidates(home: FileSystemDirectoryHandle, self: string, docs: FileSystemDirectoryHandle): Promise<{ dataName: string; prefix: string; feedback: number }[]> {
   const hf = fsFromHandle(home);
-  const want = new Map<string, { dataName: string; docs: string[] }[]>();
+  const want = new Map<string, { dataName: string; marker: NonNullable<Awaited<ReturnType<typeof markerOf>>> }[]>();
   for (const e of (await hf.list('')) || []) {
     if (e.kind !== 'directory' || e.name === self) continue;
     const m = await markerOf(hf, e.name);
     if (!m || m.mergedInto || m.migrating || !m.docs?.length) continue;
     const list = want.get(m.docsName) || [];
-    list.push({ dataName: e.name, docs: m.docs });
+    list.push({ dataName: e.name, marker: m });
     want.set(m.docsName, list);
   }
   if (!want.size) return [];
@@ -387,9 +395,8 @@ async function mergeCandidates(home: FileSystemDirectoryHandle, self: string, do
       visits++;
       const rel = dir ? `${dir}/${e.name}` : e.name;
       for (const c of want.get(e.name) || []) {
-        let hit = 0;
-        for (const id of c.docs) if (await df.stat(`${rel}/${id}`).catch(() => null)) hit++;
-        if (hit >= Math.min(2, c.docs.length) && hit / c.docs.length >= 0.5) {
+        // 이름이 같은 다른 프로젝트의 하위 폴더를 고르지 않게 — 보관함의 다른 곳과 같은 규칙(D61: README 같은 흔한 이름은 빼고 표본 비교)
+        if (sameDocsFolder(c.marker, await docIdsOf(subFs(df, rel)))) {
           const fb = ((await hf.list(`${c.dataName}/feedback`)) || []).filter((x) => x.name.endsWith('.json')).length;
           out.push({ dataName: c.dataName, prefix: rel, feedback: fb });
         }
@@ -425,7 +432,7 @@ async function offerMerge(home: FileSystemDirectoryHandle, self: string, docs: F
 async function moveOut(root: HTMLElement): Promise<void> {
   const dir = current?.dir;
   if (!dir || !(await isDir(dir, '.docbench'))) return;
-  const remembered = persist ? await recallFolder('home') : null;
+  const remembered = await rememberedHome();
   const home = remembered && (await ensurePermission(remembered).catch(() => false)) && !(await homeProblem(remembered, dir)) ? remembered : await pickHome();
   if (!home) return;
   if (!(await ensurePermission(home))) throw new DOMException('denied', 'NotAllowedError');
@@ -442,6 +449,7 @@ async function moveOut(root: HTMLElement): Promise<void> {
   try { await migrateInside(dir, dataFsOf(home, dn)); } catch (e) { await openFolder(root, dir); throw e; }
   await prepareHome(home, dir, dn);
   if (persist) await rememberFolder(home, 'home');
+  sessionHome = home;
   store.set(INSIDE_KEY(dir.name), '');
   await openFolder(root, dir);
   // 위에서 bench 를 비웠다가 openFolder 가 다시 채운다 — 좁혀진 타입을 풀어 읽는다

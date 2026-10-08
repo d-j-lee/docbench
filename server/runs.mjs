@@ -533,6 +533,22 @@ export class RunEngine {
     return { ctx, skipped };
   }
 
+  /**
+   * Claude 가 읽을 수 있는 폴더. 작은 작업 공간은 문서 폴더 전체, 큰 작업 공간(드라이브·홈·한도를 넘는 폴더, D64)은
+   * 이번 문서들이 든 폴더만 — 드라이브를 통째로 더해도 Claude 가 드라이브 전체를 읽지 않게(D71).
+   * @param {string[]} docIds
+   */
+  readDirs(docIds) {
+    const root = this.ws.root;
+    if (this.ws.small || !docIds.length) return [root];
+    const dirs = [...new Set(docIds.map((id) => path.dirname(path.resolve(root, id))))].sort((a, b) => a.length - b.length);
+    /** @type {string[]} */
+    const out = [];
+    const norm = (/** @type {string} */ p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+    for (const d of dirs) if (!out.some((o) => norm(d) === norm(o) || norm(d).startsWith(norm(o).replace(/[\\/]+$/, '') + path.sep))) out.push(d);
+    return out.slice(0, 8);
+  }
+
   /** @param {any} req */
   async runOne(req) {
     const t0 = Date.now();
@@ -552,13 +568,15 @@ export class RunEngine {
       await this.log(req.id, { k: 'done', v: { ms: Date.now() - t0 } });
       return;
     }
+    const readDirs = this.readDirs(st.docs);
+    if (readDirs.length !== 1 || readDirs[0] !== this.ws.root) ctx.readDirs = readDirs;
     const prompt = core.buildRunPrompt(ctx);
     const args = [
       '-p',
       '--restricted', '--safe-mode',
       '--permission-mode', 'dontAsk',
       '--tools', 'Read,Grep,Glob',
-      '--add-dir', this.ws.root,
+      ...readDirs.flatMap((d) => ['--add-dir', d]),
       '--strict-mcp-config', '--no-session-persistence',
       '--output-format', 'stream-json', '--verbose',
       '--json-schema', JSON.stringify(core.RUN_SCHEMA),

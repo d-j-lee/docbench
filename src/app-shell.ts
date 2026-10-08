@@ -32,16 +32,24 @@ const store = {
  * 앱 열쇠. 끼움(/embed)은 서버가 화면에 넣은 것(주소의 ?t=), 앱 화면은 처음 연 주소의 ?t= 를 이 출처의 localStorage 에 두고
  * 주소에서 지운다 — 쿠키는 포트를 가리지 않아 다른 로컬 서버로도 실려 가서 쓰지 않는다.
  */
-const key = (() => {
-  if (mode === 'embed') return meta('docbench-key');
-  const fromUrl = q.get('t');
-  if (fromUrl && /^[a-f0-9]{32,128}$/.test(fromUrl)) {
-    store.set(KEY, fromUrl);
-    q.delete('t');
-    history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q.toString() : '') + location.hash);
+let key = mode === 'embed' ? meta('docbench-key') : store.get(KEY) || '';
+/** 주소로 받은 열쇠(?t=)·열기 코드(?c=) — 주소에서 바로 지우고, 앱이 맞다고 한 뒤에만 기억한다(아무 사이트나 틀린 열쇠로 열어 로그아웃시키지 못하게) */
+const fromUrl = mode === 'app' ? { t: q.get('t'), c: q.get('c') } : { t: null, c: null };
+if (fromUrl.t || fromUrl.c) {
+  q.delete('t'); q.delete('c');
+  history.replaceState(null, '', location.pathname + (q.toString() ? '?' + q.toString() : '') + location.hash);
+}
+async function adoptKey(): Promise<void> {
+  let k: string | null = null;
+  if (fromUrl.c && /^[a-f0-9]{32}$/.test(fromUrl.c)) {
+    const r = await fetch('/api/app/redeem', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-DocBench': '1' }, body: JSON.stringify({ code: fromUrl.c }), credentials: 'omit' }).catch(() => null);
+    if (r?.ok) k = ((await r.json()) as { key?: string }).key || null;
+  } else if (fromUrl.t && /^[a-f0-9]{32,128}$/.test(fromUrl.t)) {
+    const r = await fetch('/api/app/info', { headers: { Authorization: 'Bearer ' + fromUrl.t }, credentials: 'omit' }).catch(() => null);
+    if (r?.ok) k = fromUrl.t;
   }
-  return store.get(KEY) || '';
-})();
+  if (k) { key = k; store.set(KEY, k); }
+}
 class Locked extends Error {}
 /** 설치 안내가 CLI 를 두는 자리 (src/core/runs.ts runnerSetupPrompt 와 같은 곳) */
 const openCmd = () => /Win/i.test(navigator.platform || navigator.userAgent) ? 'node "%LOCALAPPDATA%\\docbench\\docbench.mjs" app --open'
@@ -88,6 +96,7 @@ function fail(root: HTMLElement, e: unknown): void {
 // ---------------------------------------------------------------- 앱 (/)
 
 async function appBoot(root: HTMLElement): Promise<void> {
+  await adoptKey();
   info = await api<AppInfo>('GET', '/api/app/info');
   const list = info.workspaces;
   const want = q.get('w') || store.get(LAST);

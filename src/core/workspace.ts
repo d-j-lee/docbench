@@ -294,7 +294,15 @@ export function globToRegExp(pat: string, ci = false): RegExp {
 export const matchAny = (rel: string, pats: string[] | undefined, ci = false): boolean => !!pats && pats.some((p) => globToRegExp(p, ci).test(rel));
 
 export const isDocPath = (rel: string, c: Pick<WorkspaceConfig, 'include' | 'exclude'>, ci = false): boolean =>
-  matchAny(rel, c.include, ci) && !matchAny(rel, c.exclude, ci);
+  docFloor(rel) && matchAny(rel, c.include, ci) && !matchAny(rel, c.exclude, ci);
+
+/**
+ * 설정과 상관없이 문서가 될 수 있는 바닥 규칙 — 마크다운 파일이고, 숨김(.git·.docbench·.vscode …)·의존성 폴더 안이 아닐 것.
+ * 함께 쓰는 config.json 의 include 는 누구나 고칠 수 있다: `**\/*` 로 넓혀 `.git/hooks/…` 나 스크립트를 "문서"로 만들고
+ * 꾸민 피드백으로 Claude 작업이 그 파일을 고치게 하는 길을 막는다(D71).
+ */
+export const docFloor = (rel: string): boolean =>
+  /\.(md|markdown)$/i.test(rel) && !rel.split('/').some((seg) => seg.startsWith('.') || seg === 'node_modules');
 
 /** 훑을 폴더인가 — 숨김 폴더·빌드 산출물·의존성 폴더는 건너뛴다 */
 export const walkable = (dirName: string): boolean => !IGNORE_DIRS.has(dirName) && !dirName.startsWith('.') && !SYSTEM_DIRS.has(dirName);

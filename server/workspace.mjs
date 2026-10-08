@@ -364,7 +364,7 @@ export class Workspace {
   }
 
   /** @param {string} rel */
-  isDoc(rel) { return matchAny(rel, this.config.include) && !matchAny(rel, this.config.exclude); }
+  isDoc(rel) { return core.docFloor(rel) && matchAny(rel, this.config.include) && !matchAny(rel, this.config.exclude); }
 
   // ------------------------------------------------------------ 훑기
   /**
@@ -441,6 +441,9 @@ export class Workspace {
     try { ents = await fs.readdir(abs, { withFileTypes: true }); } catch { return null; }
     const raw = ents.filter((e) => !e.isSymbolicLink() && (e.isDirectory() || e.isFile())).map((e) => ({ name: e.name, kind: /** @type {'file' | 'directory'} */ (e.isDirectory() ? 'directory' : 'file') }));
     const items = core.toTreeEntries(raw, d, this.config, CI).slice(0, core.TREE_MAX);
+    // 이 폴더에서 사라진 문서는 목록에서도 뺀다(큰 폴더는 다시 훑지 않으므로 여기서)
+    const here = new Set(items.map((x) => x.path));
+    for (const id of [...this.docs.keys()]) if (path.posix.dirname(id) === (d || '.') && !here.has(id)) { this.docs.delete(id); this.fromTree.delete(id); }
     for (const it of items) {
       if (!it.doc) continue;
       const a = path.join(abs, it.name);

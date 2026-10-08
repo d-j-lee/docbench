@@ -99,7 +99,9 @@ class FolderError extends Error { constructor(public code: string, msg: string) 
 /** 기록 폴더를 고르지 않아 쓰지 않았다 (사람이 "취소"를 눌렀다) */
 export class RecordsNeededError extends Error {
   readonly code = 'NO_RECORDS';
-  constructor() { super('기록 폴더를 고르지 않아 저장하지 않았습니다'); }
+  constructor(locale?: 'ko' | 'en') {
+    super(locale === 'en' ? 'No records folder was chosen, so nothing was saved — saving again asks again.' : '기록 폴더를 고르지 않아 저장하지 않았습니다 — 다시 저장하면 다시 묻습니다.');
+  }
 }
 
 /** 판 = 바이트 sha256 앞 16자 (서버와 같다). 보안 문맥이 아니라 subtle 이 없으면 순수 JS 로 */
@@ -225,7 +227,7 @@ export class FolderWorkspace {
   /** 쓰기 전에: 기록 폴더가 없으면 사람에게 묻는다(한 번에 하나) — 고르지 않으면 RecordsNeededError */
   async ensureData(): Promise<FsLike> {
     if (this.data) return this.data;
-    if (!this.o.requestData) throw new RecordsNeededError();
+    if (!this.o.requestData) throw new RecordsNeededError(this.o.locale);
     this.asking ||= (async () => {
       try {
         const a = await this.o.requestData!();
@@ -233,7 +235,7 @@ export class FolderWorkspace {
       } finally { this.asking = null; }
     })();
     await this.asking;
-    if (!this.data) throw new RecordsNeededError();
+    if (!this.data) throw new RecordsNeededError(this.o.locale);
     return this.data;
   }
 
@@ -363,6 +365,10 @@ export class FolderWorkspace {
     const ents = await this.fs.list(d).catch(() => null);
     if (!ents) return null;
     const items = toTreeEntries(ents, d, this.config, this.ci).slice(0, TREE_MAX);
+    // 이 폴더에서 사라진 문서는 목록에서도 뺀다(큰 폴더는 다시 훑지 않으므로 여기서)
+    const here = new Set(items.map((x) => x.path));
+    const parent = (id: string) => (id.includes('/') ? id.slice(0, id.lastIndexOf('/')) : '');
+    for (const id of [...this.docs.keys()]) if (parent(id) === d && !here.has(id)) { this.docs.delete(id); this.fromTree.delete(id); }
     for (const it of items) {
       if (!it.doc || this.docs.has(it.path)) continue;
       this.docs.set(it.path, { size: 0, mtimeMs: 0 });
@@ -518,6 +524,13 @@ export class FolderWorkspace {
   async reconcileAll(): Promise<number> {
     if (!this.writable || !this.data) return 0;
     const known = (await this.known()).docs;
+    // 목록 밖(큰 폴더의 깊은 곳)이라도 따라가던 문서가 디스크에 있으면 맞춰 본다(서버와 같게)
+    for (const id of Object.keys(known)) {
+      if (this.docs.has(id) || this.docs.has(this.canonId(id))) continue;
+      if (normalizeDocId(id) !== id || !isDocPath(id, this.config, this.ci)) continue;   // 기록 파일은 남이 꾸밀 수 있다
+      const st = await this.fs.stat(id).catch(() => null);
+      if (st) { this.docs.set(id, st); this.fromTree.add(id); }
+    }
     const ids = Object.keys(known).filter((id) => this.docs.has(id) || this.docs.has(this.canonId(id)));
     let n = 0;
     for (let i = 0; i < ids.length; i += 8) {

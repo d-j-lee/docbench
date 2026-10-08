@@ -95,6 +95,10 @@ export class App {
       window.addEventListener('hashchange', onHash);
       this.unsubs.push(() => window.removeEventListener('hashchange', onHash));
     }
+    // 창으로 돌아오면 펼친 폴더를 다시 읽는다(탐색기에서 파일을 만들거나 지웠을 수 있다 — 큰 폴더는 감시하지 않는다)
+    const onFocus = () => { if (this.explorer && !this.destroyed) { this.explorer.invalidate(); this.renderRail(); } };
+    window.addEventListener('focus', onFocus);
+    this.unsubs.push(() => window.removeEventListener('focus', onFocus));
   }
 
   destroy(): void {
@@ -119,8 +123,11 @@ export class App {
   private async startView(cands: (string | undefined)[]): Promise<string> {
     for (const v of cands) {
       if (!v) continue;
-      if (v in this.manifest.docs || v === 'map' || v === 'changes' || v === 'home') return v;
-      if (!this.looksDoc(v) || !this.inScope(v)) continue;
+      if (v === 'map' || v === 'changes' || v === 'home') return v;
+      // 범위(대시보드 탭의 프로젝트)를 벗어난 문서는 열지 않는다 — 지난 문서가 다른 탭의 것일 수 있다
+      if (!this.inScope(v)) continue;
+      if (v in this.manifest.docs) return v;
+      if (!this.looksDoc(v)) continue;
       const dir = v.includes('/') ? v.slice(0, v.lastIndexOf('/')) : '';
       try { if ((await this.ad.docs.tree!(dir))?.some((e) => e.path === v && e.doc)) return v; } catch { /* 다음 후보 */ }
     }
@@ -243,6 +250,7 @@ export class App {
       this.todoDirty(ev.id);
       if (this.doc && this.doc.id === ev.id) void this.doc.onExternalChange();
       else if (this.manifest.docs[ev.id]) { this.changedDocs.add(ev.id); this.renderRail(); }
+      else if (this.explorer) { this.explorer.invalidate(); this.renderRail(); }
     } else if (ev.type === 'changes' && this.view === 'changes') void renderChanges(this);
     else if (ev.type === 'runs' || ev.type === 'runner') this.dock?.onEvent(ev.type);
   }

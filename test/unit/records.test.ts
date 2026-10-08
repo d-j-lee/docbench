@@ -5,7 +5,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { mergeRecords, rebaseViewState } from '../../src/core/records';
-import { looksBigRoot, toTreeEntries, mergeConfig, pcSettingsFor } from '../../src/core/workspace';
+import { looksBigRoot, toTreeEntries, mergeConfig, pcSettingsFor, isDocPath } from '../../src/core/workspace';
 import { pickRunner, runnerIsMine } from '../../src/core/runs';
 import { fsFromMemory } from '../../src/adapters/folder-fs';
 import type { RunnerInfo } from '../../src/types';
@@ -117,9 +117,25 @@ describe('실행기 고르기 (D63·D67)', () => {
     const server = r({ id: 'server:dj@h', kind: 'server', user: 'dj' });
     const off = r({ id: 'app:dj@h2', kind: 'app', user: 'dj', claude: { ok: false } as never });
     const ok = r({ id: 'runner:dj@h3', kind: 'runner', user: 'dj', seenAt: '2026-10-08T11:59:50Z' });
-    expect(pickRunner([server, off, ok], { me: 'dj', now })?.id).toBe('runner:dj@h3');
+    expect(pickRunner([server, off, ok], { meId: 'dj', now })?.id).toBe('runner:dj@h3');
   });
   it('꾸민 owners(모양이 아님)는 실행기로 치지 않는다', () => {
-    expect(pickRunner([r({ id: 'app:x@h', kind: 'app', user: 'x', owners: [1 as never] })], { me: 'x', now })).toBeNull();
+    expect(pickRunner([r({ id: 'app:x@h', kind: 'app', user: 'y', owners: [1 as never] })], { meId: 'x', now })).toBeNull();
+    // 표시 이름(별명)이 동료의 로그인 이름과 같아도 고르지 않는다 — 계정으로만
+    expect(pickRunner([r({ id: 'runner:kim@h', user: 'kim' })], { me: 'kim', meId: 'u-0a1b2c3d4e', now })).toBeNull();
+  });
+});
+
+describe('문서가 될 수 있는 것 (D71)', () => {
+  it('함께 쓰는 설정이 include 를 넓혀도 마크다운·숨김 아닌 곳만', () => {
+    const wide = { include: ['**/*'], exclude: [] };
+    expect(isDocPath('docs/a.md', wide)).toBe(true);
+    expect(isDocPath('.git/hooks/post-checkout', wide)).toBe(false);
+    expect(isDocPath('.git/notes.md', wide)).toBe(false);
+    expect(isDocPath('package.json', wide)).toBe(false);
+    expect(isDocPath('scripts/run.ps1', wide)).toBe(false);
+    expect(isDocPath('node_modules/x/README.md', wide)).toBe(false);
+    expect(isDocPath('.vscode/a.md', wide)).toBe(false);
+    expect(isDocPath('dist/guide.MARKDOWN', wide)).toBe(true);
   });
 });

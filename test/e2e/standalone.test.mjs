@@ -381,6 +381,10 @@ test('큰 폴더(드라이브·홈)를 열면 맨 위만 — 펼친 폴더만 �
   await page.locator('.db-explorer .db-dir', { hasText: 'notes' }).click();
   await page.locator('.db-explorer .db-nav', { hasText: '회의' }).click();
   await page.locator('.db-doctitle', { hasText: '주간 회의' }).waitFor();
+  // 탐색기 밖에서 파일을 만들면 창으로 돌아올 때 펼친 폴더를 다시 읽는다(큰 폴더는 감시하지 않는다)
+  await page.evaluate(async (n) => { let d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n); for (const s of ['Users', 'dj', 'notes']) d = await d.getDirectoryHandle(s); const w = await (await d.getFileHandle('새 메모.md', { create: true })).createWritable(); await w.write('# 새 메모\n'); await w.close(); }, name);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await page.locator('.db-explorer .db-nav', { hasText: '새 메모' }).waitFor({ timeout: 5000 });
   // 다른 파일이 많은 폴더는 접어 둔다
   await page.locator('.db-explorer .db-dir', { hasText: 'data' }).click();
   await page.locator('.db-tree-more').waitFor();
@@ -463,6 +467,13 @@ test('기록 폴더는 처음 저장할 때 한 번 — 문서 폴더에는 아�
   await dlg.locator('textarea').fill('마감일을 적어 줘');
   await dlg.locator('.db-btn.primary').click();
   const ask = page.locator('dialog.db-dialog[open] .db-ask', { hasText: '기록을 어디에 둘까요?' });
+  await ask.waitFor();
+  // 취소하면 쓰던 피드백 창으로 돌아온다(글이 그대로) — 저장하지 않았다고 알린다
+  await ask.getByRole('button', { name: '취소' }).click();
+  await page.locator('.db-toast', { hasText: '기록 폴더를 고르지 않아' }).waitFor();
+  assert.equal(await dlg.locator('textarea').inputValue(), '마감일을 적어 줘');
+  assert.deepEqual(await ls(home), []);
+  await dlg.locator('.db-btn.primary').click();
   await ask.waitFor();
   await ask.getByRole('button', { name: '기록 보관함 고르기…' }).click();
   await until(async () => (await ls(home)).includes(a) && (await ls(`${home}/${a}`)).includes('feedback'), 6000);

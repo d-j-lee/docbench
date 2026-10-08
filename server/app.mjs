@@ -26,10 +26,10 @@ import { promises as fs, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { Workspace, defaultPcConfigFile, updatePcWorkspace, setPcValue, samePath, isInside, DataLocationError } from './workspace.mjs';
+import { Workspace, defaultPcConfigFile, defaultDataHome, updatePcWorkspace, setPcValue, samePath, isInside, DataLocationError } from './workspace.mjs';
 import { createDocBenchHandler } from './handler.mjs';
 import { RunEngine } from './runs.mjs';
-import { readJson, writeJson } from './textio.mjs';
+import { readJson, writeJson, atomicWrite } from './textio.mjs';
 import { core } from './core.mjs';
 import { appAsset } from './app-assets.mjs';
 
@@ -92,27 +92,46 @@ export async function startApp(o = {}) {
     return out;
   }
 
-  /** 작업 공간 하나를 준비한다(기록을 찾고, Claude 작업 엔진을 켠다). 이미 있으면 그대로 @param {string} root @param {{ added: boolean, linked: boolean, create?: boolean }} f */
+  /** 준비 중인 작업 공간 — 같은 폴더를 두 번 준비하면 엔진이 둘 떠서 한 요청을 두 번 돌린다(독립 검토 재현) @type {Map<string, Promise<Entry>>} */
+  const preparing = new Map();
+  /** 작업 공간 하나를 준비한다(기록을 찾고, Claude 작업 엔진을 켠다). 이미 있으면 그대로, 준비 중이면 그것을 기다린다 @param {string} root @param {{ added: boolean, linked: boolean, create?: boolean }} f */
   async function ensure(root, f) {
     const id = workspaceId(root);
+    const busy = preparing.get(id);
+    if (busy) { const e = await busy; e.added = f.added; e.linked = f.linked; return e; }
     const cur = reg.get(id);
     if (cur) { cur.added = f.added; cur.linked = f.linked; if (cur.ws || !existsSync(root)) return cur; }
     /** @type {Entry} */
     const e = cur || { id, root, ws: null, engine: null, handler: null, added: f.added, linked: f.linked };
     reg.set(id, e);
-    try {
-      const ws = await new Workspace(root, { pcConfigFile, create: !!f.create || f.added }).init();
-      await ws.reconcileAll().catch(() => 0);
-      e.ws = ws;
-      e.problem = undefined;
-      const engine = new RunEngine(ws, { kind: 'app', emit: (ev) => e.handler?.emit(ev) });
-      try { await engine.start(); e.engine = engine; } catch (err) { e.problem = String(/** @type {any} */ (err)?.message || err); await engine.stop().catch(() => undefined); }
-    } catch (err) { e.problem = String(/** @type {any} */ (err)?.message || err); e.problemCode = /** @type {any} */ (err)?.code; }
-    return e;
+    const job = (async () => {
+      try {
+        const ws = await new Workspace(root, { pcConfigFile, create: !!f.create || f.added }).init();
+        await ws.reconcileAll().catch(() => 0);
+        e.ws = ws;
+        e.problem = undefined; e.problemCode = undefined;
+        // 준비하는 사이 빠졌거나(목록에서 뺌·합침) 앱이 꺼지면 엔진을 켜지 않는다
+        if (closing || reg.get(id) !== e) return e;
+        const engine = new RunEngine(ws, { kind: 'app', emit: (ev) => e.handler?.emit(ev) });
+        try { await engine.start(); e.engine = engine; } catch (err) { e.problem = String(/** @type {any} */ (err)?.message || err); await engine.stop().catch(() => undefined); }
+        if (closing || reg.get(id) !== e) { await engine.stop().catch(() => undefined); e.engine = null; }
+      } catch (err) { e.problem = String(/** @type {any} */ (err)?.message || err); e.problemCode = /** @type {any} */ (err)?.code; }
+      return e;
+    })();
+    preparing.set(id, job);
+    try { return await job; } finally { preparing.delete(id); }
   }
 
+  /** 한 번에 하나만 맞춘다(타이머·요청이 겹치면 끝난 뒤 한 번 더) @type {Promise<void> | null} */
+  let syncing = null;
+  let syncAgain = false;
+  function sync() {
+    if (syncing) { syncAgain = true; return syncing; }
+    syncing = (async () => { do { syncAgain = false; await syncOnce(); } while (syncAgain); })().finally(() => { syncing = null; });
+    return syncing;
+  }
   /** 설정이 바뀌면(연결 안내가 link 를 적음) 목록을 다시 맞춘다 — 새 것은 켜고, 빠진 것은 끈다 */
-  async function sync() {
+  async function syncOnce() {
     const st = await fs.stat(pcConfigFile).catch(() => null);
     const sig = st ? `${st.size}:${st.mtimeMs}` : 'none';
     if (sig === pcSig) return;
@@ -132,6 +151,15 @@ export async function startApp(o = {}) {
   }
 
   // ------------------------------------------------------------ HTTP
+  /** 한 번 쓰는 열기 코드 → 끝 시각 @type {Map<string, number>} */
+  const openCodes = new Map();
+  /** 브라우저로 열 주소 — 열쇠 대신 2분 동안 한 번 쓰는 코드를 싣는다(명령 줄·브라우저 기록·로그에 열쇠가 남지 않게) */
+  const openLink = () => {
+    for (const [c, t] of openCodes) if (t < Date.now()) openCodes.delete(c);
+    const c = crypto.randomBytes(16).toString('hex');
+    openCodes.set(c, Date.now() + 120000);
+    return `${url}?c=${c}`;
+  };
   /** @param {string} a @param {string} b */
   const same = (a, b) => { const x = Buffer.from(a), y = Buffer.from(b); return x.length === y.length && crypto.timingSafeEqual(x, y); };
   /** @param {import('node:http').IncomingMessage} req @param {URL} url */
@@ -151,8 +179,19 @@ export async function startApp(o = {}) {
     if (p === '/host.js') return serveAsset(res, 'host.js', { 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-cache' });
     if (p.startsWith('/assets/')) return serveAsset(res, path.basename(p));
     if (p === '/favicon.ico') return res.writeHead(204).end();
-    // 앱 화면 껍데기 — 비밀이 없다. 열쇠는 화면이 주소(?t=)에서 받아 이 출처의 localStorage 에 둔다
+    // 앱 화면 껍데기 — 비밀이 없다. 열쇠는 화면이 한 번 쓰는 열기 코드(?c=)로 받거나(주소·명령 줄·기록에 열쇠가 남지 않게)
+    // 주소의 ?t= 를 확인한 뒤 이 출처의 localStorage 에 둔다
     if (p === '/' || p === '/index.html') return page(res, 'app', '');
+    // 열기 코드 → 열쇠 (한 번, 2분). 교차 출처는 X-DocBench 헤더 때문에 사전 요청에서 막힌다(CORS 를 열지 않는다)
+    if (p === '/api/app/redeem' && req.method === 'POST') {
+      if (req.headers['x-docbench'] !== '1') return send(res, 403, { error: 'CSRF', message: 'X-DocBench 헤더가 필요합니다' });
+      const b = await body(req).catch(() => ({}));
+      const c = typeof b.code === 'string' ? b.code : '';
+      const until = openCodes.get(c);
+      openCodes.delete(c);
+      if (!until || until < Date.now()) return send(res, 400, { error: 'BAD_REQUEST', message: '열기 코드가 맞지 않거나 지났습니다 — docbench app --open 으로 다시 여세요' });
+      return send(res, 200, { key: token });
+    }
 
     // CORS 사전 요청(OPTIONS)은 열쇠를 싣지 않는다 — 작업 공간 처리기가 허용 출처에만 답한다(데이터 없음)
     const wpre = req.method === 'OPTIONS' && p.match(/^\/api\/w\/([a-f0-9]{12})(\/.*)?$/);
@@ -203,6 +242,7 @@ export async function startApp(o = {}) {
       for (const e of reg.values()) await e.ws?.loadConfig();
       return send(res, 200, await me());
     }
+    if (m === 'POST' && p === '/open-code') return send(res, 200, { url: openLink() });
     if (m === 'POST' && p === '/shutdown') { send(res, 202, { ok: true }); setTimeout(() => void close().then(() => o.onShutdown?.()), 50); return; }
     send(res, 404, { error: 'NOT_FOUND' });
   }
@@ -236,6 +276,11 @@ export async function startApp(o = {}) {
     const root = path.resolve(raw);
     const st = await fs.stat(root).catch(() => null);
     if (!st?.isDirectory()) throw Object.assign(new Error('폴더가 없습니다: ' + root), { code: 'NOT_FOUND' });
+    // 이 PC 의 설정·열쇠·기록 보관함을 품는 폴더(C:\·홈 등)는 통째로 더하지 않는다 — 기록이 문서로 훑히고, Claude 가 열쇠를 읽을 수 있게 된다
+    const pcDir = path.dirname(pcConfigFile);
+    const pcc = await readPc();
+    const home = typeof pcc.dataHome === 'string' && pcc.dataHome ? path.resolve(pcDir, pcc.dataHome) : defaultDataHome(pcConfigFile);
+    for (const d of [pcDir, home]) if (samePath(d, root) || isInside(d, root)) throw Object.assign(new Error(`이 폴더 안에 DocBench 의 이 PC 설정·기록 보관함(${d})이 있어 통째로 더할 수 없습니다 — 그 아래 폴더(예: 문서·바탕 화면·작업 폴더)를 더하세요.`), { code: 'BAD_REQUEST' });
     await sync();
     const added = [...reg.values()].filter((e) => e.added && e.ws);
     const outer = added.find((e) => samePath(e.root, root) || isInside(root, e.root));
@@ -251,9 +296,10 @@ export async function startApp(o = {}) {
     if (mergeable.length && b.merge !== true) {
       return { needsMerge: mergeable.map((e) => ({ id: e.id, root: e.root, rel: path.relative(root, e.root).split(path.sep).join('/') })), kept };
     }
-    await updatePcWorkspace(pcConfigFile, root, (cur) => ({ ...cur, added: new Date().toISOString() }));
     const e = await ensure(root, { added: true, linked: false, create: true });
-    if (!e.ws) throw Object.assign(new Error(e.problem || '작업 공간을 열지 못했습니다'), { code: e.problemCode || 'INTERNAL' });
+    // 열지 못했으면 목록에 남기지 않는다(다음에 앱을 켤 때 그 문제의 작업 공간을 열지 않게) — 더한 표시는 연 뒤에 적는다
+    if (!e.ws) { if (!e.linked) await drop(e); throw Object.assign(new Error(e.problem || '작업 공간을 열지 못했습니다'), { code: e.problemCode || 'INTERNAL' }); }
+    await updatePcWorkspace(pcConfigFile, root, (cur) => ({ ...cur, added: new Date().toISOString() }));
     const ws = e.ws;
     let merged = 0;
     for (const c of mergeable) {
@@ -262,7 +308,9 @@ export async function startApp(o = {}) {
       const rel = path.relative(root, c.root).split(path.sep).join('/');
       // 안쪽 작업 공간을 먼저 내린다(그 처리기·엔진이 합치는 사이 쓰지 않게)
       await drop(c);
-      const r = await ws.withLock(core.lockKey.changes, () => ws.withLock(core.lockKey.state, () => core.mergeRecords(nodeFs(cws.dir), nodeFs(ws.dir), rel)));
+      // 두 기록의 이력·판 잠금을 잡고 합친다 — CLI·다른 프로그램이 좁은 쪽에 쓰는 것을 놓치지 않게
+      const r = await cws.withLock(core.lockKey.changes, () => cws.withLock(core.lockKey.state, () =>
+        ws.withLock(core.lockKey.changes, () => ws.withLock(core.lockKey.state, () => core.mergeRecords(nodeFs(cws.dir), nodeFs(ws.dir), rel)))));
       merged += r.feedback;
       const mk = path.join(cws.dir, core.DATA_MARKER);
       const m = core.parseDataMarker(await readJson(mk));
@@ -352,12 +400,14 @@ export async function startApp(o = {}) {
     if (closing) return;
     closing = true;
     clearInterval(timer);
+    await syncing?.catch(() => undefined);
+    await Promise.all([...preparing.values()].map((p) => p.catch(() => undefined)));
     for (const e of [...reg.values()]) await drop(e);
     const rec = /** @type {any} */ (await readJson(appFile(pcConfigFile)));
     if (rec && rec.pid === process.pid) await fs.rm(appFile(pcConfigFile), { force: true }).catch(() => undefined);
     await new Promise((r) => { server.close(() => r(undefined)); server.closeAllConnections?.(); });
   }
-  return { url, port: addr.port, token, openUrl: `${url}?t=${token}`, close, registry: reg, sync };
+  return { url, port: addr.port, token, openUrl: `${url}?t=${token}`, openLink, close, registry: reg, sync };
 }
 
 /** 노드 파일 시스템을 기록 합치기(core.mergeRecords)에 맞춘다 @param {string} dir */
@@ -368,7 +418,7 @@ export function nodeFs(dir) {
     /** @param {string} p */
     async read(p) { try { return { bytes: new Uint8Array(await fs.readFile(path.join(dir, p))) }; } catch { return null; } },
     /** @param {string} p @param {Uint8Array | string} d */
-    async write(p, d) { const f = path.join(dir, p); await fs.mkdir(path.dirname(f), { recursive: true }); await fs.writeFile(f, d); },
+    async write(p, d) { const f = path.join(dir, p); await fs.mkdir(path.dirname(f), { recursive: true }); await atomicWrite(f, typeof d === 'string' ? Buffer.from(d, 'utf8') : Buffer.from(d)); },
   };
 }
 
