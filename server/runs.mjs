@@ -199,6 +199,10 @@ export class RunEngine {
     /** @type {import('node:fs').FSWatcher | null} */
     this.watcher = null;
     this.emitLater = new Map();
+    /** 작업별 상태 쓰기 줄 — 늦게 끝난 쓰기가 나중 상태(취소됨 등)를 덮지 않게 차례로 @type {Map<string, Promise<unknown>>} */
+    this.statusChain = new Map();
+    /** 엔진이 꺼지며 마지막 상태를 적은 작업 — 그 뒤 도착하는 쓰기(진행·끝)는 버린다 @type {Set<string>} */
+    this.sealed = new Set();
   }
 
   get claudeCmd() { return this.o.claudeCommand || resolveClaudeCommand(this.ws.config.assistant?.command); }
@@ -223,7 +227,7 @@ export class RunEngine {
 
   /** @param {string} type @param {string} [id] */
   emit(type, id) {
-    if (!this.o.emit) return;
+    if (!this.o.emit || this.stopped) return;
     // 로그 줄마다 알리면 너무 잦다 — 같은 작업은 0.3초에 한 번
     const k = type + ':' + (id || '');
     if (this.emitLater.has(k)) return;
@@ -265,9 +269,9 @@ export class RunEngine {
     if (this.current) {
       // 반영하던 중이었으면 일부는 이미 들어갔을 수 있다 — "취소"가 아니라 확인이 필요한 실패로
       const applying = this.phase === 'applying';
-      await writeJson(this.files(this.current.id).status, { ...this.current, state: applying ? 'failed' : 'canceled', endedAt: now, error: applying ? '반영하던 중에 실행기·서버가 꺼졌습니다. 일부만 반영됐을 수 있으니 변경 이력을 확인하세요.' : '실행기·서버가 꺼져 멈췄습니다.', progress: undefined }).catch(() => undefined);
+      await this.writeStatus({ ...this.current, state: applying ? 'failed' : 'canceled', endedAt: now, error: applying ? '반영하던 중에 실행기·서버가 꺼졌습니다. 일부만 반영됐을 수 있으니 변경 이력을 확인하세요.' : '실행기·서버가 꺼져 멈췄습니다.', progress: undefined }, { seal: true }).catch(() => undefined);
     }
-    for (const r of this.queue.splice(0)) await writeJson(this.files(r.id).status, { ...r, state: 'canceled', endedAt: now, error: '실행기·서버가 꺼져 멈췄습니다.' }).catch(() => undefined);
+    for (const r of this.queue.splice(0)) await this.writeStatus({ ...r, state: 'canceled', endedAt: now, error: '실행기·서버가 꺼져 멈췄습니다.' }, { seal: true }).catch(() => undefined);
     const cur = /** @type {any} */ (await readJson(this.beatFile));
     if (cur && cur.pid === process.pid) await fs.rm(this.beatFile, { force: true });
     const mine = /** @type {any} */ (await readJson(this.localFile));
@@ -298,7 +302,21 @@ export class RunEngine {
     if (!core.validRunId(id)) throw Object.assign(new Error('잘못된 작업 id: ' + String(id).slice(0, 60)), { code: 'BAD_REQUEST' });
     const f = core.runFiles(id); return { req: path.join(this.dir, f.req), status: path.join(this.dir, f.status), log: path.join(this.dir, f.log), cancel: path.join(this.dir, f.cancel), out: path.join(this.dir, id + '.out.json') }; }
   /** @param {any} st */
-  async writeStatus(st) { if (this.current?.id === st.id) this.phase = st.progress?.phase || null; await writeJson(this.files(st.id).status, st); this.emit('runs', st.id); }
+  /**
+   * 상태 파일 쓰기. 같은 작업의 쓰기는 들어온 차례대로 하나씩 — 진행 표시를 쓰는 사이 엔진이 꺼지며 "취소됨"을 적으면
+   * 먼저 시작한 진행 쓰기가 나중에 끝나 "실행 중"으로 되돌리는 일이 있었다(CI 에서 재현). 꺼질 때 적은 상태(seal)가 마지막이다.
+   * @param {any} st @param {{ seal?: boolean }} [o]
+   */
+  async writeStatus(st, o = {}) {
+    if (this.sealed.has(st.id) && !o.seal) return;
+    if (o.seal) this.sealed.add(st.id);
+    if (this.current?.id === st.id) this.phase = st.progress?.phase || null;
+    const prev = this.statusChain.get(st.id) || Promise.resolve();
+    const next = prev.catch(() => undefined).then(() => writeJson(this.files(st.id).status, st));
+    this.statusChain.set(st.id, next);
+    try { await next; } finally { if (this.statusChain.get(st.id) === next) this.statusChain.delete(st.id); }
+    this.emit('runs', st.id);
+  }
   /** @param {string} id @param {any} line */
   async log(id, line) {
     const l = { at: new Date().toISOString(), ...line };

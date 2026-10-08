@@ -58,6 +58,34 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: 태그 없이 나갔던 지난 판 — 그 커밋의 파일 그대로 Release
+        # 0.3.0·0.4.0 은 태그 없이 나갔다(그 판 HTML 의 설치 안내가 v<판> 주소를 담고 있다). 이미 있으면 건너뛴다.
+        # 그 커밋의 package.json 판과, HTML 이 담은 CLI 주소·지문이 그 커밋의 docbench.mjs 와 맞을 때만 만든다.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BACKFILL: >-
+            0.3.0=34f418c187308f0a08f20ecace4768a9cc202399
+            0.4.0=5758bd93678e7fb3743bd2d00c25c18bc3e27ad0
+        run: |
+          for pair in $BACKFILL; do
+            V="${pair%%=*}"; SHA="${pair#*=}"
+            if git ls-remote --exit-code --tags origin "refs/tags/v$V" > /dev/null; then continue; fi
+            D="$RUNNER_TEMP/v$V"; mkdir -p "$D"
+            git show "$SHA:release/docbench.html" > "$D/docbench.html"
+            git show "$SHA:release/docbench.mjs" > "$D/docbench.mjs"
+            node -e '
+              const fs = require("fs"), crypto = require("crypto");
+              const [v, d, pkg] = process.argv.slice(1);
+              const html = fs.readFileSync(d + "/docbench.html", "utf8");
+              const sha = crypto.createHash("sha256").update(fs.readFileSync(d + "/docbench.mjs")).digest("hex");
+              if (JSON.parse(pkg).version !== v) throw new Error("그 커밋의 판이 " + v + " 가 아님");
+              if (!html.includes("/v" + v + "/release/docbench.mjs") || !html.includes(sha)) throw new Error("HTML 이 v" + v + " 주소·지문을 담지 않음");
+            ' "$V" "$D" "$(git show "$SHA:package.json")"
+            node scripts/release-notes.mjs "$V" "$D" > "$D/notes.md"
+            gh release create "v$V" "$D/docbench.html" "$D/docbench.mjs" --target "$SHA" --title "DocBench $V" --notes-file "$D/notes.md" --latest=false
+          done
       - name: 판과 태그
         id: v
         run: |
@@ -77,4 +105,4 @@ jobs:
         run: |
           node scripts/release-notes.mjs "$V" > "$RUNNER_TEMP/notes.md"
           gh release create "v$V" release/docbench.html release/docbench.mjs \
-            --target "$GITHUB_SHA" --title "DocBench $V" --notes-file "$RUNNER_TEMP/notes.md"
+            --target "$GITHUB_SHA" --title "DocBench $V" --notes-file "$RUNNER_TEMP/notes.md" --latest

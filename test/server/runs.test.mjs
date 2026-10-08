@@ -317,6 +317,25 @@ test('읽다 실패한 요청(동기화 중)은 다시 읽어 처리한다 · �
   assert.equal(st.state, 'canceled');
 });
 
+test('상태 쓰기는 작업마다 차례대로 — 꺼질 때 적은 상태(취소됨)를 늦게 끝난 진행 쓰기가 덮지 않는다', async (t) => {
+  // CI(Linux)에서 재현: 진행 표시 쓰기가 끝나기 전에 엔진이 꺼지며 "취소됨"을 적으면, 먼저 시작한 쓰기가 나중에 끝나 "실행 중"으로 되돌렸다
+  const dir = await tempWorkspace();
+  t.after(() => rm(dir));
+  const ws = await new Workspace(dir, { pcConfigFile: pcFileFor(dir) }).init();
+  const { RunEngine } = await import('../../server/runs.mjs');
+  const e = new RunEngine(ws, { kind: 'server' });
+  await fs.mkdir(e.dir, { recursive: true });
+  const id = 'run-20261008-220000-seal';
+  const read = async () => JSON.parse(await fs.readFile(path.join(e.dir, id + '.json'), 'utf8')).state;
+  const a = e.writeStatus({ id, state: 'running', progress: { phase: 'claude' } });
+  const b = e.writeStatus({ id, state: 'canceled' }, { seal: true });
+  const c = e.writeStatus({ id, state: 'running', progress: { phase: 'claude' } });
+  await Promise.all([a, b, c]);
+  assert.equal(await read(), 'canceled');
+  await e.writeStatus({ id, state: 'done' });
+  assert.equal(await read(), 'canceled', '봉한 뒤의 쓰기는 버린다');
+});
+
 test('대시보드에 끼우는 처리기는 Claude 작업 기본 끔 (runs: true 로 켬)', async (t) => {
   const dir = await tempWorkspace(null, { assistant: { command: [process.execPath, fakeClaude] } });
   const ws = await new Workspace(dir, { pcConfigFile: pcFileFor(dir) }).init();

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/*! DocBench CLI 0.4.0 (MIT) — one file: docbench runner · fb · doc · status. Bundles iconv-lite (MIT) and marked (MIT), jsdiff (BSD-3-Clause). https://github.com/d-j-lee/docbench */
+/*! DocBench CLI 0.4.1 (MIT) — one file: docbench runner · fb · doc · status. Bundles iconv-lite (MIT) and marked (MIT), jsdiff (BSD-3-Clause). https://github.com/d-j-lee/docbench */
 import { createRequire as __docbenchCreateRequire } from 'node:module'; const require = __docbenchCreateRequire(import.meta.url);
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -7012,7 +7012,7 @@ Please report this to https://github.com/markedjs/marked.`, e) {
     };
     safeFolderName = (name) => (name || "").replace(/[^\p{L}\p{N} ._-]/gu, "_").replace(/\s+/g, " ").trim().slice(0, 40) || "_";
     terminalHandoffPrompt = (folderName, data) => `/docbench:docbench-feedback \uBB38\uC11C \uD3F4\uB354 "${safeFolderName(folderName)}" \uC758 Claude \uCC28\uB840 \uD53C\uB4DC\uBC31\uC744 \uCC98\uB9AC\uD574 \uC918.` + (data?.dataHome && data.dataName ? ` \uAE30\uB85D\uC740 \uBB38\uC11C \uD3F4\uB354 \uBC16, \uAE30\uB85D \uBCF4\uAD00\uD568 "${safeFolderName(data.dataHome)}" \uC544\uB798 "${safeFolderName(data.dataName)}" \uD3F4\uB354\uC5D0 \uC788\uB2E4 \u2014 CLI \uAC00 \uBABB \uCC3E\uC73C\uBA74 docbench link "<\uBB38\uC11C \uD3F4\uB354>" --data "<\uAE30\uB85D \uD3F4\uB354>" \uB85C \uD55C \uBC88 \uC774\uC5B4 \uC918.` : "");
-    DOCBENCH_VERSION = true ? "0.4.0" : "dev";
+    DOCBENCH_VERSION = true ? "0.4.1" : "dev";
   }
 });
 
@@ -8231,6 +8231,8 @@ var init_runs = __esm({
         this.timers = [];
         this.watcher = null;
         this.emitLater = /* @__PURE__ */ new Map();
+        this.statusChain = /* @__PURE__ */ new Map();
+        this.sealed = /* @__PURE__ */ new Set();
       }
       get claudeCmd() {
         return this.o.claudeCommand || resolveClaudeCommand(this.ws.config.assistant?.command);
@@ -8271,7 +8273,7 @@ var init_runs = __esm({
       }
       /** @param {string} type @param {string} [id] */
       emit(type, id) {
-        if (!this.o.emit) return;
+        if (!this.o.emit || this.stopped) return;
         const k2 = type + ":" + (id || "");
         if (this.emitLater.has(k2)) return;
         this.emitLater.set(k2, setTimeout(() => {
@@ -8326,9 +8328,9 @@ var init_runs = __esm({
         const now = (/* @__PURE__ */ new Date()).toISOString();
         if (this.current) {
           const applying = this.phase === "applying";
-          await writeJson(this.files(this.current.id).status, { ...this.current, state: applying ? "failed" : "canceled", endedAt: now, error: applying ? "\uBC18\uC601\uD558\uB358 \uC911\uC5D0 \uC2E4\uD589\uAE30\xB7\uC11C\uBC84\uAC00 \uAEBC\uC84C\uC2B5\uB2C8\uB2E4. \uC77C\uBD80\uB9CC \uBC18\uC601\uB410\uC744 \uC218 \uC788\uC73C\uB2C8 \uBCC0\uACBD \uC774\uB825\uC744 \uD655\uC778\uD558\uC138\uC694." : "\uC2E4\uD589\uAE30\xB7\uC11C\uBC84\uAC00 \uAEBC\uC838 \uBA48\uCDC4\uC2B5\uB2C8\uB2E4.", progress: void 0 }).catch(() => void 0);
+          await this.writeStatus({ ...this.current, state: applying ? "failed" : "canceled", endedAt: now, error: applying ? "\uBC18\uC601\uD558\uB358 \uC911\uC5D0 \uC2E4\uD589\uAE30\xB7\uC11C\uBC84\uAC00 \uAEBC\uC84C\uC2B5\uB2C8\uB2E4. \uC77C\uBD80\uB9CC \uBC18\uC601\uB410\uC744 \uC218 \uC788\uC73C\uB2C8 \uBCC0\uACBD \uC774\uB825\uC744 \uD655\uC778\uD558\uC138\uC694." : "\uC2E4\uD589\uAE30\xB7\uC11C\uBC84\uAC00 \uAEBC\uC838 \uBA48\uCDC4\uC2B5\uB2C8\uB2E4.", progress: void 0 }, { seal: true }).catch(() => void 0);
         }
-        for (const r of this.queue.splice(0)) await writeJson(this.files(r.id).status, { ...r, state: "canceled", endedAt: now, error: "\uC2E4\uD589\uAE30\xB7\uC11C\uBC84\uAC00 \uAEBC\uC838 \uBA48\uCDC4\uC2B5\uB2C8\uB2E4." }).catch(() => void 0);
+        for (const r of this.queue.splice(0)) await this.writeStatus({ ...r, state: "canceled", endedAt: now, error: "\uC2E4\uD589\uAE30\xB7\uC11C\uBC84\uAC00 \uAEBC\uC838 \uBA48\uCDC4\uC2B5\uB2C8\uB2E4." }, { seal: true }).catch(() => void 0);
         const cur = (
           /** @type {any} */
           await readJson(this.beatFile)
@@ -8366,9 +8368,23 @@ var init_runs = __esm({
         return { req: path3.join(this.dir, f.req), status: path3.join(this.dir, f.status), log: path3.join(this.dir, f.log), cancel: path3.join(this.dir, f.cancel), out: path3.join(this.dir, id + ".out.json") };
       }
       /** @param {any} st */
-      async writeStatus(st2) {
+      /**
+       * 상태 파일 쓰기. 같은 작업의 쓰기는 들어온 차례대로 하나씩 — 진행 표시를 쓰는 사이 엔진이 꺼지며 "취소됨"을 적으면
+       * 먼저 시작한 진행 쓰기가 나중에 끝나 "실행 중"으로 되돌리는 일이 있었다(CI 에서 재현). 꺼질 때 적은 상태(seal)가 마지막이다.
+       * @param {any} st @param {{ seal?: boolean }} [o]
+       */
+      async writeStatus(st2, o = {}) {
+        if (this.sealed.has(st2.id) && !o.seal) return;
+        if (o.seal) this.sealed.add(st2.id);
         if (this.current?.id === st2.id) this.phase = st2.progress?.phase || null;
-        await writeJson(this.files(st2.id).status, st2);
+        const prev = this.statusChain.get(st2.id) || Promise.resolve();
+        const next = prev.catch(() => void 0).then(() => writeJson(this.files(st2.id).status, st2));
+        this.statusChain.set(st2.id, next);
+        try {
+          await next;
+        } finally {
+          if (this.statusChain.get(st2.id) === next) this.statusChain.delete(st2.id);
+        }
         this.emit("runs", st2.id);
       }
       /** @param {string} id @param {any} line */
