@@ -1,7 +1,7 @@
 /**
  * 대화상자 — 피드백 작성, 확인, 단축키 도움말. 네이티브 <dialog> 를 쓴다.
  */
-import type { Severity, TextSelector, WaitingOn } from '../types';
+import type { AskOptions, Severity, TextSelector, WaitingOn } from '../types';
 import { KEY_SEP, parseKey } from '../core/source';
 import { h } from './dom';
 import type { Section } from './render';
@@ -41,6 +41,44 @@ export class Dialogs {
         h('div', { class: 'db-sheet-act' }, h('button', { class: 'db-btn', type: 'button', onclick: () => fin(false) }, t('compose.cancel')), yes)));
       this.dlg.addEventListener('close', () => fin(false), { once: true });
       yes.focus();
+    });
+  }
+
+  /** 여러 갈래 중 하나 — 고른 id, 닫으면 null (기록 자리 고르기처럼 사람의 결정이 필요한 순간) */
+  choose(o: AskOptions): Promise<string | null> {
+    const t = this.app.t;
+    return new Promise((resolve) => {
+      let done = false;
+      const fin = (v: string | null) => { if (done) return; done = true; this.close(); resolve(v); };
+      const btns = o.choices.map((c) => h('button', { class: 'db-btn' + (c.primary ? ' primary' : ''), type: 'button', onclick: () => fin(c.id) }, c.label));
+      this.show(h('div', { class: 'db-sheet db-ask' },
+        h('h3', { text: o.title }),
+        o.body ? h('p', { class: 'db-ask-body', text: o.body }) : null,
+        h('div', { class: 'db-ask-choices' }, ...btns),
+        o.note ? h('p', { class: 'db-hint', text: o.note }) : null,
+        h('div', { class: 'db-sheet-act' }, h('button', { class: 'db-btn ghost', type: 'button', onclick: () => fin(null) }, t('compose.cancel')))));
+      this.dlg.addEventListener('close', () => fin(null), { once: true });
+      (btns.find((_, i) => o.choices[i].primary) || btns[0])?.focus();
+    });
+  }
+
+  /** 글 한 줄 받기 — 확인이면 글, 닫으면 null. readOnly 면 보여 주기만 */
+  prompt(o: { title: string; label: string; value?: string; placeholder?: string; note?: string; ok?: string; readOnly?: boolean }): Promise<string | null> {
+    const t = this.app.t;
+    return new Promise((resolve) => {
+      let done = false;
+      const fin = (v: string | null) => { if (done) return; done = true; this.close(); resolve(v); };
+      const input = h('input', { type: 'text', value: o.value || '', placeholder: o.placeholder || '', maxlength: '60', readonly: !!o.readOnly, autocomplete: 'nickname' }) as HTMLInputElement;
+      input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !o.readOnly) { e.preventDefault(); fin(input.value.trim()); } });
+      this.show(h('div', { class: 'db-sheet db-ask' },
+        h('h3', { text: o.title }),
+        h('label', { class: 'db-field' }, h('span', { text: o.label }), input),
+        o.note ? h('p', { class: 'db-hint', text: o.note }) : null,
+        h('div', { class: 'db-sheet-act' },
+          h('button', { class: 'db-btn', type: 'button', onclick: () => fin(null) }, t(o.readOnly ? 'close' : 'compose.cancel')),
+          o.readOnly ? null : h('button', { class: 'db-btn primary', type: 'button', onclick: () => fin(input.value.trim()) }, o.ok || 'OK'))));
+      this.dlg.addEventListener('close', () => fin(null), { once: true });
+      input.focus(); input.select();
     });
   }
 

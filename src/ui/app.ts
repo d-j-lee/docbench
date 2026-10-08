@@ -1,7 +1,7 @@
 /**
  * 작업대 본체 — 골격·데이터·이동·상단 바·레일·단축키.
  */
-import type { Action, DocBenchAdapters, DocBenchEvent, DocBenchOptions, DocEvent, Feedback, Manifest, Person, Unsubscribe, ViewState } from '../types';
+import type { Action, AskOptions, DocBenchAdapters, DocBenchEvent, DocBenchOptions, DocEvent, Feedback, Manifest, Person, Unsubscribe, ViewState } from '../types';
 import { normalizeFeedback, countTurns, turnOf } from '../core/feedback';
 import { compileRules, countPlaceholders, type Compiled } from './render';
 import { h, $, fmtTime, debounce, icon } from './dom';
@@ -13,6 +13,8 @@ import { renderMap, revealItems } from './mapview';
 import { renderChanges } from './changes';
 import { RunDock } from './runs';
 import { Hover } from './hover';
+import { Explorer } from './explorer';
+import { terminalHandoffPrompt } from '../core/runs';
 import cssText from './styles.css';
 
 const STYLE_ID = 'docbench-styles';
@@ -40,6 +42,11 @@ export class App {
   /** Claude 작업 창 (어댑터에 runs 가 있을 때만) */
   dock: RunDock | null = null;
   hover!: Hover;
+  /** 탐색기 (어댑터에 docs.tree 가 있을 때만 — 펼친 폴더만 읽는다) */
+  explorer: Explorer | null = null;
+  /** 보이는 범위 (DocBenchOptions.scope) — '' = 작업 공간 전부 */
+  scope = '';
+  private lastTodo = '';
   private unsubs: Unsubscribe[] = [];
   private stateKey = 'docbench:view';
   private toastT: ReturnType<typeof setTimeout> | undefined;
@@ -49,6 +56,7 @@ export class App {
     this.root = root;
     this.opts = opts;
     this.ad = opts.adapters;
+    this.scope = (opts.scope || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     this.t = makeT(opts.locale || 'ko', { ai: this.ai });
     if (opts.injectStyles !== false) injectStyles(opts.styleNonce);
     this.buildShell();
@@ -67,6 +75,7 @@ export class App {
     this.t = makeT(this.opts.locale || 'ko', { ai: this.ai });
     this.rules = compileRules(this.manifest.render);
     this.stateKey = 'docbench:view:' + this.manifest.project.name;
+    if (this.ad.docs.tree) this.explorer = new Explorer(this);
     this.loadLocalState();
     await this.loadIdentity();
     if (this.dock && !this.can('assistant.run')) { this.dock.el.remove(); this.dock = null; }
@@ -80,7 +89,7 @@ export class App {
     void this.countTodos();
     if (this.dock) void this.dock.start();
     const hash = this.opts.routing !== 'none' ? hashView() : '';
-    await this.navigate(hash || this.opts.initialDoc || this.state.last || this.firstDoc());
+    await this.navigate(await this.startView([hash, this.opts.initialDoc, this.state.last]));
     if (this.opts.routing !== 'none') {
       const onHash = () => { const k = hashView(); if (k && k !== this.view) void this.navigate(k); };
       window.addEventListener('hashchange', onHash);
@@ -97,9 +106,59 @@ export class App {
     this.root.classList.remove('docbench');
   }
 
+  /** 처음 열 문서: 범위 안의 첫 문서. 없으면(큰 폴더의 맨 위 등) 작업 공간 첫 화면 */
   private firstDoc(): string {
-    for (const g of this.manifest.groups) if (g.docs.length) return g.docs[0];
-    return Object.keys(this.manifest.docs)[0] || 'map';
+    for (const g of this.manifest.groups) for (const d of g.docs) if (this.inScope(d)) return d;
+    return Object.keys(this.manifest.docs).find((d) => this.inScope(d)) || (this.explorer ? 'home' : 'map');
+  }
+
+  /**
+   * 처음 열 화면: 주소의 #문서 → 호스트가 준 문서 → 지난번 문서 → 첫 문서. 목록에 없는 문서(큰 폴더의 깊은 곳)는
+   * 그 폴더를 읽어 정말 있을 때만 — 다른 작업 공간의 주소·지난 기록이 남아 "없는 문서"를 열지 않게.
+   */
+  private async startView(cands: (string | undefined)[]): Promise<string> {
+    for (const v of cands) {
+      if (!v) continue;
+      if (v in this.manifest.docs || v === 'map' || v === 'changes' || v === 'home') return v;
+      if (!this.looksDoc(v) || !this.inScope(v)) continue;
+      const dir = v.includes('/') ? v.slice(0, v.lastIndexOf('/')) : '';
+      try { if ((await this.ad.docs.tree!(dir))?.some((e) => e.path === v && e.doc)) return v; } catch { /* 다음 후보 */ }
+    }
+    return this.firstDoc();
+  }
+
+  // ------------------------------------------------------------ 범위·고정·최근
+  /** 이 문서가 보이는 범위 안인가 */
+  inScope(id: string | undefined): boolean { return !this.scope || !id || id === this.scope || id.startsWith(this.scope + '/'); }
+  /** 범위 안의 피드백 (지도 항목 피드백은 범위가 없을 때만) */
+  scopedFb(): Feedback[] { return this.scope ? this.fb.filter((f) => f.target.kind !== 'item' && this.inScope(f.docId)) : this.fb; }
+  isPinned(key: string): boolean { return (this.state.pins || []).includes(key); }
+  togglePin(key: string): void {
+    const pins = this.state.pins || [];
+    this.state.pins = pins.includes(key) ? pins.filter((x) => x !== key) : [key, ...pins].slice(0, 40);
+    this.saveState();
+    this.renderRail();
+  }
+  private noteRecent(id: string): void {
+    this.state.recent = [id, ...(this.state.recent || []).filter((x) => x !== id)].slice(0, 12);
+  }
+  /** 목록에 없던 문서(큰 폴더에서 나무로 찾은 것)도 열 수 있게 자리를 만든다 */
+  private ensureDocMeta(id: string): void {
+    if (this.manifest.docs[id]) return;
+    const file = id.split('/').pop() || id;
+    this.manifest.docs[id] = { title: file.replace(/\.(md|markdown)$/i, ''), source: { path: id } };
+  }
+  /** 문서처럼 보이는 id (나무가 있는 어댑터에서 목록 밖 문서를 열 때) */
+  private looksDoc(id: string): boolean { return !!this.explorer && /\.(md|markdown)$/i.test(id) && !/(^|\/)\.\.(\/|$)/.test(id); }
+
+  /** 사람 이름 — 내 것이면 "나"(또는 내 별명), 남이면 별명, 없으면 "사용자 xxxx" */
+  personLabel(p: Person | undefined): string {
+    if (!p) return '';
+    if (p.kind === 'assistant') return p.name || this.ai;
+    if (p.kind === 'external') return this.t('changes.external');
+    if (p.id && this.me.id && p.id === this.me.id) return this.me.name || this.t('me');
+    if (p.name) return p.name;
+    return p.id ? this.t('person.anon', { id: p.id.replace(/^u-/, '').slice(-4) }) : this.t('fb.by.me');
   }
 
   // ------------------------------------------------------------ 골격
@@ -175,7 +234,11 @@ export class App {
   private onDocEvent(ev: DocEvent): void {
     if (this.destroyed) return;
     if (ev.type === 'manifest') {
-      void this.ad.docs.manifest().then((m) => { this.manifest = m; this.rules = compileRules(m.render); this.renderRail(); void this.countTodos(); });
+      void this.ad.docs.manifest().then((m) => {
+        // 나무로 찾아 연 문서(목록 밖)는 자리를 남긴다
+        if (this.view && this.manifest.docs[this.view] && !m.docs[this.view]) m.docs[this.view] = this.manifest.docs[this.view];
+        this.manifest = m; this.rules = compileRules(m.render); this.explorer?.invalidate(); this.renderRail(); void this.countTodos();
+      });
     } else if (ev.type === 'doc' && ev.id) {
       this.todoDirty(ev.id);
       if (this.doc && this.doc.id === ev.id) void this.doc.onExternalChange();
@@ -212,10 +275,14 @@ export class App {
   docState(id: string) { return (this.state.docs[id] ||= {}); }
 
   // ------------------------------------------------------------ 빈칸 집계
-  /** 레일의 빈칸 수. 문서가 많아도 저장소를 몰아치지 않게 4개씩, 300개 넘으면 연 문서만 센다 */
+  /**
+   * 레일의 빈칸 수·"바뀜" 표시. 문서를 읽어야 해서 **이미 본 문서·피드백이 있는 문서·고정한 문서**만 센다(D64) —
+   * 큰 폴더에서 모든 문서를 읽지 않게. 문서가 적으면(60개 이하) 전부. 저장소를 몰아치지 않게 4개씩, 300개까지.
+   */
   private async countTodos(): Promise<void> {
-    const ids = Object.keys(this.manifest.docs);
-    if (ids.length > 300) return;
+    const all = Object.keys(this.manifest.docs).filter((d) => this.inScope(d));
+    const tracked = new Set([...Object.keys(this.state.docs || {}), ...this.fb.map((f) => f.docId).filter(Boolean), ...(this.state.pins || []), ...(this.state.recent || [])]);
+    const ids = (all.length <= 60 ? all : all.filter((d) => tracked.has(d))).slice(0, 300);
     let next = 0;
     const worker = async () => {
       while (next < ids.length && !this.destroyed) {
@@ -247,8 +314,9 @@ export class App {
       const ok = await this.dialogs.confirm(this.t('edit.leave'));
       if (!ok) return;
     }
-    if (!(view in this.manifest.docs) && view !== 'map' && view !== 'changes') view = this.firstDoc();
-    const same = view === this.view && this.doc;
+    if (!(view in this.manifest.docs) && this.looksDoc(view)) this.ensureDocMeta(view);
+    if (!(view in this.manifest.docs) && view !== 'map' && view !== 'changes' && view !== 'home') view = this.firstDoc();
+    const same = view === this.view && (this.doc || view === 'home');
     this.root.classList.remove('rail-open');
     this.els.selbtn.hidden = true;
     if (!same) {
@@ -262,9 +330,13 @@ export class App {
       try { this.ad.docs.focus?.(view in this.manifest.docs ? view : null); } catch { /* 선택 기능 */ }
       if (view === 'map') renderMap(this);
       else if (view === 'changes') await renderChanges(this);
+      else if (view === 'home') this.renderHome();
       else {
+        this.explorer?.reveal(view);
         this.doc = new DocView(this, view);
-        await this.doc.load(opts.compareFrom);
+        if (await this.doc.load(opts.compareFrom)) { this.noteRecent(view); this.saveState(); }
+        // 목록에 없던 문서를 열려다 못 열었으면(지난 주소·다른 폴더의 문서) 자리를 지운다
+        else if (!this.manifest.docs[view]?.source?.size && this.looksDoc(view) && this.state.recent?.includes(view)) this.state.recent = this.state.recent.filter((x) => x !== view);
       }
       this.emit({ type: 'navigate', view });
     } else if (opts.compareFrom && this.doc) await this.doc.showChangedSince(opts.compareFrom, true);
@@ -279,9 +351,13 @@ export class App {
     const bar = this.els.bar;
     bar.replaceChildren();
     const m = this.manifest;
+    const embedded = this.opts.chrome === 'embedded';
     bar.append(
       h('button', { class: 'db-btn ghost db-toggle nav', type: 'button', onclick: () => this.root.classList.toggle('rail-open'), text: this.t('nav.toggle') }),
-      h('div', { class: 'db-brand' }, h('span', { class: 'db-logo', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), h('b', { text: m?.project.name || 'DocBench' }), m?.project.subtitle ? h('small', { text: m.project.subtitle }) : null),
+      // 대시보드 탭에 끼우면 제목 줄을 줄인다(탭 이름이 이미 있다) — 지금 문서 이름만
+      embedded
+        ? h('div', { class: 'db-brand compact' }, h('b', { text: this.view && this.manifest?.docs[this.view] ? this.manifest.docs[this.view].title : m?.project.name || 'DocBench' }))
+        : h('div', { class: 'db-brand' }, h('span', { class: 'db-logo', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), h('b', { text: m?.project.name || 'DocBench' }), m?.project.subtitle ? h('small', { text: m.project.subtitle }) : null),
       h('div', { class: 'db-grow' }),
     );
     if (!m) return;
@@ -297,7 +373,10 @@ export class App {
       }
       bar.append(box);
     }
-    const c = countTurns(this.fb);
+    const c = countTurns(this.scopedFb());
+    // 대시보드가 탭에 배지를 달 수 있게 — 바뀔 때만
+    const todoSig = `${c.owner}:${c.assistant}`;
+    if (todoSig !== this.lastTodo) { this.lastTodo = todoSig; this.emit({ type: 'todo', owner: c.owner, assistant: c.assistant }); }
     bar.append(h('div', { class: 'db-turns' },
       h('button', { class: 'db-pill owner', type: 'button', title: this.t('turn.owner'), onclick: () => this.panel.open('all', 'owner') }, h('span', { class: 'lbl', text: this.t('turn.owner') }), h('span', { class: 'n', text: c.owner })),
       h('button', { class: 'db-pill assistant', type: 'button', title: this.t('turn.assistant'), onclick: () => this.panel.open('all', 'assistant') }, h('span', { class: 'lbl', text: this.t('turn.assistant') }), h('span', { class: 'n', text: c.assistant })),
@@ -314,12 +393,73 @@ export class App {
         h('span', { text: this.t(st === 'off' ? 'run.bar.offFull' : 'run.bar.' + st) }),
         a ? h('span', { class: 'clk', text: '' }) : null));
     }
+    bar.append(this.meButton());
     bar.append(h('button', { class: 'db-btn ghost db-toggle panel', type: 'button', onclick: () => { this.root.classList.toggle('panel-open'); this.panel.render(); }, text: this.t('panel.toggle') }));
   }
 
+  /** 오른쪽 위 "나" — 누르면 표시 이름(별명)과 계정을 본다. 처음에 이름을 묻지 않는다(D63) */
+  private meButton(): HTMLElement {
+    const label = this.me.name || this.t('me');
+    const initial = (this.me.name || '').trim().slice(0, 1).toUpperCase();
+    return h('button', { class: 'db-me', type: 'button', title: this.t('me.title'), 'aria-haspopup': 'dialog', onclick: () => void this.editMe() },
+      initial ? h('span', { class: 'av', text: initial }) : h('span', { class: 'av', html: icon('user') }),
+      h('span', { class: 'n', text: label }));
+  }
+
+  /** 표시 이름 바꾸기 — 계정(id)은 그대로라 예전 피드백도 계속 "내 것" */
+  async editMe(): Promise<void> {
+    const t = this.t;
+    const id = this.ad.identity;
+    const src = id?.source || 'host';
+    const acct = src === 'browser' ? t('me.acct.browser', { id: this.me.id || '' }) : src === 'pc' ? t('me.acct.pc', { id: this.me.id || '' }) : t('me.acct.host');
+    const name = await this.dialogs.prompt({ title: t('me.title'), label: t('me.name'), value: this.me.name || '', placeholder: t('me.name.ph'), note: acct + ' ' + t(id?.setName ? 'me.note' : 'me.note.fixed'), ok: t('me.save'), readOnly: !id?.setName });
+    if (name == null || !id?.setName) return;
+    try {
+      this.me = await id.setName(name);
+      this.renderBar(); this.panel.render(); this.renderRail();
+      this.toast(t('me.saved'));
+    } catch (e) { this.toast(t('err.generic', { msg: (e as Error).message })); }
+  }
+
+  /** 작업대가 묻는 짧은 선택 (DocBenchHandle.ask — 단일 HTML 의 기록 자리 고르기 등) */
+  ask(o: AskOptions): Promise<string | null> { return this.dialogs.choose(o); }
+
+  /** 문서가 아직 없는 작업 공간의 첫 화면 — 큰 폴더의 맨 위 등. 왼쪽 탐색기로 안내한다 */
+  private renderHome(): void {
+    const t = this.t;
+    const m = this.manifest;
+    const idx = m.index;
+    const pins = (this.state.pins || []).filter((p) => this.inScope(p.replace(/\/$/, '')));
+    const recent = (this.state.recent || []).filter((d) => this.inScope(d)).slice(0, 6);
+    const go = (id: string) => h('button', { class: 'db-btn sm', type: 'button', onclick: () => void (id.endsWith('/') ? this.revealFolder(id.slice(0, -1)) : this.navigate(id)) }, id.endsWith('/') ? id : this.docTitle(id));
+    this.els.page.replaceChildren(h('section', { class: 'db-home' },
+      h('h1', { text: this.scope ? this.scope.split('/').pop()! : m.rootName || m.project.name }),
+      h('p', { class: 'db-hint', text: t(idx && !idx.complete ? (idx.reason === 'big-root' ? 'home.big' : 'home.many') : 'home.lead', { n: idx?.docs ?? Object.keys(m.docs).length }) }),
+      pins.length || recent.length ? h('div', { class: 'db-home-list' }, h('b', { text: t('rail.working') }), h('div', { class: 'db-row wrap' }, ...[...pins, ...recent.filter((r) => !pins.includes(r))].map(go))) : null,
+      h('ol', { class: 'db-home-steps' }, h('li', { text: t('home.step1') }), h('li', { text: t('home.step2') }), h('li', { text: t('home.step3') }))));
+  }
+
+  /** 폴더를 나무에서 펼쳐 보이게 (고정한 폴더를 눌렀을 때) */
+  async revealFolder(dir: string): Promise<void> {
+    if (!this.explorer) return;
+    this.explorer.reveal(dir + '/x');
+    this.root.classList.add('rail-open');
+    this.renderRail();
+    requestAnimationFrame(() => this.els.rail.querySelector<HTMLElement>(`[title="${CSS.escape(dir + '/')}"]`)?.scrollIntoView({ block: 'center' }));
+  }
+
   async handToAssistant(): Promise<void> {
-    const rows = this.fb.filter((f) => turnOf(f) === 'assistant' && !this.dock?.activeFor(f.id));
+    const rows = this.scopedFb().filter((f) => turnOf(f) === 'assistant' && !this.dock?.activeFor(f.id));
     if (!rows.length) { this.toast(this.t('send.empty')); return; }
+    // 대시보드가 맡으면(자기 Claude Code 터미널에 보내기 등) 그쪽으로 — 아니면 작업대가 스스로
+    const host = this.opts.host?.handoff;
+    if (host) {
+      const docs = [...new Set(rows.map((r) => r.docId).filter(Boolean))];
+      try {
+        const r = await host({ feedbackIds: rows.map((f) => f.id), docs, prompt: terminalHandoffPrompt(this.manifest.rootName || this.manifest.project.name, undefined, rows.map((f) => f.id)) });
+        if (r?.handled) { this.toast(r.message || this.t('send.host')); this.emit({ type: 'assistant:requested', feedbackIds: rows.map((f) => f.id) }); return; }
+      } catch (e) { this.toast(this.t('err.generic', { msg: (e as Error).message })); return; }
+    }
     // Claude 작업을 띄울 수 있으면 창에서 모델·노력을 보고 시작한다
     if (this.dock) { this.dock.handoff(rows.map((f) => f.id)); return; }
     const docs = [...new Set(rows.map((r) => this.manifest.docs[r.docId]?.title || r.docId))];
@@ -343,7 +483,7 @@ export class App {
     rail.replaceChildren();
     const t = this.t;
     const per: Record<string, { owner: number; assistant: number }> = {};
-    for (const f of this.fb) {
+    for (const f of this.scopedFb()) {
       const tt = turnOf(f);
       const k = f.target.kind === 'item' ? '#map' : f.docId;
       per[k] ||= { owner: 0, assistant: 0 };
@@ -361,6 +501,50 @@ export class App {
       if (this.changedDocs.has(key)) box.append(h('span', { class: 'db-dot chg', title: t('rail.changed'), text: t('rail.changed.short') }));
       return box;
     };
+    /** 폴더 아래 피드백 수 (접힌 폴더에서도 어디에 일이 있는지 보이게) */
+    const dirDots = (dir: string): HTMLElement | null => {
+      let a = 0, o = 0;
+      for (const [k, v] of Object.entries(per)) if (k.startsWith(dir + '/')) { a += v.assistant; o += v.owner; }
+      if (!a && !o) return null;
+      return h('span', { class: 'db-dots' }, a ? h('span', { class: 'db-dot assistant soft', title: t('turn.assistant'), text: a }) : null, o ? h('span', { class: 'db-dot owner soft', title: t('turn.owner'), text: o }) : null);
+    };
+
+    // ---- 작업 공간 (이름 — 누르면 폴더 열기·바꾸기·기록 자리)
+    rail.append(this.workspaceHead());
+
+    // ---- 문서 줄 (나무·작업 중에서 함께 쓴다)
+    const docRow = (id: string, depth: number, o: { pin?: boolean } = {}) => {
+      const meta = this.manifest.docs[id];
+      const file = id.split('/').pop() || id;
+      const stem = file.replace(/\.(md|markdown)$/i, '');
+      const title = meta?.title || stem;
+      const b = h('button', { class: 'db-nav', type: 'button', style: `--d:${depth}`, title: id, role: 'treeitem', 'aria-current': this.view === id ? 'page' : null, onclick: () => void this.navigate(id) },
+        h('span', { class: 'ic', html: icon('doc') }),
+        h('span', { class: 't' }, h('span', { text: title }), title !== stem ? h('small', { text: file }) : null),
+        dots(id));
+      const row = o.pin === false ? b : h('div', { class: 'db-tree-row', style: `--d:${depth}` }, b, this.explorer ? this.explorer.pinButton(id, this.isPinned(id)) : null);
+      const out: HTMLElement[] = [row];
+      if (this.view === id && this.doc && feats.outline !== false) { const ol = this.doc.outline(); if (ol) { ol.style.setProperty('--d', String(depth)); out.push(ol); } }
+      return out;
+    };
+
+    // ---- 작업 중 (고정한 폴더·문서 + 최근에 연 문서) — 큰 폴더에서도 자주 쓰는 곳으로 바로
+    const pins = (this.state.pins || []).filter((p) => this.inScope(p.replace(/\/$/, '')));
+    const recent = (this.state.recent || []).filter((d) => this.inScope(d) && !pins.includes(d) && d !== this.view).slice(0, 5);
+    if (this.explorer && (pins.length || recent.length)) {
+      const box = h('div', { class: 'db-working', role: 'group', 'aria-label': t('rail.working') }, h('div', { class: 'db-rail-h', text: t('rail.working') }));
+      for (const p of pins) {
+        if (p.endsWith('/')) {
+          const dir = p.slice(0, -1);
+          box.append(h('div', { class: 'db-tree-row' },
+            h('button', { class: 'db-dir pinned', type: 'button', title: p, onclick: () => void this.revealFolder(dir) },
+              h('span', { class: 'ic', html: icon('folder') }), h('span', { class: 't', text: dir.split('/').pop() || dir }), dirDots(dir)),
+            this.explorer.pinButton(p, true)));
+        } else box.append(...docRow(p, 0).slice(0, 1));
+      }
+      for (const d of recent) box.append(h('div', { class: 'db-recent' }, ...docRow(d, 0, { pin: false }).slice(0, 1)));
+      rail.append(box);
+    }
 
     // ---- 도구
     const views = new Set<string>();
@@ -378,31 +562,32 @@ export class App {
     if (views.has('map') && feats.map !== false) tools.append(tool('map', 'map', t('view.map'), () => void this.navigate('map'), this.view === 'map', per['#map'] ? dots('#map') : null));
     if (tools.childElementCount > 1) rail.append(tools);
 
-    // ---- 문서
-    const docRow = (id: string, depth: number) => {
-      const meta = this.manifest.docs[id];
-      const file = id.split('/').pop() || id;
-      const stem = file.replace(/\.(md|markdown)$/i, '');
-      const b = h('button', { class: 'db-nav', type: 'button', style: `--d:${depth}`, title: id, 'aria-current': this.view === id ? 'page' : null, onclick: () => void this.navigate(id) },
-        h('span', { class: 'ic', html: icon('doc') }),
-        h('span', { class: 't' }, h('span', { text: meta.title }), meta.title !== stem ? h('small', { text: file }) : null),
-        dots(id));
-      const out: HTMLElement[] = [b];
-      if (this.view === id && this.doc && feats.outline !== false) { const ol = this.doc.outline(); if (ol) { ol.style.setProperty('--d', String(depth)); out.push(ol); } }
-      return out;
-    };
-    const docsBox = h('div', { class: 'db-docs' });
-    const rootLabel = this.manifest.rootName || this.manifest.project.name;
-    docsBox.append(h('div', { class: 'db-rail-h' }, h('span', { class: 'ic', html: icon('folderOpen') }), h('span', { text: rootLabel }), h('small', { text: t('rail.docs.count', { n: Object.keys(this.manifest.docs).length }) })));
-    const custom = this.manifest.groups.filter((g) => g.id !== '_bench' && !g.id.startsWith('dir:') && g.docs.length);
-    // config.json 에 모음(그룹)을 적었으면 "모음 / 폴더" 를 고른다 — 폴더 = 디스크 구조 그대로, 모음 = 적어 둔 묶음
-    const byFolder = !!this.manifest.folders && (!custom.length || this.state.railView === 'folder');
-    if (custom.length && this.manifest.folders) {
-      const seg = h('div', { class: 'db-seg db-railview', role: 'group', 'aria-label': t('rail.view') },
-        h('button', { type: 'button', 'aria-pressed': String(!byFolder), onclick: () => { this.state.railView = 'groups'; this.saveState(); this.renderRail(); } }, t('rail.view.groups')),
-        h('button', { type: 'button', 'aria-pressed': String(byFolder), onclick: () => { this.state.railView = 'folder'; this.saveState(); this.renderRail(); } }, t('rail.view.folder')));
-      docsBox.append(seg);
+    // ---- 문서: 탐색기(펼친 폴더만 읽음) — 나무가 없는 저장소·"모음" 보기는 예전 목록
+    const customGroups = this.manifest.groups.filter((g) => g.id !== '_bench' && !g.id.startsWith('dir:') && g.docs.length);
+    const seg = () => h('div', { class: 'db-seg db-railview', role: 'group', 'aria-label': t('rail.view') },
+      h('button', { type: 'button', 'aria-pressed': String(this.state.railView === 'groups'), onclick: () => { this.state.railView = 'groups'; this.saveState(); this.renderRail(); } }, t('rail.view.groups')),
+      h('button', { type: 'button', 'aria-pressed': String(this.state.railView !== 'groups'), onclick: () => { this.state.railView = 'folder'; this.saveState(); this.renderRail(); } }, t('rail.view.folder')));
+    if (this.explorer && !(customGroups.length && this.state.railView === 'groups')) {
+      const idx = this.manifest.index;
+      const box = h('div', { class: 'db-docs' },
+        h('div', { class: 'db-rail-h' }, h('span', { class: 'ic', html: icon('folderOpen') }), h('span', { text: t('rail.explorer') }),
+          h('small', { title: idx && !idx.complete ? t(idx.reason === 'big-root' ? 'rail.index.big' : 'rail.index.many') : '', text: t(idx && !idx.complete ? 'rail.docs.countPartial' : 'rail.docs.count', { n: Object.keys(this.manifest.docs).filter((d) => this.inScope(d)).length }) })));
+      if (customGroups.length) box.append(seg());
+      if (idx && !idx.complete) box.append(h('div', { class: 'db-index-note', text: t(idx.reason === 'big-root' ? 'rail.index.big' : 'rail.index.many') }));
+      box.append(this.explorer.render((id, d) => docRow(id, d), dirDots));
+      rail.append(box);
+      this.railFoot(rail);
+      rail.scrollTop = keepScroll;
+      return;
     }
+
+    const docsBox = h('div', { class: 'db-docs' });
+    const rootLabel = this.opts.workspace ? t('rail.explorer') : this.manifest.rootName || this.manifest.project.name;
+    docsBox.append(h('div', { class: 'db-rail-h' }, h('span', { class: 'ic', html: icon('folderOpen') }), h('span', { text: rootLabel }), h('small', { text: t('rail.docs.count', { n: Object.keys(this.manifest.docs).length }) })));
+    const custom = customGroups;
+    // config.json 에 모음(그룹)을 적었으면 "모음 / 폴더" 를 고른다 — 폴더 = 디스크 구조 그대로, 모음 = 적어 둔 묶음
+    const byFolder = !this.explorer && !!this.manifest.folders && (!custom.length || this.state.railView === 'folder');
+    if (custom.length && (this.manifest.folders || this.explorer)) docsBox.append(seg());
     if (byFolder) {
       docsBox.append(this.folderTree(Object.keys(this.manifest.docs), docRow));
       rail.append(docsBox);
@@ -449,6 +634,33 @@ export class App {
     rail.append(docsBox);
     this.railFoot(rail);
     rail.scrollTop = keepScroll;
+  }
+
+  /** 왼쪽 맨 위: 작업 공간 이름. 호스트가 메뉴(DocBenchOptions.workspace)를 주면 누르면 열린다 */
+  private workspaceHead(): HTMLElement {
+    const m = this.manifest;
+    const name = m.rootName || m.project.name;
+    const menu = this.opts.workspace;
+    const label = h('span', { class: 't' }, h('b', { text: name }), this.scope ? h('small', { text: this.scope }) : null);
+    if (!menu) return h('div', { class: 'db-ws' }, h('span', { class: 'ic', html: icon('folderOpen') }), label);
+    return h('button', { class: 'db-ws', type: 'button', 'aria-haspopup': 'menu', title: this.t('ws.menu'), onclick: (e: Event) => this.openMenu(e.currentTarget as HTMLElement, menu.items(), (id) => void menu.run(id)) },
+      h('span', { class: 'ic', html: icon('folderOpen') }), label, h('span', { class: 'dn', html: icon('down') }));
+  }
+
+  /** 작은 메뉴 — 바깥을 누르거나 Esc 로 닫는다 */
+  openMenu(anchor: HTMLElement, items: { id: string; label: string; hint?: string; primary?: boolean; disabled?: boolean }[], run: (id: string) => void): void {
+    this.root.querySelector('.db-menu')?.remove();
+    const r = anchor.getBoundingClientRect(), base = this.root.getBoundingClientRect();
+    const close = () => { box.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', esc, true); };
+    const outside = (e: Event) => { if (!box.contains(e.target as Node) && e.target !== anchor) close(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { close(); anchor.focus(); } };
+    const box = h('div', { class: 'db-menu', role: 'menu', style: `top:${Math.round(r.bottom - base.top + 4)}px;left:${Math.round(Math.max(8, r.left - base.left))}px` },
+      ...items.map((it) => h('button', { class: 'db-menu-i' + (it.primary ? ' primary' : ''), type: 'button', role: 'menuitem', disabled: !!it.disabled, onclick: () => { close(); run(it.id); } },
+        h('span', { class: 'l', text: it.label }), it.hint ? h('small', { text: it.hint }) : null)));
+    this.root.append(box);
+    document.addEventListener('pointerdown', outside, true);
+    document.addEventListener('keydown', esc, true);
+    (box.querySelector('button:not([disabled])') as HTMLElement | null)?.focus();
   }
 
   private railFoot(rail: HTMLElement): void {

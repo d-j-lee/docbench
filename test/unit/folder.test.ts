@@ -133,14 +133,20 @@ describe('메모리 폴더', () => {
     expect(a.workspace.config.warnings?.length).toBe(1);
   });
 
-  it('처음 여는 큰 폴더도 빨리 연다 (판을 한꺼번에 적기)', async () => {
+  it('처음 여는 큰 폴더도 빨리 연다 — 문서를 읽지 않고, 연 문서부터 판을 적는다 (D64)', async () => {
     const files: Record<string, string> = {};
     for (let i = 0; i < 300; i++) files[`d/${i}.md`] = `# 문서 ${i}\n\n본문\n`;
     const fs = fsFromMemory(files);
+    let reads = 0;
+    const read = fs.read.bind(fs);
+    fs.read = async (p, max) => { if (p.endsWith('.md') && max == null) reads++; return read(p, max); };
     const t0 = Date.now();
-    await open(fs);
+    const a = await open(fs);
     expect(Date.now() - t0).toBeLessThan(3000);
-    expect(Object.keys(JSON.parse(fs.text('.docbench/state.json')!).docs).length).toBe(300);
+    expect(reads).toBe(0);
+    expect(JSON.parse(fs.text('.docbench/state.json') || '{"docs":{}}').docs).toEqual({});
+    const d = await a.docs.load('d/7.md');
+    expect(JSON.parse(fs.text('.docbench/state.json')!).docs).toEqual({ 'd/7.md': d.version });
   });
 
   it('보고 있는 문서(focus)를 매번 확인하고, 내 저장은 바깥 변경으로 다시 알리지 않는다', async () => {
@@ -294,5 +300,65 @@ describe('실제 디스크: 브라우저 어댑터 ↔ CLI 가 같은 폴더를 
       expect(iconv.decode(after, 'cp949')).toContain('똠양꿍');
       expect(JSON.parse(await cli('doc', 'show', cpId)).version).toBe(s.version);
     } finally { await fsp.rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe('기록은 처음 쓸 때 (D65) · 펼친 폴더만 (D64)', () => {
+  const docsFs = () => fsFromMemory({ 'a.md': '# A\n\n## 절\n\n본문\n', 'sub/b.md': '# B\n' }, '문서');
+  const fbIn = (docId = 'a.md') => ({ docId, target: { kind: 'doc' as const }, body: '확인' });
+
+  it('기록 없이 열면 읽기·둘러보기만 하고 아무것도 쓰지 않는다 — 처음 쓸 때 한 번 묻는다(동시에 둘이어도 한 번)', async () => {
+    const docs = docsFs();
+    const data = fsFromMemory({}, '기록');
+    let asked = 0;
+    const a = await open(docs, { data: null, requestData: async () => { asked++; await new Promise((r) => setTimeout(r, 30)); return { fs: data, mode: 'outside' as const, home: '보관함', name: '문서' }; } });
+    await a.docs.load('a.md');
+    expect((await a.docs.tree!('sub'))!.map((x) => x.path)).toEqual(['sub/b.md']);
+    expect([...docs.files.keys()].sort()).toEqual(['a.md', 'sub/b.md']);
+    expect([...data.files.keys()]).toEqual([]);
+    expect(asked).toBe(0);
+    const [f1, f2] = await Promise.all([a.feedback.create(fbIn()), a.feedback.create(fbIn('sub/b.md'))]);
+    expect(asked).toBe(1);
+    expect([...data.files.keys()].filter((k) => k.startsWith('feedback/')).sort()).toEqual([`feedback/${f1.id}.json`, `feedback/${f2.id}.json`].sort());
+    expect([...docs.files.keys()].sort()).toEqual(['a.md', 'sub/b.md']);   // 문서 폴더에는 문서만
+    expect(a.workspace.dataLabel).toContain('보관함');
+  });
+
+  it('고르지 않으면(취소) 저장하지 않고 이유를 알린다 — 다음에 다시 묻는다', async () => {
+    const docs = docsFs();
+    let asked = 0;
+    const a = await open(docs, { data: null, requestData: async () => { asked++; return null; } });
+    await expect(a.feedback.create(fbIn())).rejects.toMatchObject({ code: 'NO_RECORDS' });
+    await expect(a.feedback.create(fbIn())).rejects.toMatchObject({ code: 'NO_RECORDS' });
+    expect(asked).toBe(2);
+    expect([...docs.files.keys()].sort()).toEqual(['a.md', 'sub/b.md']);
+  });
+
+  it('기록이 아직 없어도 보고 있는 문서를 밖에서 고치면 다시 읽힌다(이력 없이)', async () => {
+    const docs = docsFs();
+    const a = await open(docs, { data: null, requestData: async () => null });
+    await a.docs.load('a.md');
+    a.docs.focus?.('a.md');
+    const events: DocEvent[] = [];
+    const off = a.docs.subscribe!((e) => events.push(e));
+    await new Promise((r) => setTimeout(r, 60));
+    await docs.write('a.md', '# A\n\n## 절\n\n고친 본문\n');
+    await expect.poll(() => events.some((e) => e.type === 'doc' && e.id === 'a.md'), { timeout: 2000 }).toBe(true);
+    off();
+    expect([...docs.files.keys()].sort()).toEqual(['a.md', 'sub/b.md']);
+  });
+
+  it('큰 폴더(드라이브·홈)는 맨 위만 훑고, 펼친 폴더의 문서가 목록에 더해진다', async () => {
+    const fs = fsFromMemory({ 'Windows/x.txt': 'x', 'Program Files/app/readme.md': '# 앱\n', 'Users/dj/notes/회의.md': '# 주간 회의\n', '맨위.md': '# 맨 위\n' }, 'D');
+    const a = await open(fs);
+    const m = await a.docs.manifest();
+    expect(Object.keys(m.docs)).toEqual(['맨위.md']);
+    expect(m.index).toMatchObject({ complete: false, reason: 'big-root' });
+    expect((await a.docs.tree!('')).map((x) => x.name)).toEqual(['Program Files', 'Users', 'Windows', '맨위.md']);
+    expect(await a.docs.tree!('../x')).toBeNull();
+    const t = await a.docs.tree!('Users/dj/notes');
+    expect(t!.map((x) => [x.path, !!x.doc])).toEqual([['Users/dj/notes/회의.md', true]]);
+    expect(Object.keys((await a.docs.manifest()).docs).sort()).toEqual(['Users/dj/notes/회의.md', '맨위.md']);
+    expect((await a.docs.load('Users/dj/notes/회의.md')).md).toContain('주간 회의');
   });
 });

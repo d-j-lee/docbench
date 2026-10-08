@@ -1,235 +1,291 @@
 /**
  * 서버 없는 단일 HTML(dist/docbench.html)의 부트스트랩.
- * 파일 하나를 엣지·크롬으로 열고 문서 폴더를 고르면 그 폴더를 직접 읽고 쓴다(폴더 어댑터).
  *
- *   ?pick       기억한 폴더를 자동으로 열지 않고 처음 화면
+ * 처음 열면 **작업대가 바로** 뜬다(D63) — 이름을 묻지 않고(계정은 이 브라우저에 저절로), 폴더도 묻지 않는다.
+ * "시작하기" 작업 공간(메모리, 저장 안 함)에서 둘러보고, 왼쪽 위 작업 공간 메뉴의 "폴더 열기"로 내 폴더를 연다.
+ *
+ *   ?pick       기억한 폴더를 자동으로 열지 않고 시작하기
  *   ?lang=en    화면 말
- *   ?name=이름  피드백 작성자 이름(처음 화면의 입력과 같다)
+ *   ?name=이름  표시 이름(별명)
  *
- * 기록(피드백·이력·작업)은 기본으로 문서 폴더 밖 "기록 보관함"(사람이 고른 폴더, 예: 이 HTML 옆) 아래 <문서 폴더 이름>/ 에 둔다(D57) —
- * 문서 폴더에는 아무것도 만들지 않아 같은 폴더에서 일하는 다른 프로그램(다른 Claude 세션 등)이 헷갈리지 않는다.
- * 팀이 git 으로 함께 쓰려면 문서 폴더 안 .docbench 를 고를 수 있다. 예전 안쪽 기록은 보관함으로 옮길 수 있다.
+ * 폴더를 열면 탐색기처럼 펼친 곳만 읽는다(D64). 기록(피드백·이력·작업)은 문서 폴더 밖 "기록 보관함"(사람이 고른 폴더, 예: 이 HTML 옆)
+ * 아래 <문서 폴더 이름>/ 에 두며(D57), **처음 저장할 때** 한 번 고른다(D65) — 보기만 할 때는 아무것도 묻지 않는다.
+ * 주소(localhost·https)로 열면 고른 폴더를 기억하고, 파일로 열면 기억하지 않는다(D36 — 다른 로컬 HTML 이 꺼내 쓸 수 있어서).
+ * 팀이 git 으로 함께 쓰는 문서 폴더 안 .docbench 가 있으면 그것을 쓴다(밖으로 옮길 수 있다).
+ * 하위 폴더를 따로 열어 쓰던 기록이 같은 보관함에 있으면, 넓은 폴더를 열 때 합치자고 한다(D66).
  */
 import { createDocBench, version, type DocBenchHandle } from './index';
-import { createFolderAdapters, type FolderAdapters } from './adapters/folder';
+import { createFolderAdapters, type FolderAdapters, type DataAttach } from './adapters/folder';
+import { createMemoryAdapters } from './adapters/memory';
 import { fsFromHandle, fsFromFiles, subFs, copyTree, type FsLike } from './adapters/folder-fs';
-import { dataFolderCandidates, HOME_MARKER, DATA_MARKER, jsonFile, newDataMarker, parseDataMarker, sameDocsFolder, nextDocsSample, walkable } from './core/workspace';
+import { dataFolderCandidates, HOME_MARKER, DATA_MARKER, jsonFile, newDataMarker, parseDataMarker, sameDocsFolder, nextDocsSample, walkable, buildManifest, mergeConfig, titleFromText, lockKey, safeName } from './core/workspace';
+import { mergeRecords } from './core/records';
 import { liveRunners } from './core/runs';
 import { pickFolder, ensurePermission, rememberFolder, recallFolder, forgetFolder, folderAccessSupported } from './adapters/folder-pick';
+import { welcomeContent } from './welcome';
 import { makeT } from './ui/i18n';
-import { h } from './ui/dom';
+import type { DocBenchAdapters, WorkspaceMenu } from './types';
 
 const q = new URLSearchParams(location.search);
 const locale: 'ko' | 'en' = (q.get('lang') || navigator.language || 'ko').toLowerCase().startsWith('ko') ? 'ko' : 'en';
 const t = makeT(locale, { v: version });
-const NAME_KEY = 'docbench:standalone:name';
 const store = {
   get: (k: string) => { try { return localStorage.getItem(k); } catch { return null; } },
   set: (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* 저장소가 막혀도 동작 */ } },
 };
 
+// ---------------------------------------------------------------- 계정 (D63)
+
+const ACCOUNT_KEY = 'docbench:account';
+/** 예전 판의 이름 칸 — 있으면 그 이름이 계정·표시 이름이 된다(예전 피드백이 계속 "내 것") */
+const LEGACY_NAME_KEY = 'docbench:standalone:name';
+type Account = { id: string; name?: string };
+
+/** 이 브라우저의 계정. 처음이면 만든다 — 이름을 묻지 않는다 */
+function account(): Account {
+  try {
+    const a = JSON.parse(store.get(ACCOUNT_KEY) || 'null');
+    if (a && typeof a.id === 'string' && a.id) {
+      const nm = q.get('name')?.trim();
+      return nm && nm !== a.name ? saveAccount({ id: a.id, name: nm.slice(0, 60) }) : { id: a.id, ...(typeof a.name === 'string' && a.name ? { name: a.name } : {}) };
+    }
+  } catch { /* 새로 */ }
+  const legacy = (q.get('name') || store.get(LEGACY_NAME_KEY) || '').trim();
+  if (legacy) return saveAccount({ id: safeName(legacy), name: legacy.slice(0, 60) });
+  const rnd = new Uint8Array(5);
+  crypto.getRandomValues(rnd);
+  return saveAccount({ id: 'u-' + Array.from(rnd, (b) => b.toString(16).padStart(2, '0')).join('') });
+}
+function saveAccount(a: Account): Account {
+  store.set(ACCOUNT_KEY, JSON.stringify(a));
+  return a;
+}
+
+// ---------------------------------------------------------------- 상태
+
 let bench: DocBenchHandle | null = null;
-let adapters: FolderAdapters | null = null;
+let adapters: (DocBenchAdapters & { close?(): void; workspace?: FolderAdapters['workspace'] }) | null = null;
+/** 지금 연 폴더 (시작하기면 null) */
+let current: { dir: FileSystemDirectoryHandle | null; fs: FsLike; home?: FileSystemDirectoryHandle } | null = null;
 
 /** 실행기 설치 안내에 넣을 CLI 주소·지문 — 빌드(scripts/build.mjs)가 같은 판의 release/docbench.mjs 로 채운다 */
 const runnerSetup = typeof __DOCBENCH_CLI_URL__ !== 'undefined' && __DOCBENCH_CLI_URL__
   ? { version, cliUrl: __DOCBENCH_CLI_URL__, sha256: __DOCBENCH_CLI_SHA256__ }
   : undefined;
 
-/** 기록 자리: 밖(보관함 핸들) 또는 안(.docbench) */
-type DataChoice = { home: FileSystemDirectoryHandle; name: string } | { inside: true };
-const INSIDE_KEY = (docs: string) => `docbench:standalone:inside:${docs}`;
-
-/** 보관함 아래 이 문서 폴더의 기록 폴더 */
-const dataFsOf = (home: FileSystemDirectoryHandle, name: string) => subFs(fsFromHandle(home), name);
-
-/** 문서 폴더의 마크다운 몇 개(표본) — 이름이 같은 다른 문서 폴더의 기록을 가려낸다(브라우저는 경로를 모른다) */
-async function docIdsOf(fs: FsLike, limit = 400): Promise<string[]> {
-  const out: string[] = [];
-  const walk = async (dir: string, depth: number): Promise<void> => {
-    if (depth > 8 || out.length >= limit) return;
-    for (const e of (await fs.list(dir).catch(() => null)) || []) {
-      if (out.length >= limit) return;
-      const rel = dir ? `${dir}/${e.name}` : e.name;
-      if (e.kind === 'directory') { if (walkable(e.name)) await walk(rel, depth + 1); }
-      else if (/\.(md|markdown)$/i.test(e.name)) out.push(rel);
-    }
-  };
-  await walk('', 0);
-  return out;
-}
-
-/**
- * 보관함 안에서 이 문서 폴더의 기록 폴더 이름: '<이름>', '<이름> (2)' … 중 표식의 문서 표본이 겹치는 것,
- * 없으면 처음 빈 자리. 이름이 같은 다른 문서 폴더의 기록과 섞이지 않게(D61).
- */
-async function dataNameFor(home: FileSystemDirectoryHandle, docs: FileSystemDirectoryHandle): Promise<string> {
-  const hf = fsFromHandle(home);
-  const ids = await docIdsOf(fsFromHandle(docs));
-  let free: string | null = null;
-  for (const name of dataFolderCandidates(docs.name)) {
-    const ents = await hf.list(name);
-    if (!ents) { free ??= name; continue; }
-    const f = await hf.read(`${name}/${DATA_MARKER}`);
-    let m = null;
-    try { m = f ? parseDataMarker(JSON.parse(new TextDecoder().decode(f.bytes))) : null; } catch { m = null; }
-    if (m) { if (sameDocsFolder(m, ids)) return name; continue; }
-    if (!ents.length) free ??= name;
-  }
-  if (!free) throw new Error(t('data.bad.full', { name: docs.name }));
-  return free;
-}
-
-async function open(root: HTMLElement, fs: FsLike, name: string, choice: DataChoice = { inside: true }): Promise<void> {
-  const outside = 'home' in choice;
-  adapters = await createFolderAdapters(fs, { userName: name || undefined, locale, runnerSetup, ...(outside ? { data: dataFsOf(choice.home, choice.name), dataHome: choice.home.name, dataName: choice.name } : {}) });
-  // 실행기(이 PC 로그인 이름)와 이름을 맞추자는 제안을 받아들이면: 이름을 바꿔 다시 연다
-  root.addEventListener('docbench:rename', (e) => {
-    const n = String((e as CustomEvent).detail?.name || '').trim();
-    if (!n) return;
-    store.set(NAME_KEY, n);
-    const u = new URL(location.href);
-    u.searchParams.delete('name');
-    location.replace(u.toString());
-  }, { once: true });
-  // 다른 폴더로 바꾸는 길 — 작업대 아래 링크(새 탭에서 처음 화면)
-  const manifest = adapters.docs.manifest.bind(adapters.docs);
-  adapters.docs.manifest = async () => {
-    const m = await manifest();
-    m.project.links = [...(m.project.links || []), { label: t('start.switch'), url: '?pick' }];
-    return m;
-  };
-  document.title = `${fs.name} · DocBench`;
-  root.replaceChildren();
-  bench = createDocBench(root, { adapters, locale, routing: 'hash', shortcuts: 'global', injectStyles: false });
-  (window as unknown as { docbench: unknown }).docbench = bench;
-  await bench.ready;
-}
-
-function startScreen(root: HTMLElement, remembered: FileSystemDirectoryHandle | null): void {
-  root.className = 'docbench';
-  root.dataset.theme = 'auto';
-  const msg = h('p', { class: 'db-start-msg', role: 'status' });
-  const say = (text: string, info = false) => { msg.textContent = text; msg.classList.toggle('info', info); };
-  const nameInput = h('input', { type: 'text', value: q.get('name') || store.get(NAME_KEY) || '', autocomplete: 'name', maxlength: '60', required: true }) as HTMLInputElement;
-  const name = () => { const v = nameInput.value.trim(); if (v) store.set(NAME_KEY, v); return v; };
-  const canWrite = folderAccessSupported() && window.isSecureContext;
-  // 쓰기는 이름이 있어야 한다 — 비우면 모두가 같은 'me' 가 되어 남의 피드백이 '내 것'으로 보이고 보기 상태가 섞인다
-  const needName = () => { if (name()) return false; say(t('start.name.need')); nameInput.focus(); return true; };
-
-  const fail = (e: unknown) => {
-    const n = (e as DOMException)?.name;
-    say(n === 'SecurityError' ? t('start.blocked') : n === 'NotAllowedError' ? t('start.denied') : t('start.fail', { msg: (e as Error)?.message || String(e) }));
-  };
-  const run = async (fn: () => Promise<FsLike | null>) => {
-    say(t('start.opening'), true);
-    try {
-      const fs = await fn();
-      if (!fs) { say(''); return; }
-      await open(root, fs, name());
-    } catch (e) { fail(e); }
-  };
-  /** 문서 폴더를 얻은 뒤: 기록 자리를 정하고(필요하면 묻고) 연다 */
-  const withDocs = async (dir: FileSystemDirectoryHandle) => {
-    say(t('start.opening'), true);
-    try {
-      const choice = await chooseData(dir, step, say);
-      if (!choice) { step.replaceChildren(); say(''); return; }
-      say(t('start.opening'), true);
-      await open(root, fsFromHandle(dir), name(), choice);
-    } catch (e) { fail(e); }
-  };
-  const openNew = () => { if (needName()) return; void (async () => {
-    try {
-      const dir = await pickFolder();
-      if (!dir) return;
-      if (!(await ensurePermission(dir))) throw new DOMException('denied', 'NotAllowedError');
-      if (persist) await rememberFolder(dir);
-      await withDocs(dir);
-    } catch (e) { fail(e); }
-  })(); };
-  const reopen = () => { if (needName()) return; void (async () => {
-    try {
-      if (!remembered || !(await ensurePermission(remembered))) throw new DOMException('denied', 'NotAllowedError');
-      await withDocs(remembered);
-    } catch (e) { fail(e); }
-  })(); };
-  /** 두 번째 단계(기록 자리 고르기)가 그려질 곳 */
-  const step = h('div', { class: 'db-start-step' });
-  // 다른 브라우저·http 주소: <input webkitdirectory> 로 읽기만
-  const picker = h('input', { type: 'file', hidden: true, webkitdirectory: true, multiple: true }) as HTMLInputElement;
-  picker.addEventListener('change', () => { const files = picker.files; if (files?.length) void run(async () => fsFromFiles(files)); });
-
-  const acts = h('div', { class: 'db-start-acts' },
-    canWrite ? h('button', { class: 'db-btn primary', type: 'button', onclick: openNew, text: t('start.open') }) : null,
-    canWrite && remembered ? h('button', { class: 'db-btn', type: 'button', onclick: reopen, text: t('start.reopen', { name: remembered.name }) }) : null,
-    h('button', { class: canWrite ? 'db-btn ghost' : 'db-btn primary', type: 'button', onclick: () => picker.click(), text: t('start.readonly') }),
-  );
-  if (!canWrite) say(folderAccessSupported() ? t('start.insecure') : t('start.unsupported'), true);
-  else if (!persist) say(t('start.forget'), true);
-  root.replaceChildren(h('div', { class: 'db-start-wrap' }, h('section', { class: 'db-start', 'aria-labelledby': 'db-start-title' },
-    h('div', { class: 'db-brand' }, h('span', { class: 'db-logo', 'aria-hidden': 'true' }, h('i'), h('i'), h('i')), h('b', { text: 'DocBench' })),
-    h('h1', { id: 'db-start-title', text: t('start.title') }),
-    h('p', { text: t('start.lead') }),
-    h('p', { text: t('start.where2') }),
-    canWrite ? h('label', { class: 'db-start-name' }, h('span', { class: 'l', text: t('start.name') }), nameInput,
-      h('span', { class: 'db-start-note' }, h('b', { text: t('start.name.important') }), ' ', t('start.name.hint'), h('br'), h('small', { text: t('start.name.how') }))) : null,
-    acts, step, picker, msg,
-    h('small', { text: t('start.foot') }),
-  )));
-}
-
 /**
  * 고른 폴더를 기억할지. file:// 은 모든 로컬 HTML 파일이 한 출처를 나눠 써서, 같은 브라우저로 연 다른 HTML 파일
  * (예: 메일로 받은 첨부)이 기억한 폴더 핸들을 꺼내 읽고 쓸 수 있다(독립 검토에서 재현) — 그래서 파일로 열면 기억하지 않는다.
  */
 const persist = location.protocol !== 'file:';
+const canWrite = () => folderAccessSupported() && window.isSecureContext;
+const INSIDE_KEY = (docs: string) => `docbench:standalone:inside:${docs}`;
 
+/** 기록 보관함 고르기 창 (시험은 준 핸들로) */
+const pickHome = () => (testPickHome ? testPickHome() : pickFolder('docbench-home'));
 
-export async function boot(root: HTMLElement): Promise<void> {
-  if (!persist) await forgetFolder();   // 예전 판이 file:// 에 남긴 핸들도 지운다
-  const remembered = folderAccessSupported() && persist ? await recallFolder() : null;
-  // 권한이 이미 있으면(브라우저가 "항상 허용"을 기억) 바로 연다. ?pick 이면 처음 화면
-  const knownName = q.get('name') || store.get(NAME_KEY) || '';
-  if (remembered && knownName && !q.has('pick') && (await ensurePermission(remembered, 'readwrite', false).catch(() => false))) {
-    // 기록 자리도 묻지 않고 정해지면(기억한 보관함·안에 두기로 한 폴더) 바로 연다
-    const quiet = await quietChoice(remembered);
-    if (quiet) { try { await open(root, fsFromHandle(remembered), knownName, quiet); return; } catch { /* 처음 화면으로 */ } }
+/** 보관함 아래 이 문서 폴더의 기록 폴더 */
+const dataFsOf = (home: FileSystemDirectoryHandle, name: string) => subFs(fsFromHandle(home), name);
+
+// ---------------------------------------------------------------- 띄우기
+
+async function mount(root: HTMLElement, ad: DocBenchAdapters, menu: WorkspaceMenu, title: string, initialDoc?: string): Promise<void> {
+  // 다른 작업 공간으로 바꾸면 주소의 #문서(앞 작업 공간의 것)를 지운다
+  if (adapters && location.hash) history.replaceState(null, '', location.pathname + location.search);
+  adapters?.close?.();
+  bench?.destroy();
+  root.replaceChildren();
+  document.title = `${title} · DocBench`;
+  adapters = ad;
+  bench = createDocBench(root, { adapters: ad, locale, routing: 'hash', shortcuts: 'global', injectStyles: false, workspace: menu, initialDoc });
+  (window as unknown as { docbench: unknown }).docbench = bench;
+  await bench.ready;
+}
+
+/** 작업 공간 메뉴 — 폴더 열기·다시 열기·기록 자리·시작하기 */
+function menuFor(root: HTMLElement, kind: 'welcome' | 'folder'): WorkspaceMenu {
+  let remembered: FileSystemDirectoryHandle | null = null;
+  if (persist && folderAccessSupported()) void recallFolder().then((h) => { remembered = h; });
+  const picker = document.createElement('input');
+  picker.type = 'file'; picker.hidden = true; picker.multiple = true;
+  (picker as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true;
+  picker.addEventListener('change', () => { const files = picker.files; if (files?.length) void openReadOnly(root, files); });
+  root.append(picker);
+  return {
+    items: () => {
+      const ws = adapters?.workspace;
+      const out: ReturnType<WorkspaceMenu['items']> = [];
+      if (canWrite()) out.push({ id: 'open', label: t('ws.open'), hint: t('ws.open.hint'), primary: kind === 'welcome' });
+      if (canWrite() && remembered && (kind === 'welcome' || remembered.name !== current?.fs.name)) out.push({ id: 'reopen', label: t('start.reopen', { name: remembered.name }) });
+      out.push({ id: 'readonly', label: t('start.readonly'), hint: canWrite() ? t('ws.readonly.hint') : t(folderAccessSupported() ? 'start.insecure' : 'start.unsupported') });
+      if (kind === 'folder' && ws?.fs.writable) {
+        out.push({ id: 'records', label: ws.hasData ? t('ws.records', { where: ws.dataLabel }) : t('ws.records.none'), hint: t(ws.dataMode === 'inside' ? 'ws.records.inside' : 'ws.records.hint') });
+        if (ws.dataMode === 'inside' && current?.dir) out.push({ id: 'moveOut', label: t('data.move') });
+      }
+      if (kind === 'folder') out.push({ id: 'welcome', label: t('ws.welcome') });
+      return out;
+    },
+    run: async (id) => {
+      try {
+        if (id === 'open') { const dir = await pickFolder(); if (dir) await openPicked(root, dir); }
+        else if (id === 'reopen' && remembered) { if (await ensurePermission(remembered)) await openPicked(root, remembered); else bench?.toast(t('start.denied')); }
+        else if (id === 'readonly') picker.click();
+        else if (id === 'records') await recordsInfo();
+        else if (id === 'moveOut') await moveOut(root);
+        else if (id === 'welcome') { if (persist) await forgetFolder(); await welcome(root); }
+      } catch (e) { fail(e); }
+    },
+  };
+}
+
+function fail(e: unknown): void {
+  const n = (e as DOMException)?.name;
+  bench?.toast(n === 'SecurityError' ? t('start.blocked') : n === 'NotAllowedError' ? t('start.denied') : t('start.fail', { msg: (e as Error)?.message || String(e) }), { sticky: true });
+}
+
+/** 시작하기 — 메모리 작업 공간. 이름·폴더를 묻지 않고 작업대를 보여 준다 */
+async function welcome(root: HTMLElement): Promise<void> {
+  current = null;
+  const w = welcomeContent(locale);
+  const cfg = mergeConfig({ title: t('welcome.title') }, 'DocBench');
+  const manifest = buildManifest(cfg, Object.keys(w.docs), (id) => ({ title: titleFromText(w.docs[id], id) }), '', false, { rootName: t('welcome.root') });
+  manifest.project.storage = t('welcome.storage');
+  manifest.groups = manifest.groups.filter((g) => g.id !== '_bench');
+  let acct = account();
+  const mem = createMemoryAdapters({ manifest, docs: w.docs, feedback: w.feedback, me: { kind: 'human', id: acct.id, ...(acct.name ? { name: acct.name } : {}) } });
+  mem.identity = {
+    source: 'browser',
+    me: async () => ({ kind: 'human', id: acct.id, ...(acct.name ? { name: acct.name } : {}) }),
+    can: () => true,
+    setName: async (name) => { acct = saveAccount({ id: acct.id, ...(name.trim() ? { name: name.trim().slice(0, 60) } : {}) }); return { kind: 'human', id: acct.id, ...(acct.name ? { name: acct.name } : {}) }; },
+  };
+  await mount(root, mem, menuFor(root, 'welcome'), t('welcome.title'), Object.keys(w.docs)[0]);
+  if (!canWrite()) bench?.toast(t(folderAccessSupported() ? 'start.insecure' : 'start.unsupported'), { sticky: true });
+}
+
+/** 고른 문서 폴더를 연다 — 주소로 열었으면 기억 */
+async function openPicked(root: HTMLElement, dir: FileSystemDirectoryHandle): Promise<void> {
+  if (!(await ensurePermission(dir))) throw new DOMException('denied', 'NotAllowedError');
+  if (persist) await rememberFolder(dir);
+  await openFolder(root, dir);
+}
+
+/**
+ * 문서 폴더를 연다. 기록 자리는 묻지 않고 정해지면 붙이고(문서 폴더 안 .docbench · 기억한 보관함), 아니면 처음 저장할 때 묻는다.
+ */
+async function openFolder(root: HTMLElement, dir: FileSystemDirectoryHandle): Promise<void> {
+  const fs = fsFromHandle(dir);
+  const acct = account();
+  const hasInside = await isDir(dir, '.docbench');
+  const quiet = hasInside ? null : await quietHome(dir);
+  current = { dir, fs, home: quiet?.home };
+  const ad = await createFolderAdapters(fs, {
+    user: acct, onUserChange: saveAccount, locale, runnerSetup,
+    // 안쪽 .docbench 가 있으면 그것(예전 판·팀 공유) — data 를 비우면 어댑터가 안쪽을 쓴다
+    ...(hasInside ? {} : { data: quiet ? dataFsOf(quiet.home, quiet.name) : null, dataHome: quiet?.home.name, dataName: quiet?.name }),
+    requestData: () => askData(dir),
+  });
+  addSwitchLink(ad);
+  await mount(root, ad, menuFor(root, 'folder'), dir.name);
+  tellMerged();
+  if (quiet) void offerMerge(quiet.home, quiet.name, dir);
+  if (hasInside && store.get(INSIDE_KEY(dir.name)) !== '1' && store.get(INSIDE_KEY(dir.name) + ':told') !== '1') {
+    store.set(INSIDE_KEY(dir.name) + ':told', '1');
+    bench?.toast(t('data.inside.told'), { action: t('data.move'), onAction: () => void moveOut(root).catch(fail) });
   }
-  startScreen(root, remembered);
 }
 
-/** 시험용: 이미 가진 폴더 핸들(OPFS 등)로 바로 연다. home 을 주면 기록은 그 보관함 아래(밖), 아니면 문서 폴더 안 */
-export async function openHandle(root: HTMLElement, dir: FileSystemDirectoryHandle, name = '', home?: FileSystemDirectoryHandle): Promise<FolderAdapters> {
-  const dn = home ? await prepareHome(home, dir) : '';
-  await open(root, fsFromHandle(dir), name, home ? { home, name: dn } : { inside: true });
-  return adapters!;
+/** 다른 브라우저·http 주소: <input webkitdirectory> 로 읽기만 */
+async function openReadOnly(root: HTMLElement, files: FileList): Promise<void> {
+  const fs = fsFromFiles(files);
+  current = { dir: null, fs };
+  const ad = await createFolderAdapters(fs, { user: account(), onUserChange: saveAccount, locale, data: null });
+  addSwitchLink(ad);
+  await mount(root, ad, menuFor(root, 'folder'), fs.name);
 }
 
-/** 시험용: 처음 화면의 기록 자리 단계를 그 폴더 핸들로(고르기 창 대신) */
-export async function startWith(root: HTMLElement, dir: FileSystemDirectoryHandle, name: string, pickHome: () => Promise<FileSystemDirectoryHandle | null>): Promise<void> {
-  testPickHome = pickHome;
-  store.set(NAME_KEY, name);
-  startScreen(root, null);
-  const step = root.querySelector('.db-start-step') as HTMLElement;
-  const msg = root.querySelector('.db-start-msg') as HTMLElement;
-  const choice = await chooseData(dir, step, (text) => { msg.textContent = text; });
-  if (choice) await open(root, fsFromHandle(dir), name, choice);
+/** 작업대 아래 "다른 폴더 열기" 링크 (새 탭에서 시작하기) */
+function addSwitchLink(ad: FolderAdapters): void {
+  const manifest = ad.docs.manifest.bind(ad.docs);
+  ad.docs.manifest = async () => {
+    const m = await manifest();
+    m.project.links = [...(m.project.links || []), { label: t('start.switch'), url: '?pick' }];
+    return m;
+  };
 }
-let testPickHome: (() => Promise<FileSystemDirectoryHandle | null>) | null = null;
 
-// ---------------------------------------------------------------- 기록 자리
+// ---------------------------------------------------------------- 기록 자리 (D65)
 
 const isDir = async (dir: FileSystemDirectoryHandle, name: string) => { try { await dir.getDirectoryHandle(name); return true; } catch { return false; } };
 
-/** 묻지 않고 정할 수 있으면: 기억한 보관함(문서 폴더 안 기록이 없을 때) · 이 문서 폴더는 안에 두기로 함 */
-async function quietChoice(docs: FileSystemDirectoryHandle): Promise<DataChoice | null> {
-  const hasInside = await isDir(docs, '.docbench');
-  if (hasInside && store.get(INSIDE_KEY(docs.name)) === '1') return { inside: true };
-  if (hasInside) return null;
+/** 묻지 않고 정할 수 있는 보관함: 주소로 열었을 때 기억한 보관함(권한이 이미 있고 쓸 수 있는 자리) */
+async function quietHome(docs: FileSystemDirectoryHandle): Promise<{ home: FileSystemDirectoryHandle; name: string } | null> {
   const home = persist ? await recallFolder('home') : null;
-  if (home && (await ensurePermission(home, 'readwrite', false).catch(() => false)) && !(await homeProblem(home, docs))) return { home, name: await prepareHome(home, docs) };
-  return null;
+  if (!home || !(await ensurePermission(home, 'readwrite', false).catch(() => false)) || (await homeProblem(home, docs))) return null;
+  try { return { home, name: await prepareHome(home, docs) }; } catch { return null; }
+}
+
+/** 이 HTML 이 있는 폴더 (파일로 열었을 때) — 기록 보관함을 그 옆에 두라고 권한다 */
+function htmlFolder(): string {
+  if (location.protocol !== 'file:') return '';
+  let p = decodeURIComponent(location.pathname).replace(/\/[^/]*$/, '');
+  if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1).replace(/\//g, '\\');
+  return p;
+}
+
+/**
+ * 처음 저장하는 순간 기록 자리를 묻는다. 고른 보관함 아래 <문서 폴더 이름>/ 을 기록 폴더로 쓴다.
+ * 안에 두기(.docbench)는 팀이 git 으로 함께 쓸 때. 취소하면 null(저장하지 않음).
+ */
+async function askData(docs: FileSystemDirectoryHandle): Promise<DataAttach | null> {
+  const remembered = persist ? await recallFolder('home') : null;
+  const near = htmlFolder();
+  for (;;) {
+    const choice = await bench!.ask({
+      title: t('data.q'),
+      body: t('data.lead.jit'),
+      choices: [
+        ...(remembered ? [{ id: 'remembered', label: t('data.home.use', { name: remembered.name }), primary: true }] : []),
+        { id: 'pick', label: t(remembered ? 'data.home.other' : 'data.home.pick'), primary: !remembered },
+        { id: 'inside', label: t('data.inside') },
+      ],
+      note: [near ? t('data.note.near', { dir: near }) : '', t(persist ? 'data.note' : 'data.note.file')].filter(Boolean).join(' '),
+    });
+    if (!choice) return null;
+    if (choice === 'inside') {
+      store.set(INSIDE_KEY(docs.name), '1');
+      return { fs: subFs(fsFromHandle(docs), '.docbench'), mode: 'inside' };
+    }
+    try {
+      const home = choice === 'remembered' && remembered && (await ensurePermission(remembered).catch(() => false)) ? remembered : await pickHome();
+      if (!home) continue;
+      if (!(await ensurePermission(home))) { bench?.toast(t('start.denied')); continue; }
+      const bad = await homeProblem(home, docs);
+      if (bad) { bench?.toast(bad, { sticky: true }); continue; }
+      const hf = fsFromHandle(home);
+      if (!(await hf.stat(HOME_MARKER)) && ((await hf.list('')) || []).length) {
+        // 다른 파일이 있는 폴더를 보관함으로 — 한 번 확인한다(보관함 안에는 문서 폴더마다 폴더 하나와 표식 파일만 생긴다)
+        const ok = await bench!.ask({ title: t('data.home.notEmpty', { name: home.name }), choices: [{ id: 'yes', label: t('data.home.notEmpty.yes'), primary: true }, { id: 'no', label: t('data.home.notEmpty.no') }] });
+        if (ok !== 'yes') continue;
+      }
+      const dn = await prepareHome(home, docs);
+      if (persist) await rememberFolder(home, 'home');
+      store.set(INSIDE_KEY(docs.name), '');
+      if (current) current.home = home;
+      setTimeout(tellMerged, 300);
+      // 붙인 뒤에(어댑터가 기록을 쓰기 시작한 뒤) 하위 폴더의 따로 쓰던 기록을 합치자고 한다
+      setTimeout(() => void offerMerge(home, dn, docs), 400);
+      return { fs: dataFsOf(home, dn), mode: 'outside', home: home.name, name: dn };
+    } catch (e) { fail(e); }
+  }
+}
+
+/** 기록 자리 안내 (메뉴) */
+async function recordsInfo(): Promise<void> {
+  const ws = adapters?.workspace;
+  if (!ws || !current?.dir) return;
+  if (!ws.hasData) { await ws.ensureData().catch(() => undefined); return; }
+  await bench!.ask({ title: t('ws.records.title'), body: t(ws.dataMode === 'inside' ? 'ws.records.body.inside' : 'ws.records.body', { where: ws.dataLabel }), choices: [{ id: 'ok', label: t('close'), primary: true }] });
 }
 
 /** 보관함으로 쓸 수 없는 이유 (없으면 null): 문서 폴더 자체·문서 폴더 안·문서 폴더를 품은 곳 */
@@ -238,6 +294,58 @@ async function homeProblem(home: FileSystemDirectoryHandle, docs: FileSystemDire
   if (await docs.resolve(home)) return t('data.bad.insideDocs');
   if (await home.resolve(docs)) return t('data.bad.holdsDocs');
   return null;
+}
+
+/** 문서 폴더의 마크다운 몇 개(표본) — 이름이 같은 다른 문서 폴더의 기록을 가려낸다(브라우저는 경로를 모른다). 큰 폴더는 한도 안에서 */
+async function docIdsOf(fs: FsLike, limit = 400): Promise<string[]> {
+  const out: string[] = [];
+  let visits = 0;
+  const queue: [string, number][] = [['', 0]];
+  while (queue.length && out.length < limit && visits < 6000) {
+    const [dir, depth] = queue.shift()!;
+    for (const e of (await fs.list(dir).catch(() => null)) || []) {
+      visits++;
+      const rel = dir ? `${dir}/${e.name}` : e.name;
+      if (e.kind === 'directory') { if (walkable(e.name) && depth < 8) queue.push([rel, depth + 1]); }
+      else if (/\.(md|markdown)$/i.test(e.name)) { out.push(rel); if (out.length >= limit) break; }
+    }
+  }
+  return out;
+}
+
+/**
+ * 보관함 안에서 이 문서 폴더의 기록 폴더 이름: '<이름>', '<이름> (2)' … 중 표식의 문서 표본이 겹치는 것,
+ * 없으면 처음 빈 자리. 이름이 같은 다른 문서 폴더의 기록과 섞이지 않게(D61). 다른 작업 공간에 합쳐진 기록은 건너뛴다.
+ */
+async function dataNameFor(home: FileSystemDirectoryHandle, docs: FileSystemDirectoryHandle): Promise<string> {
+  const hf = fsFromHandle(home);
+  const ids = await docIdsOf(fsFromHandle(docs));
+  let free: string | null = null;
+  mergedHint = null;
+  for (const name of dataFolderCandidates(docs.name)) {
+    const ents = await hf.list(name);
+    if (!ents) { free ??= name; continue; }
+    const m = await markerOf(hf, name);
+    if (m) {
+      if (!sameDocsFolder(m, ids)) continue;
+      if (!m.mergedInto) return name;
+      // 이 폴더의 예전 기록은 넓은 작업 공간에 합쳐졌다 — 새로 시작하되 어디에 있는지 알려 준다
+      mergedHint = m.mergedInto.to;
+      continue;
+    }
+    if (!ents.length) free ??= name;
+  }
+  if (!free) throw new Error(t('data.bad.full', { name: docs.name }));
+  return free;
+}
+
+/** 마지막 dataNameFor 가 본, 이 문서 폴더의 기록이 합쳐진 곳 (없으면 null) */
+let mergedHint: string | null = null;
+const tellMerged = () => { if (mergedHint) { bench?.toast(t('merge.moved', { to: mergedHint }), { sticky: true }); mergedHint = null; } };
+
+async function markerOf(hf: FsLike, name: string) {
+  const f = await hf.read(`${name}/${DATA_MARKER}`).catch(() => null);
+  try { return f ? parseDataMarker(JSON.parse(new TextDecoder().decode(f.bytes))) : null; } catch { return null; }
 }
 
 /** 보관함 표식(없으면)과 이 문서 폴더의 기록 폴더(이름을 정하고 표식) — 기록 폴더 이름을 돌려준다 */
@@ -250,58 +358,94 @@ async function prepareHome(home: FileSystemDirectoryHandle, docs: FileSystemDire
   return dn;
 }
 
+// ---------------------------------------------------------------- 기록 합치기 (D66)
+
 /**
- * 기록 자리를 정한다. 기억한 보관함이 있으면 그것, 아니면 묻는다:
- *   - 기록 보관함 고르기(권장) — 문서 폴더에는 아무것도 생기지 않는다
- *   - 문서 폴더 안에 두기(.docbench) — 팀이 git 으로 함께 쓸 때
- * 문서 폴더 안에 예전 기록이 있으면: 보관함으로 옮기기 / 안에서 계속.
+ * 같은 보관함에서, 이 작업 공간 안의 하위 폴더를 따로 열어 쓰던 기록을 찾는다: 표식의 폴더 이름과 같은 하위 폴더(3단계까지)가 있고,
+ * 표식의 문서 표본 절반 이상이 그 하위 폴더에 있으면 그 폴더의 기록이다.
  */
-async function chooseData(docs: FileSystemDirectoryHandle, step: HTMLElement, say: (text: string, info?: boolean) => void): Promise<DataChoice | null> {
-  const quiet = await quietChoice(docs);
-  if (quiet) return quiet;
-  const hasInside = await isDir(docs, '.docbench');
-  const remembered = persist ? await recallFolder('home') : null;
-  say('');
-  return new Promise<DataChoice | null>((resolve) => {
-    const done = (c: DataChoice | null) => { step.replaceChildren(); resolve(c); };
-    /** fresh = 기억한 보관함 대신 새로 고른다, migrate = 안쪽 기록을 옮긴다 */
-    const useHome = async (fresh: boolean, migrate: boolean) => {
-      try {
-        let home = !fresh && remembered && (await ensurePermission(remembered).catch(() => false)) ? remembered : null;
-        if (!home) home = testPickHome ? await testPickHome() : await pickFolder('docbench-home');
-        if (!home) return;
-        if (!(await ensurePermission(home))) throw new DOMException('denied', 'NotAllowedError');
-        const bad = await homeProblem(home, docs);
-        if (bad) { say(bad); return; }
-        const hf = fsFromHandle(home);
-        if (!(await hf.stat(HOME_MARKER))) {
-          // 다른 파일이 있는 폴더를 보관함으로 — 한 번 확인한다(보관함 안에는 문서 폴더마다 폴더 하나와 표식 파일만 생긴다)
-          const ents = (await hf.list('')) || [];
-          if (ents.length && !testPickHome && !window.confirm(t('data.home.notEmpty', { name: home.name }))) return;
+async function mergeCandidates(home: FileSystemDirectoryHandle, self: string, docs: FileSystemDirectoryHandle): Promise<{ dataName: string; prefix: string; feedback: number }[]> {
+  const hf = fsFromHandle(home);
+  const want = new Map<string, { dataName: string; docs: string[] }[]>();
+  for (const e of (await hf.list('')) || []) {
+    if (e.kind !== 'directory' || e.name === self) continue;
+    const m = await markerOf(hf, e.name);
+    if (!m || m.mergedInto || m.migrating || !m.docs?.length) continue;
+    const list = want.get(m.docsName) || [];
+    list.push({ dataName: e.name, docs: m.docs });
+    want.set(m.docsName, list);
+  }
+  if (!want.size) return [];
+  const df = fsFromHandle(docs);
+  const out: { dataName: string; prefix: string; feedback: number }[] = [];
+  const queue: [string, number][] = [['', 0]];
+  let visits = 0;
+  while (queue.length && visits < 3000) {
+    const [dir, depth] = queue.shift()!;
+    for (const e of (await df.list(dir).catch(() => null)) || []) {
+      if (e.kind !== 'directory' || !walkable(e.name)) continue;
+      visits++;
+      const rel = dir ? `${dir}/${e.name}` : e.name;
+      for (const c of want.get(e.name) || []) {
+        let hit = 0;
+        for (const id of c.docs) if (await df.stat(`${rel}/${id}`).catch(() => null)) hit++;
+        if (hit >= Math.min(2, c.docs.length) && hit / c.docs.length >= 0.5) {
+          const fb = ((await hf.list(`${c.dataName}/feedback`)) || []).filter((x) => x.name.endsWith('.json')).length;
+          out.push({ dataName: c.dataName, prefix: rel, feedback: fb });
         }
-        const dn = await dataNameFor(home, docs);
-        if (migrate) { say(t('data.move.doing'), true); await migrateInside(docs, dataFsOf(home, dn)); }
-        await prepareHome(home, docs, dn);
-        if (persist) await rememberFolder(home, 'home');
-        store.set(INSIDE_KEY(docs.name), '');
-        done({ home, name: dn });
-      } catch (e) {
-        const n = (e as DOMException)?.name;
-        say(n === 'NotAllowedError' ? t('start.denied') : n === 'SecurityError' ? t('start.blocked') : (e as Error)?.message || String(e));
       }
-    };
-    const useInside = () => { store.set(INSIDE_KEY(docs.name), '1'); done({ inside: true }); };
-    const primary = hasInside ? t('data.move') : remembered ? t('data.home.use', { name: remembered.name }) : t('data.home.pick');
-    step.replaceChildren(h('div', { class: 'db-start-data' },
-      h('b', { text: t(hasInside ? 'data.q.hasInside' : 'data.q') }),
-      h('p', { text: t(hasInside ? 'data.lead.hasInside' : 'data.lead') }),
-      h('div', { class: 'db-start-acts' },
-        h('button', { class: 'db-btn primary', type: 'button', onclick: () => void useHome(false, hasInside), text: primary }),
-        remembered ? h('button', { class: 'db-btn', type: 'button', onclick: () => void useHome(true, hasInside), text: t('data.home.other') }) : null,
-        h('button', { class: 'db-btn ghost', type: 'button', onclick: useInside, text: t(hasInside ? 'data.inside.keep' : 'data.inside') })),
-      h('small', { text: t(persist ? 'data.note' : 'data.note.file') })));
-    (step.querySelector('.db-btn.primary') as HTMLElement | null)?.focus();
-  });
+      if (depth < 2) queue.push([rel, depth + 1]);
+    }
+  }
+  return out;
+}
+
+async function offerMerge(home: FileSystemDirectoryHandle, self: string, docs: FileSystemDirectoryHandle): Promise<void> {
+  const ws = adapters?.workspace;
+  if (!ws || !bench) return;
+  let cands: Awaited<ReturnType<typeof mergeCandidates>> = [];
+  try { cands = await mergeCandidates(home, self, docs); } catch { return; }
+  for (const c of cands) {
+    const choice = await bench.ask({ title: t('merge.q', { prefix: c.prefix }), body: t('merge.body', { prefix: c.prefix, n: c.feedback, root: docs.name }), choices: [{ id: 'merge', label: t('merge.do'), primary: true }, { id: 'later', label: t('merge.later') }], note: t('merge.note') });
+    if (choice !== 'merge') continue;
+    try {
+      const target = ws.data!;
+      const src = dataFsOf(home, c.dataName);
+      const r = await ws.withLock(lockKey.changes, () => ws.withLock(lockKey.state, () => mergeRecords(src, target, c.prefix)));
+      const m = await markerOf(fsFromHandle(home), c.dataName);
+      if (m) await src.write(DATA_MARKER, jsonFile({ ...m, mergedInto: { to: self, prefix: c.prefix, at: new Date().toISOString() } }));
+      ws.onDataAttached?.();
+      bench.toast(t('merge.done', { n: r.feedback, c: r.changes }));
+    } catch (e) { fail(e); }
+  }
+}
+
+// ---------------------------------------------------------------- 안쪽 기록을 밖으로 (D59)
+
+async function moveOut(root: HTMLElement): Promise<void> {
+  const dir = current?.dir;
+  if (!dir || !(await isDir(dir, '.docbench'))) return;
+  const remembered = persist ? await recallFolder('home') : null;
+  const home = remembered && (await ensurePermission(remembered).catch(() => false)) && !(await homeProblem(remembered, dir)) ? remembered : await pickHome();
+  if (!home) return;
+  if (!(await ensurePermission(home))) throw new DOMException('denied', 'NotAllowedError');
+  const bad = await homeProblem(home, dir);
+  if (bad) { bench?.toast(bad, { sticky: true }); return; }
+  const dn = await dataNameFor(home, dir);
+  // 화면을 내려 이 창의 쓰기(문서 판 적기·보기 상태·폴링)를 멈춘 뒤 옮긴다 — 옮기는 사이 안쪽 기록이 바뀌면 확인에서 멈춘다(실측)
+  adapters?.close?.(); bench?.destroy(); bench = null; adapters = null;
+  const note = document.createElement('p');
+  note.className = 'db-boot-note';
+  note.textContent = t('data.move.doing');
+  root.replaceChildren(note);
+  await new Promise((r) => setTimeout(r, 300));
+  try { await migrateInside(dir, dataFsOf(home, dn)); } catch (e) { await openFolder(root, dir); throw e; }
+  await prepareHome(home, dir, dn);
+  if (persist) await rememberFolder(home, 'home');
+  store.set(INSIDE_KEY(dir.name), '');
+  await openFolder(root, dir);
+  // 위에서 bench 를 비웠다가 openFolder 가 다시 채운다 — 좁혀진 타입을 풀어 읽는다
+  (bench as DocBenchHandle | null)?.toast(t('data.move.done', { where: `${home.name}/${dn}` }));
 }
 
 /**
@@ -356,6 +500,37 @@ async function copyTreeExcept(from: FsLike, to: FsLike, skip: string[]): Promise
   return n;
 }
 
+// ---------------------------------------------------------------- 시작
+
+export async function boot(root: HTMLElement): Promise<void> {
+  if (!persist) await forgetFolder();   // 예전 판이 file:// 에 남긴 핸들도 지운다
+  account();
+  const remembered = folderAccessSupported() && persist && !q.has('pick') ? await recallFolder() : null;
+  // 권한이 이미 있으면(브라우저가 "항상 허용"을 기억) 그 폴더를 바로 연다. 아니면 시작하기
+  if (remembered && (await ensurePermission(remembered, 'readwrite', false).catch(() => false))) {
+    try { await openFolder(root, remembered); return; } catch { /* 시작하기로 */ }
+  }
+  await welcome(root);
+}
+
+/** 시험용: 이미 가진 폴더 핸들(OPFS 등)로 바로 연다. home 을 주면 기록은 그 보관함 아래(밖), 아니면 문서 폴더 안 */
+export async function openHandle(root: HTMLElement, dir: FileSystemDirectoryHandle, name = '', home?: FileSystemDirectoryHandle): Promise<FolderAdapters> {
+  if (name) saveAccount({ id: safeName(name), name });
+  const dn = home ? await prepareHome(home, dir) : '';
+  const ad = await createFolderAdapters(fsFromHandle(dir), { user: account(), onUserChange: saveAccount, locale, runnerSetup, ...(home ? { data: dataFsOf(home, dn), dataHome: home.name, dataName: dn } : {}) });
+  current = { dir, fs: fsFromHandle(dir), home };
+  await mount(root, ad, menuFor(root, 'folder'), dir.name);
+  return ad;
+}
+
+/** 시험용: 실제 흐름 그대로 연다(기록은 처음 저장할 때 묻는다) — 보관함 고르기 창 대신 pickHome */
+export async function openWith(root: HTMLElement, dir: FileSystemDirectoryHandle, pickHome?: () => Promise<FileSystemDirectoryHandle | null>): Promise<FolderAdapters> {
+  testPickHome = pickHome || null;
+  await openFolder(root, dir);
+  return adapters as FolderAdapters;
+}
+let testPickHome: (() => Promise<FileSystemDirectoryHandle | null>) | null = null;
+
 const el = document.getElementById('app');
 if (el && !(window as unknown as { DOCBENCH_NO_BOOT?: boolean }).DOCBENCH_NO_BOOT) void boot(el);
-(window as unknown as { DocBenchStandalone: unknown }).DocBenchStandalone = { boot, openHandle, startWith, get adapters() { return adapters; }, get bench() { return bench; } };
+(window as unknown as { DocBenchStandalone: unknown }).DocBenchStandalone = { boot, welcome, openHandle, openWith, get adapters() { return adapters; }, get bench() { return bench; } };

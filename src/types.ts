@@ -34,6 +34,23 @@ export interface Manifest {
   folders?: Record<string, { files: number }>;
   /** 작업 폴더 이름 (나무 맨 위) */
   rootName?: string;
+  /**
+   * 문서 목록(docs)을 얼마나 찾았나. 큰 폴더(드라이브 등)는 열 때 전부 훑지 않는다 — 펼친 폴더의 문서는 tree() 가 더한다.
+   * complete = 전부 찾음, reason: big-root = 드라이브·홈처럼 커서 맨 위만, many = 찾다가 한도(시간·개수)에 닿음
+   */
+  index?: { complete: boolean; docs: number; reason?: 'big-root' | 'many' };
+}
+
+/** 폴더 나무의 한 항목 (DocSource.tree) — 탐색기처럼 펼친 폴더만 읽는다 */
+export interface TreeEntry {
+  name: string;
+  /** 작업 폴더 기준 '/' 경로 */
+  path: string;
+  kind: 'dir' | 'file';
+  /** 작업대가 여는 문서(.md)인가 */
+  doc?: boolean;
+  size?: number;
+  modified?: string;
 }
 
 export interface DocGroup {
@@ -157,6 +174,11 @@ export interface DocSource {
   checkedAt?(id: string): number | undefined;
   /** 지금 바로 디스크와 맞춰 본다(바깥 편집이면 이력에 남기고 doc 이벤트). 바뀌었으면 true */
   refresh?(id: string): Promise<boolean>;
+  /**
+   * 폴더 하나의 항목(폴더 먼저, 이름순). '' = 맨 위. 없는 폴더면 null. 있으면 왼쪽 목록이 탐색기처럼 펼친 폴더만 읽는다 —
+   * 드라이브 전체를 열어도 바로 뜬다. 문서 목록(manifest.docs)에 없던 문서도 여기서 찾아 열 수 있다.
+   */
+  tree?(dir: string): Promise<TreeEntry[] | null>;
 }
 
 // ---------------------------------------------------------------- 피드백
@@ -271,6 +293,12 @@ export interface ViewState {
   showChanges?: boolean;
   /** 왼쪽 문서 목록: 폴더 나무 / config.json 의 모음 */
   railView?: 'folder' | 'groups';
+  /** 고정한 폴더('경로/')·문서 — 왼쪽 위 "작업 중"에 늘 보인다 */
+  pins?: string[];
+  /** 최근에 연 문서 (새것 먼저, 최대 12) */
+  recent?: string[];
+  /** 나무에서 펼친 폴더 */
+  open?: string[];
 }
 
 export type PanelFilter = 'active' | 'owner' | 'assistant' | 'closed';
@@ -293,6 +321,13 @@ export type Action =
 export interface Identity {
   me(): Promise<Person>;
   can(action: Action): boolean | Promise<boolean>;
+  /**
+   * 표시 이름(별명)을 바꾼다. 계정(id)은 그대로 — 작성자·보기 상태·실행기 짝은 id 로 잇는다.
+   * 없으면 "나" 메뉴에서 이름을 바꿀 수 없다(호스트가 정한 사람).
+   */
+  setName?(name: string): Promise<Person>;
+  /** 계정이 어디서 왔나 — 'browser' = 이 브라우저에 자동으로 만든 계정, 'pc' = 이 PC 의 로그인, 'host' = 대시보드 로그인 */
+  source?: 'browser' | 'pc' | 'host';
 }
 
 export interface ProposeRequest {
@@ -385,8 +420,10 @@ export interface RunLogLine {
 
 export interface RunnerInfo {
   id: string;
-  /** 'runner' = 단일 HTML 용 실행기, 'server' = docbench serve·대시보드 */
-  kind: 'runner' | 'server';
+  /** 'runner' = 단일 HTML 용 실행기(폴더 하나), 'app' = 이 PC 의 DocBench 앱(여러 폴더), 'server' = docbench serve·대시보드 */
+  kind: 'runner' | 'server' | 'app';
+  /** 이 엔진을 "내 것"으로 쓰는 계정 id (설치 안내가 짝을 지어 이 PC 의 설정에 적는다) — 이름이 달라도 잇는다 */
+  owners?: string[];
   user: string;
   host: string;
   pid: number;
@@ -394,7 +431,7 @@ export interface RunnerInfo {
   protocol: number;
   startedAt: string;
   seenAt: string;
-  claude: { ok: boolean; version?: string; problem?: string; reason?: 'no-claude' | 'old-claude' };
+  claude: { ok: boolean; version?: string; problem?: string; reason?: 'no-claude' | 'old-claude' | 'not-logged-in' };
   models: string[];
   efforts: RunEffort[];
   busy?: string | null;
@@ -405,9 +442,10 @@ export interface RunsAvailability {
   available: boolean;
   /**
    * no-runner = 실행기가 꺼져 있음, not-mine = 켜진 실행기가 내 이름과 다름(저절로 맡기지 않음 — 내 PC 의 것이면 고른다),
-   * no-claude = claude 를 못 찾음, old-claude = 안전 실행 플래그가 없는 판, read-only = 폴더에 쓸 수 없음
+   * no-claude = claude 를 못 찾음, old-claude = 안전 실행 플래그가 없는 판, not-logged-in = Claude Code 에 로그인하지 않음(구독 로그인 필요),
+   * read-only = 폴더에 쓸 수 없음
    */
-  reason?: 'no-runner' | 'not-mine' | 'no-claude' | 'old-claude' | 'read-only' | 'disabled';
+  reason?: 'no-runner' | 'not-mine' | 'no-claude' | 'old-claude' | 'not-logged-in' | 'read-only' | 'disabled';
   message?: string;
   runner?: RunnerInfo;
   /** 폴더를 함께 쓰는 다른 실행기들 (여럿이면 고른다) */
@@ -423,9 +461,15 @@ export interface RunsAdapter {
   log(id: string, from: number): Promise<{ lines: RunLogLine[]; next: number }>;
   /** 여럿일 때 쓸 실행기를 고른다 (폴더 어댑터) */
   choose?(runnerId: string): void;
-  /** 실행기가 없을 때 보여 줄 설치 안내의 재료 (단일 HTML — 받을 CLI 주소·지문) */
-  /** dataHome·dataName = 기록을 문서 폴더 밖(기록 보관함 dataHome 아래 dataName)에 둘 때 그 이름들 */
-  setup?: { version: string; cliUrl: string; sha256: string; folderName: string; dataHome?: string; dataName?: string };
+  /** 연결 전에 준비할 것 (단일 HTML: 기록 폴더를 아직 고르지 않았으면 지금 고르게 한다) */
+  prepare?(): Promise<void>;
+  /**
+   * 실행기가 없을 때 보여 줄 연결 안내의 재료 (단일 HTML — 받을 CLI 주소·지문).
+   * dataHome·dataName = 기록을 문서 폴더 밖(기록 보관함 dataHome 아래 dataName)에 둘 때 그 이름들,
+   * owner = 이 화면의 계정 id (안내가 실행기와 짝을 지어 이름이 달라도 "내 것"으로 잇는다),
+   * noData = 기록 폴더를 아직 고르지 않음(연결하려면 먼저 고른다)
+   */
+  setup?: { version: string; cliUrl: string; sha256: string; folderName: string; dataHome?: string; dataName?: string; owner?: string; noData?: boolean };
 }
 
 // ---------------------------------------------------------------- 폴더 지도
@@ -475,10 +519,45 @@ export interface DocBenchOptions {
   injectStyles?: boolean;
   styleNonce?: string;
   onEvent?: (ev: DocBenchEvent) => void;
+  /**
+   * 이 폴더 아래만 보인다 — 대시보드가 "지금 프로젝트" 폴더를 줄 때(작업 공간 기준 '/' 경로, '' = 전부).
+   * 기록은 작업 공간 하나에 그대로 쌓이고(하위 폴더를 따로 열어 기록이 갈라지지 않게) 보이는 범위만 좁힌다.
+   */
+  scope?: string;
+  /** 'full' = 단독 화면, 'embedded' = 대시보드 탭에 끼움(제목 줄을 줄이고 호스트 모양을 따른다) */
+  chrome?: 'full' | 'embedded';
+  /** 왼쪽 위 작업 공간 이름을 누르면 열리는 메뉴 — 단일 HTML·DocBench 앱이 "폴더 열기·바꾸기·기록 자리"를 여기에 둔다 */
+  workspace?: WorkspaceMenu;
+  /** 호스트(대시보드)가 맡는 일 */
+  host?: HostHooks;
+}
+
+/** 작업 공간 메뉴 (DocBenchOptions.workspace) */
+export interface WorkspaceMenu {
+  items(): { id: string; label: string; hint?: string; primary?: boolean; disabled?: boolean }[];
+  run(id: string): void | Promise<void>;
+}
+
+/** 호스트가 맡는 일 (DocBenchOptions.host) — 대시보드 탭에 끼울 때 */
+export interface HostHooks {
+  /**
+   * "Claude 에게 넘기기"를 호스트가 맡는다 — 예: 대시보드가 자기 Claude Code 터미널에 prompt 를 보낸다.
+   * handled=false 면 작업대가 스스로(Claude 작업 창·요청함) 처리한다.
+   */
+  handoff?(req: { feedbackIds: string[]; docs: string[]; prompt: string }): Promise<{ handled: boolean; message?: string }>;
+}
+
+/** 작업대가 묻는 짧은 선택 (DocBenchHandle.ask) */
+export interface AskOptions {
+  title: string;
+  body?: string;
+  choices: { id: string; label: string; primary?: boolean }[];
+  note?: string;
 }
 
 export type DocBenchEvent =
   | { type: 'navigate'; view: string }
+  | { type: 'todo'; owner: number; assistant: number }
   | { type: 'feedback:created'; feedback: Feedback }
   | { type: 'feedback:updated'; feedback: Feedback }
   | { type: 'doc:saved'; docId: string; version: string }

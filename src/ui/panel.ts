@@ -56,7 +56,7 @@ export class Panel {
 
   private rowsInScope(): Feedback[] {
     const v = this.app.view;
-    if (this.scope === 'all' || !v) return this.app.fb;
+    if (this.scope === 'all' || !v) return this.app.scopedFb();
     if (v === 'map') return this.app.fb.filter((f) => f.target.kind === 'item');
     return this.app.fb.filter((f) => f.docId === v && f.target.kind !== 'item');
   }
@@ -122,7 +122,7 @@ export class Panel {
     const t = this.t;
     const turn = turnOf(f);
     const c = h('article', { class: `db-card t-${turn}`, 'data-id': f.id });
-    const who = f.author.kind === 'assistant' ? t('fb.by.assistant') : f.author.id && app.me.id && f.author.id !== app.me.id ? (f.author.name || '') : t('fb.by.me');
+    const who = f.author.kind === 'assistant' ? t('fb.by.assistant') : app.personLabel(f.author);
     c.append(h('div', { class: 'db-c-top' },
       f.severity ? h('span', { class: 'db-sev ' + f.severity, text: t('fb.sev.' + f.severity) }) : null,
       f.kind ? h('span', { text: f.kind }) : null,
@@ -143,7 +143,7 @@ export class Panel {
       const th = h('div', { class: 'db-thread' });
       const show = this.expanded.has(f.id + ':t') ? f.thread : f.thread.slice(-2);
       if (show.length < f.thread.length) th.append(h('button', { class: 'db-more', type: 'button', onclick: () => { this.expanded.add(f.id + ':t'); this.render(); } }, t('fb.earlier', { n: f.thread.length - show.length })));
-      for (const m of show) th.append(h('div', { class: 'db-msg' + (m.author.kind === 'assistant' ? ' assistant' : '') }, h('span', { class: 'who', text: (m.author.kind === 'assistant' ? (m.author.name || app.ai) : (m.author.name || t('fb.by.me'))) + ' · ' + relTime(m.at, t) }), m.text));
+      for (const m of show) th.append(h('div', { class: 'db-msg' + (m.author.kind === 'assistant' ? ' assistant' : '') }, h('span', { class: 'who', text: app.personLabel(m.author) + ' · ' + relTime(m.at, t) }), m.text));
       c.append(th);
     }
     if (f.proposal) c.append(this.proposal(f));

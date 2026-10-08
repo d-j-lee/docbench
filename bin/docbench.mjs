@@ -9,7 +9,10 @@
  *   docbench init [폴더] [--data 기록폴더 | --inside] [--claude]
  *                                              작업 폴더 준비. 기록은 기본으로 문서 폴더 밖(기록 보관함/<이름>),
  *                                              --inside 면 문서 폴더 안 .docbench (팀이 git 으로 함께 쓸 때)
- *   docbench link <폴더> --data 기록폴더 [--force]  문서 폴더 ↔ 기록 폴더 짝을 이 PC 의 설정에 (브라우저로 만든 기록.
+ *   docbench app [--detach | --stop | --status | --open] [--port 4317] [--startup on|off] [--shortcut on|off] [--allow-origin URL]
+ *                                              DocBench 앱 — 이 PC 에 하나(화면·여러 폴더의 Claude 작업·대시보드 탭)
+ *   docbench link <폴더> [--data 기록폴더] [--owner 계정] [--force]
+ *                                              문서 폴더 ↔ 기록 폴더 짝·화면의 계정을 이 PC 의 설정에 (브라우저로 만든 기록.
  *                                              문서 목록이 달라 다른 폴더의 기록으로 보이면 멈춘다 — 맞다면 --force)
  *   docbench status [--json]                   차례별 피드백 수 · Claude 작업(엔진·맡겨 둔 피드백)
  *   docbench fb list [--waiting assistant|owner] [--status open|resolved|declined|all] [--doc ID] [--json]
@@ -40,7 +43,7 @@ import os from 'node:os';
 import { promises as fs, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import crypto from 'node:crypto';
-import { Workspace, locateData, claimDataDir, setPcMapping, defaultPcConfigFile } from '../server/workspace.mjs';
+import { Workspace, locateData, claimDataDir, setPcMapping, defaultPcConfigFile, updatePcWorkspace } from '../server/workspace.mjs';
 import { decode } from '../server/textio.mjs';
 import { core } from '../server/core.mjs';
 
@@ -57,8 +60,12 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
   docbench init [폴더] [--data 기록폴더 | --inside] [--claude]
                                              작업 폴더 준비. 기록은 기본으로 문서 폴더 밖(기록 보관함/<이름>),
                                              --inside 면 문서 폴더 안 .docbench (팀이 git 으로 함께 쓸 때)
-  docbench link <폴더> --data 기록폴더 [--force]  문서 폴더 ↔ 기록 폴더 짝을 이 PC 의 설정에 (브라우저로 만든 기록.
-                                             문서 목록이 달라 다른 폴더의 기록으로 보이면 멈춘다 — 맞다면 --force)
+  docbench app [--detach | --stop | --status | --open] [--port 4317] [--startup on|off] [--shortcut on|off] [--allow-origin URL]
+                                             DocBench 앱 — 이 PC 에 하나. 화면(고르기 창 없이 폴더를 둘러보고 더함)·여러 폴더의
+                                             Claude 작업·대시보드 탭(/embed, /host.js). --open 열쇠 붙은 주소로 브라우저를 연다
+  docbench link <폴더> [--data 기록폴더] [--owner 계정] [--force]
+                                             문서 폴더 ↔ 기록 폴더 짝을 이 PC 의 설정에 (브라우저로 만든 기록). --owner = 화면의 계정 —
+                                             앱·실행기가 그 사람의 것으로 Claude 작업을 맡는다. 문서 목록이 달라 다른 폴더의 기록으로 보이면 멈춘다 — 맞다면 --force
   docbench status [--json]                   차례별 피드백 수 · Claude 작업(엔진·맡겨 둔 피드백)
   docbench fb list [--waiting assistant|owner] [--status open|resolved|declined|all] [--doc ID] [--json]
   docbench fb show <id> [--json]             피드백 + 지금 그 섹션 원문·판·인코딩
@@ -86,7 +93,7 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
 `;
 
 /** 값을 받지 않는 플래그 — 뒤의 인자를 삼키지 않는다 */
-const BOOL = new Set(['json', 'stdin', 'resolve', 'ask', 'decline', 'claude', 'help', 'force', 'rename', 'convert-utf8', 'clear', 'detach', 'stop', 'no-claude', 'inside']);
+const BOOL = new Set(['json', 'stdin', 'resolve', 'ask', 'decline', 'claude', 'help', 'force', 'rename', 'convert-utf8', 'clear', 'detach', 'stop', 'no-claude', 'inside', 'open']);
 /** --status 는 둘로 쓴다: fb list --status <open|resolved|declined|all>, runner --status (값 없음) */
 const STATUS_VALUES = new Set(['open', 'resolved', 'declined', 'all']);
 
@@ -281,16 +288,25 @@ async function main() {
   }
 
   if (cmd === 'link') {
-    // 문서 폴더 ↔ 기록 폴더 짝을 이 PC 에 적는다 — 브라우저(docbench.html)로 기록 보관함에 만든 기록을 CLI·실행기가 찾게
+    // 문서 폴더 ↔ 기록 폴더 짝을 이 PC 에 적는다 — 브라우저(docbench.html)로 기록 보관함에 만든 기록을 CLI·앱이 찾게.
+    // --owner = 그 화면의 계정 — 앱·실행기가 그 사람의 Claude 작업을 맡는다(이름을 맞출 필요 없이, D63)
     const root = path.resolve(sub || a.root || '.');
     const dataDir = dataOpt(a);
-    if (!dataDir) die('기록 폴더를 --data 로 주세요: docbench link <문서 폴더> --data <기록 폴더>');
+    const owner = a.owner && a.owner !== true ? core.safeAccountId(String(a.owner)) : '';
+    if (a.owner && !owner) die('계정 id 의 모양이 아닙니다(글자·숫자·._@-, 80자까지): ' + a.owner);
     if (!existsSync(root)) die('문서 폴더가 없습니다: ' + root);
-    let r;
-    try { r = await linkData(root, dataDir, { force: !!a.force }); } catch (e) { die(e.message, 1); }
-    out(a, { root, data: dataDir, pcConfigFile: r.file, dataHome: r.home }, `이었습니다: ${root}\n기록: ${dataDir}\n이 PC 의 설정: ${r.file}${r.home ? `\n기록 보관함: ${r.home} (다음 문서 폴더는 짝 없이 찾습니다)` : ''}`);
+    let r = { file: defaultPcConfigFile(), home: /** @type {string | null} */ (null) };
+    try {
+      if (dataDir) r = await linkData(root, dataDir, { force: !!a.force });
+      else if (!(await locateData(root, { pcConfigFile: r.file, create: false }))) die(`이 문서 폴더의 기록을 찾지 못했습니다: ${root}\n기록이 문서 폴더 밖이면 --data <기록 폴더> 도 주세요.`, 2);
+      // 앱은 이 PC 의 설정에 적힌 폴더(기록 짝·계정)를 맡는다 — 계정 없이 이어도 맡도록 owners 를 적어 둔다(빈 목록이면 이름이 같은 사람만)
+      await updatePcWorkspace(r.file, root, (cur) => ({ ...cur, owners: [...new Set([...(Array.isArray(cur.owners) ? cur.owners : []), ...(owner ? [owner] : [])])].slice(-20) }));
+    } catch (e) { die(e.message, 1); }
+    out(a, { root, data: dataDir || null, owner: owner || null, pcConfigFile: r.file, dataHome: r.home }, `이었습니다: ${root}${dataDir ? `\n기록: ${dataDir}` : ''}${owner ? `\n계정: ${owner} (이 계정의 Claude 작업을 이 PC 의 앱·실행기가 맡습니다)` : ''}\n이 PC 의 설정: ${r.file}${r.home ? `\n기록 보관함: ${r.home} (다음 문서 폴더는 짝 없이 찾습니다)` : ''}`);
     return;
   }
+
+  if (cmd === 'app') return appCmd(a);
 
   if (cmd === 'runner') return runnerCmd(a, sub);
 
@@ -481,6 +497,161 @@ async function main() {
   }
 
   die('알 수 없는 명령: ' + cmd + ' (docbench help)');
+}
+
+// ---------------------------------------------------------------- DocBench 앱 (docbench app, D67)
+
+/** 켜진 앱에 묻는다 (열쇠로) @param {any} rec @param {string} token @param {string} p @param {string} [method] */
+function appCall(rec, token, p, method = 'GET') {
+  return new Promise((resolve) => {
+    import('node:http').then(({ default: http }) => {
+      const req = http.request({ host: '127.0.0.1', port: rec.port, path: p, method, headers: { Authorization: 'Bearer ' + token, 'X-DocBench': '1', Host: '127.0.0.1' }, timeout: 4000 }, (res) => {
+        let d = '';
+        res.setEncoding('utf8').on('data', (c) => { d += c; }).on('end', () => { try { resolve({ status: res.statusCode, data: d ? JSON.parse(d) : null }); } catch { resolve({ status: res.statusCode, data: null }); } });
+      });
+      req.on('error', () => resolve(null)).on('timeout', () => { req.destroy(); resolve(null); });
+      req.end();
+    });
+  });
+}
+
+/** 브라우저로 주소를 연다 (운영체제의 기본 브라우저) @param {string} url */
+async function openBrowser(url) {
+  const { spawn } = await import('node:child_process');
+  const [cmd, args] = process.platform === 'win32' ? ['rundll32', ['url.dll,FileProtocolHandler', url]] : process.platform === 'darwin' ? ['open', [url]] : ['xdg-open', [url]];
+  try { spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref(); return true; } catch { return false; }
+}
+
+/** 켜진 앱 (이 PC 의 기록 + pid 가 살아 있고 열쇠로 답한다) */
+async function runningApp() {
+  const { appFile, appToken } = await import('../server/app.mjs');
+  const { pidAlive } = await import('../server/runs.mjs');
+  const pcConfigFile = defaultPcConfigFile();
+  const rec = await readJsonFile(appFile(pcConfigFile));
+  const token = await appToken(pcConfigFile);
+  if (!rec || !pidAlive(rec.pid)) return { rec: null, token, info: null };
+  const r = /** @type {any} */ (await appCall(rec, token, '/api/app/info'));
+  return { rec: r?.status === 200 ? rec : null, token, info: r?.status === 200 ? r.data : null };
+}
+
+async function appCmd(a) {
+  const pcConfigFile = defaultPcConfigFile();
+  const { startApp, appFile } = await import('../server/app.mjs');
+  const { pidAlive } = await import('../server/runs.mjs');
+  const { setPcValue } = await import('../server/workspace.mjs');
+
+  if (a['allow-origin']) {
+    // 대시보드 출처를 허용한다 — 그 출처만 /embed 를 iframe 으로 끼울 수 있다(이 PC 의 설정 app.allowOrigins)
+    const add = String(a['allow-origin']).split(',').map((x) => x.trim().replace(/\/+$/, '')).filter(Boolean);
+    for (const o of add) if (!/^https?:\/\/[^\s/]+$/.test(o)) die('출처는 scheme://host[:port] 모양이어야 합니다: ' + o);
+    const c = (await readJsonFile(pcConfigFile)) || {};
+    const cur = c.app && Array.isArray(c.app.allowOrigins) ? c.app.allowOrigins : [];
+    await setPcValue(pcConfigFile, 'app', { ...(c.app || {}), allowOrigins: [...new Set([...cur, ...add])] });
+    out(a, { allowOrigins: [...new Set([...cur, ...add])] }, `대시보드 출처를 허용했습니다: ${add.join(', ')}\n(켜진 앱은 몇 초 안에 따릅니다)`);
+    if (!a.detach && !a.open && !a.status) return;
+  }
+  if (a.startup === 'on' || a.startup === 'off') return appStartup(a.startup === 'on', a);
+  if (a.shortcut === 'on' || a.shortcut === 'off') return appShortcut(a.shortcut === 'on', a);
+
+  const { rec, token, info } = await runningApp();
+  if (a.status) {
+    if (!rec) { out(a, { running: false }, 'DocBench 앱이 꺼져 있습니다 (켜기: docbench app --detach)'); process.exitCode = 1; return; }
+    out(a, { running: true, url: rec.url, pid: rec.pid, ...info }, () => [
+      `DocBench 앱 ${info.version} · ${rec.url} (pid ${rec.pid})`,
+      `사람: ${info.me?.name || ''}`,
+      info.workspaces.length ? '작업 공간:' : '작업 공간: 없음 — 화면에서 "폴더 추가", 또는 단일 HTML 의 연결 안내',
+      ...info.workspaces.map((w) => `  ${w.added ? '●' : '○'} ${w.root}${w.problem ? `  — 문제: ${w.problem}` : w.claude ? `  — Claude ${w.claude.available ? '쓸 수 있음' : '쓸 수 없음: ' + (w.claude.message || w.claude.reason)}` : ''}`),
+      `열기: docbench app --open`,
+    ].join('\n'));
+    return;
+  }
+  if (a.stop) {
+    if (!rec) { out(a, { stopped: 0 }, 'DocBench 앱이 꺼져 있습니다'); return; }
+    await appCall(rec, token, '/api/app/shutdown', 'POST');
+    const end = Date.now() + 8000;
+    while (Date.now() < end && pidAlive(rec.pid)) await new Promise((r) => setTimeout(r, 200));
+    if (pidAlive(rec.pid)) { try { process.kill(rec.pid); } catch { /* 이미 끝남 */ } }
+    out(a, { stopped: 1 }, 'DocBench 앱을 껐습니다');
+    return;
+  }
+  if (a.detach || (a.open && !rec)) {
+    if (rec && info?.version === core.DOCBENCH_VERSION) {
+      if (a.open) await openBrowser(`${rec.url}?t=${token}`);
+      out(a, { running: true, url: rec.url, pid: rec.pid }, `이미 켜져 있습니다: ${rec.url} (pid ${rec.pid})${a.open ? '' : '\n열기: docbench app --open'}`);
+      return;
+    }
+    if (rec) {
+      // 판이 다르면(새 CLI 를 받음) 새 판으로 다시 켠다
+      await appCall(rec, token, '/api/app/shutdown', 'POST');
+      const end = Date.now() + 8000;
+      while (Date.now() < end && pidAlive(rec.pid)) await new Promise((r) => setTimeout(r, 200));
+    }
+    const logFile = path.join(pcDir(), 'logs', 'app.log');
+    await fs.mkdir(path.dirname(logFile), { recursive: true });
+    const fh = await fs.open(logFile, 'a');
+    const { spawn } = await import('node:child_process');
+    const child = spawn(process.execPath, [SELF, 'app', ...(a.port ? ['--port', String(a.port)] : [])], { detached: true, stdio: ['ignore', fh.fd, fh.fd], windowsHide: true, cwd: pcDir() });
+    child.unref();
+    await fh.close();
+    const end = Date.now() + 20000;
+    let up = null;
+    while (Date.now() < end && !up && child.exitCode === null) {
+      await new Promise((r) => setTimeout(r, 300));
+      const now = await runningApp();
+      if (now.rec?.pid === child.pid) up = now;
+    }
+    if (!up) die(`DocBench 앱이 켜지지 않았습니다. 로그: ${logFile}`, 1);
+    if (a.open) await openBrowser(`${up.rec.url}?t=${token}`);
+    out(a, { running: true, url: up.rec.url, pid: up.rec.pid, workspaces: up.info.workspaces.length }, `DocBench 앱을 켰습니다: ${up.rec.url} (pid ${up.rec.pid})\n작업 공간 ${up.info.workspaces.length}개 · 로그: ${logFile}\n열기: docbench app --open · 끄기: docbench app --stop`);
+    return;
+  }
+  if (a.open && rec) { await openBrowser(`${rec.url}?t=${token}`); out(a, { url: rec.url }, `열었습니다: ${rec.url}`); return; }
+
+  // 앞에서 돌기 — 창을 닫거나 Ctrl+C 로 끈다
+  if (rec) die(`이미 켜져 있습니다: ${rec.url} (pid ${rec.pid}) — 끄려면 docbench app --stop`, 3);
+  let app;
+  const stop = () => { void (app ? app.close() : Promise.resolve()).then(() => process.exit(0)); };
+  try {
+    app = await startApp({ port: a.port ? Number(a.port) : undefined, pcConfigFile, log: (s) => process.stdout.write(s + '\n'), onShutdown: () => process.exit(0) });
+  } catch (e) { die(e.code === 'EADDRINUSE' ? `포트 ${a.port} 를 다른 프로그램이 씁니다 — --port 로 바꾸세요` : e.message, 1); }
+  process.stdout.write(`열쇠 붙은 주소(처음 한 번): ${app.openUrl}\n작업 공간 ${app.registry.size}개 · 끄기: Ctrl+C\n`);
+  if (a.open) await openBrowser(app.openUrl);
+  process.on('SIGINT', stop); process.on('SIGTERM', stop); process.on('SIGHUP', stop);
+  await new Promise(() => undefined);
+}
+
+/** 로그인 때 앱을 켠다 (Windows 시작프로그램 .cmd — ASCII 경로만, runner 와 같은 규칙) */
+async function appStartup(on, a) {
+  if (process.platform !== 'win32') die('--startup 은 Windows 에서만 됩니다. macOS·Linux 는 로그인 항목·systemd 에 docbench app --detach 를 등록하세요.');
+  const startupDir = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs', 'Startup');
+  const cmdFile = path.join(startupDir, 'DocBench-app.cmd');
+  if (!on) { await fs.rm(cmdFile, { force: true }); out(a, { startup: false }, '로그인 때 켜지 않습니다'); return; }
+  const { script, node } = asciiLaunch();
+  await fs.mkdir(startupDir, { recursive: true });
+  await fs.writeFile(cmdFile, `@echo off\r\nrem DocBench app\r\n"${node}" "${script}" app --detach\r\n`.replace(/[^\x00-\x7e]/g, ''));
+  out(a, { startup: true, file: cmdFile }, `로그인 때 DocBench 앱을 켭니다: ${cmdFile}\n끄기: docbench app --startup off`);
+}
+
+/** .cmd 에 넣을 node·이 파일 경로 (영문이 아닌 글자는 cmd.exe 가 깨뜨린다 — %LOCALAPPDATA% 로 줄이거나 멈춘다) */
+function asciiLaunch() {
+  const ascii = (p) => /^[\x20-\x7e]+$/.test(p);
+  const lad = process.env.LOCALAPPDATA || '';
+  const pct = (p) => p.replace(/%/g, '%%');
+  const script = lad && SELF.toLowerCase().startsWith(lad.toLowerCase() + path.sep) ? '%LOCALAPPDATA%' + pct(SELF.slice(lad.length)) : pct(SELF);
+  if (!ascii(script)) die(`docbench 파일 경로에 영문이 아닌 글자가 있어 시작프로그램·바로가기에 넣을 수 없습니다: ${SELF}\n%LOCALAPPDATA%\\docbench\\docbench.mjs 에 두고 다시 하세요.`);
+  return { script, node: ascii(process.execPath) ? pct(process.execPath) : 'node' };
+}
+
+/** 시작 메뉴 바로가기 "DocBench" (Windows) — 누르면 앱을 (꺼져 있으면 켜고) 열쇠 붙은 주소로 연다 */
+async function appShortcut(on, a) {
+  if (process.platform !== 'win32') die('--shortcut 은 Windows 에서만 됩니다. 다른 곳은 docbench app --open 을 쓰세요.');
+  const dir = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Microsoft', 'Windows', 'Start Menu', 'Programs');
+  const file = path.join(dir, 'DocBench.cmd');
+  if (!on) { await fs.rm(file, { force: true }); out(a, { shortcut: false }, '바로가기를 지웠습니다'); return; }
+  const { script, node } = asciiLaunch();
+  await fs.mkdir(dir, { recursive: true });
+  await fs.writeFile(file, `@echo off\r\nrem DocBench - open the app (starts it if needed)\r\n"${node}" "${script}" app --open\r\n`.replace(/[^\x00-\x7e]/g, ''));
+  out(a, { shortcut: true, file }, `시작 메뉴에 "DocBench" 를 만들었습니다: ${file}`);
 }
 
 // ---------------------------------------------------------------- 실행기 (docbench runner)

@@ -29,15 +29,22 @@ await build({ ...common, entryPoints: ['src/core/index.ts'], format: 'esm', plat
   banner: { js: `/*! DocBench core ${pkg.version} (MIT) — bundles marked (MIT), jsdiff (BSD-3-Clause). See THIRD_PARTY_NOTICES.md */` } });
 writeFileSync('dist/docbench.css', cssText);
 
-// CLI 파일 하나 (release/docbench.mjs) — 단일 HTML 의 실행기(docbench runner)·터미널 Claude Code 가 쓴다.
+// DocBench 앱 화면 (server/app.mjs 가 / 와 /embed 로 내준다) — UI 전부를 묶은 IIFE 하나
+await build({ ...common, entryPoints: ['src/app-shell.ts'], format: 'iife', outfile: 'dist/app.js', minify: true });
+// CLI 파일 하나에 앱 화면을 싣는다 — server/app-assets.mjs 를 이 글로 바꿔 끼운다(파일 하나만 받아도 앱 화면이 뜨게)
+const assets = { 'app.js': readFileSync('dist/app.js', 'utf8'), 'docbench.css': cssText, 'host.js': readFileSync('server/static/host.js', 'utf8') };
+writeFileSync('dist/app-assets.bundle.mjs', `// 빌드가 만든다 (scripts/build.mjs) — DocBench 앱 화면 파일\nconst ASSETS = ${JSON.stringify(assets)};\nexport async function appAsset(name) { return Object.prototype.hasOwnProperty.call(ASSETS, name) ? Buffer.from(ASSETS[name], 'utf8') : null; }\n`);
+const appAssetsPlugin = { name: 'docbench-app-assets', setup(b) { b.onResolve({ filter: /app-assets\.mjs$/ }, () => ({ path: root + 'dist/app-assets.bundle.mjs' })); } };
+
+// CLI 파일 하나 (release/docbench.mjs) — DocBench 앱·실행기(docbench runner)·터미널 Claude Code 가 쓴다.
 // 서버·코어·iconv-lite 를 함께 묶어 Node 만 있으면 돈다(설치·빌드 없이). 단일 HTML 의 설치 안내가 이 파일의 주소·지문을 담는다
 let iconvOk = true;
 try { (await import('node:module')).createRequire(import.meta.url).resolve('iconv-lite'); } catch { iconvOk = false; console.warn('주의: iconv-lite 가 없어 CLI 묶음에서 CP949 쓰기가 빠집니다 (npm install 로 선택 의존성을 까세요)'); }
 await build({
-  entryPoints: ['scripts/cli-bundle-entry.mjs'], bundle: true, platform: 'node', format: 'esm', target: ['node20'], outfile: 'dist/docbench.mjs',
+  entryPoints: ['scripts/cli-bundle-entry.mjs'], bundle: true, platform: 'node', format: 'esm', target: ['node20'], outfile: 'dist/docbench.mjs', plugins: [appAssetsPlugin],
   minify: false, legalComments: 'none', logLevel: 'error', external: iconvOk ? [] : ['iconv-lite'],
   define: { __DOCBENCH_VERSION__: JSON.stringify(pkg.version) },
-  banner: { js: `#!/usr/bin/env node\n/*! DocBench CLI ${pkg.version} (MIT) — one file: docbench runner · fb · doc · status. Bundles iconv-lite (MIT) and marked (MIT), jsdiff (BSD-3-Clause). https://github.com/d-j-lee/docbench */\nimport { createRequire as __docbenchCreateRequire } from 'node:module'; const require = __docbenchCreateRequire(import.meta.url);` },
+  banner: { js: `#!/usr/bin/env node\n/*! DocBench CLI ${pkg.version} (MIT) — one file: docbench app · runner · fb · doc · status. Bundles iconv-lite (MIT) and marked (MIT), jsdiff (BSD-3-Clause). https://github.com/d-j-lee/docbench */\nimport { createRequire as __docbenchCreateRequire } from 'node:module'; const require = __docbenchCreateRequire(import.meta.url);` },
 });
 const cliSha = createHash('sha256').update(readFileSync('dist/docbench.mjs')).digest('hex');
 const cliUrl = `https://raw.githubusercontent.com/d-j-lee/docbench/v${pkg.version}/release/docbench.mjs`;
@@ -60,7 +67,7 @@ writeFileSync('dist/docbench.html', page);
 writeFileSync('dist/core.d.mts', "export * from './types/core/index.js';\n");
 execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', '-p', 'tsconfig.json'], { stdio: 'inherit' });
 
-for (const f of ['docbench.js', 'docbench.iife.js', 'core.mjs', 'docbench.css', 'docbench.html', 'docbench.mjs']) {
+for (const f of ['docbench.js', 'docbench.iife.js', 'app.js', 'core.mjs', 'docbench.css', 'docbench.html', 'docbench.mjs']) {
   const b = readFileSync('dist/' + f);
   console.log(f.padEnd(18), String(statSync('dist/' + f).size).padStart(8), 'B  sha256', createHash('sha256').update(b).digest('hex').slice(0, 12));
 }

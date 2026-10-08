@@ -14,7 +14,7 @@ export async function renderChanges(app: App): Promise<void> {
   const log = h('div', { class: 'db-log' });
   if (!list.length) log.append(h('div', { class: 'db-empty', text: t('changes.empty') }));
   for (const c of list.slice().sort((a, b) => b.at.localeCompare(a.at))) {
-    const by = c.by?.kind === 'external' ? t('changes.external') : c.by?.name || (c.by?.kind === 'assistant' ? app.ai : '');
+    const by = app.personLabel(c.by);
     log.append(h('div', { class: 'db-logi' },
       h('div', { class: 'when', text: [fmtTime(c.at), app.docTitle(c.docId), by].filter(Boolean).join(' · ') }),
       c.summary ? h('div', { text: c.summary }) : null,

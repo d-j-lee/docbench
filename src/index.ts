@@ -5,7 +5,7 @@
  *   const bench = createDocBench(el, { adapters: createRestAdapters({ base: '/api' }) });
  *   bench.navigate('docs/runbook.md');
  */
-import type { DocBenchOptions } from './types';
+import type { AskOptions, DocBenchOptions } from './types';
 import { App } from './ui/app';
 
 export * from './types';
@@ -28,6 +28,12 @@ export interface DocBenchHandle {
   on(type: string, fn: (ev: CustomEvent) => void): () => void;
   destroy(): void;
   readonly ready: Promise<void>;
+  /** 짧은 선택을 묻는다 (작업대 모양의 대화상자) — 고른 id, 닫으면 null */
+  ask(o: AskOptions): Promise<string | null>;
+  /** 아래 안내 한 줄 */
+  toast(msg: string, o?: { sticky?: boolean; action?: string; onAction?: () => void }): void;
+  /** 테마 바꾸기 (호스트가 밝음·어둠을 바꿀 때) */
+  setTheme(theme: 'auto' | 'light' | 'dark'): void;
 }
 
 export function createDocBench(el: HTMLElement, opts: DocBenchOptions): DocBenchHandle {
@@ -42,6 +48,9 @@ export function createDocBench(el: HTMLElement, opts: DocBenchOptions): DocBench
     },
     destroy: () => app.destroy(),
     ready,
+    ask: (o) => app.ask(o),
+    toast: (m, o) => app.toast(m, o),
+    setTheme: (th) => { el.dataset.theme = th; },
   };
 }
 

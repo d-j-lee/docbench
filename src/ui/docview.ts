@@ -7,6 +7,7 @@ import { locate, makeSelector } from '../core/selectors';
 import { norm } from '../core/markdown';
 import { turnOf, countTurns } from '../core/feedback';
 import { lineDiff } from '../core/diff';
+import { titleFromText } from '../core/workspace';
 import { renderMarkdown, decorate, sectionize, textIndex, wrapRange, type Section } from './render';
 import { h, $$, icon, fmtBytes, fmtTime, debounce, relTime } from './dom';
 import { Editor, renderDiff } from './editor';
@@ -56,16 +57,21 @@ export class DocView {
   }
 
   // ------------------------------------------------------------ 불러오기·그리기
-  async load(compareFrom?: string): Promise<void> {
+  /** 읽었으면 true (없거나 못 읽으면 화면에 알리고 false) */
+  async load(compareFrom?: string): Promise<boolean> {
     const page = this.app.els.page;
     page.replaceChildren(h('p', { class: 'db-loading', text: this.t('doc.loading') }));
     try {
       this.content = await this.app.ad.docs.load(this.id);
     } catch (e) {
       page.replaceChildren(h('p', { class: 'db-notice tone-bad', text: this.t('doc.loadFail', { msg: (e as Error).message }) }));
-      return;
+      return false;
     }
-    if (this.destroyed) return;
+    if (this.destroyed) return false;
+    // 목록에 이름만 있던 문서(탐색기에서 처음 연 것)는 읽은 김에 제목을 채운다 — 설정에 적은 제목은 그대로
+    const meta = this.app.manifest.docs[this.id];
+    const stem = (this.id.split('/').pop() || this.id).replace(/\.(md|markdown)$/i, '');
+    if (meta && meta.title === stem) meta.title = titleFromText(this.content.md, this.id);
     this.renderAll();
     const st = this.app.docState(this.id);
     const since = compareFrom || (st.lastSeen && st.lastSeen !== this.content.version ? st.lastSeen : null);
@@ -75,6 +81,7 @@ export class DocView {
     this.app.saveState();
     this.bindScroll();
     this.bindSelection();
+    return true;
   }
 
   private renderAll(): void {
@@ -339,7 +346,7 @@ export class DocView {
       if (!c.fromVersion) break;
       want = c.fromVersion;
     }
-    const who = (c: ChangeEntry) => c.by?.kind === 'external' ? this.t('changes.external') : c.by?.name || (c.by?.kind === 'assistant' ? this.app.ai : this.t('fb.by.me'));
+    const who = (c: ChangeEntry) => this.app.personLabel(c.by) || this.t('fb.by.me');
     const tally = new Map<string, { who: string; when: string; n: number }>();
     for (const c of chain) {
       const w = who(c);

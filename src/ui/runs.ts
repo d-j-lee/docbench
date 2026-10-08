@@ -24,7 +24,8 @@ export class RunDock {
   private runs: RunStatus[] = [];
   private sel: string | null = null;
   private logs = new Map<string, { lines: RunLogLine[]; next: number }>();
-  private pending: string[] | null = null;
+  /** 맡기려다 연결이 없어 기다리는 일 — 연결되면 이어서 (넘기기 여러 건 또는 제안 한 건) */
+  private pending: { kind: 'handoff' | 'propose'; ids: string[] } | null = null;
   private follow = true;
   private known = new Map<string, string>();
   private tickT: ReturnType<typeof setInterval> | null = null;
@@ -75,9 +76,14 @@ export class RunDock {
   async refreshStatus(): Promise<void> {
     this.lastStatus = Date.now();
     const prev = JSON.stringify([this.av?.available, this.av?.reason, this.av?.runner?.id, this.av?.runner?.claude?.version, this.av?.others?.length]);
+    const was = this.av?.available;
     try { this.av = await this.ad.status(); } catch (e) { this.av = { available: false, reason: 'disabled', message: (e as Error).message }; }
     const now = JSON.stringify([this.av?.available, this.av?.reason, this.av?.runner?.id, this.av?.runner?.claude?.version, this.av?.others?.length]);
-    if (prev !== now) { this.render(); this.app.renderBar(); this.app.renderRail(); }
+    if (prev !== now) {
+      this.render(); this.app.renderBar(); this.app.renderRail();
+      // 기다리던 일이 있으면 연결된 순간 알린다(바로 시작하지는 않는다 — 사람이 모델·노력을 보고 누른다)
+      if (was === false && this.av?.available && this.pending) this.app.toast(this.t('run.connected'), { sticky: true });
+    }
   }
 
   async refreshRuns(first = false): Promise<void> {
@@ -159,14 +165,18 @@ export class RunDock {
   }
   toggle(): void { this.setOpen(!this.isOpen); }
 
-  /** 넘기기 준비 — 창을 열고 넘길 목록·설정을 보여 준다(바로 시작하지 않는다) */
+  /** 넘기기 준비 — 창을 열고 넘길 목록·설정을 보여 준다(바로 시작하지 않는다). 연결이 없으면 그 자리에서 연결 안내 */
   handoff(ids: string[]): void {
-    this.pending = ids;
+    this.pending = { kind: 'handoff', ids };
     this.setOpen(true);
     void this.refreshStatus();
   }
 
-  async propose(f: Feedback): Promise<void> { await this.launch('propose', [f.id]); }
+  /** 제안 받기 — 연결돼 있으면 바로, 아니면 연결 안내를 열고 기다린다 */
+  async propose(f: Feedback): Promise<void> {
+    if (this.av && !this.av.available) { this.pending = { kind: 'propose', ids: [f.id] }; this.setOpen(true); void this.refreshStatus(); return; }
+    await this.launch('propose', [f.id]);
+  }
 
   private async launch(kind: 'handoff' | 'propose', ids: string[]): Promise<void> {
     const s = this.settings();
@@ -207,7 +217,7 @@ export class RunDock {
     const efforts: [string, string][] = [['', t('run.effort.default')], ...((av?.runner?.efforts?.length ? av.runner.efforts : RUN_EFFORTS).map((e) => [e, t('run.effort.' + e)] as [string, string]))];
     const modes: [string, string][] = [['auto', t('run.mode.auto')], ['propose', t('run.mode.propose')]];
     const save = () => this.app.saveState();
-    const state = !av ? ['', t('run.state.checking')] : av.available ? ['ok', av.runner?.kind === 'server' ? t('run.state.server', { v: av.runner?.claude?.version || '' }) : t('run.state.runner', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' })] : ['bad', t('run.state.' + (av.reason || 'disabled'))];
+    const state = !av ? ['', t('run.state.checking')] : av.available ? ['ok', av.runner?.kind === 'server' ? t('run.state.server', { v: av.runner?.claude?.version || '' }) : av.runner?.kind === 'app' ? t('run.state.app', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' }) : t('run.state.runner', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' })] : ['bad', t('run.state.' + (av.reason || 'disabled'))];
     const head = h('header', { class: 'db-dock-h' },
       h('div', { class: 'db-dock-title' }, h('span', { class: 'db-dock-ic', html: icon('spark') }), h('b', { text: t('run.title') }),
         h('span', { class: 'db-dock-state ' + state[0], title: av?.message || '' }, h('i'), state[1])),
@@ -221,8 +231,6 @@ export class RunDock {
     if (av && !av.available) body.append(this.setupCard(av));
     const stale = this.staleRunner(av);
     if (stale) body.append(stale);
-    const hint = this.nameHint();
-    if (hint) body.append(hint);
     if (av?.others?.length && av.runner) body.append(this.chooser(av));
     const list = h('ol', { class: 'db-runs', 'aria-label': t('run.list') });
     const logHead = h('div', { class: 'db-runlog-h' });
@@ -235,19 +243,21 @@ export class RunDock {
     this.renderLog(true);
   }
 
-  private composer(ids: string[]): HTMLElement {
+  private composer(p: { kind: 'handoff' | 'propose'; ids: string[] }): HTMLElement {
     const t = this.t;
-    const rows = ids.map((id) => this.app.fb.find((f) => f.id === id)).filter((f): f is Feedback => !!f);
+    const rows = p.ids.map((id) => this.app.fb.find((f) => f.id === id)).filter((f): f is Feedback => !!f);
     const byDoc = new Map<string, number>();
     for (const f of rows) byDoc.set(f.docId || '#map', (byDoc.get(f.docId || '#map') || 0) + 1);
     const s = this.settings();
     const can = !!this.av?.available;
-    return h('div', { class: 'db-dock-card compose' },
-      h('div', { class: 'db-dock-card-h' }, h('b', { text: t('run.compose.title', { n: rows.length }) }),
+    const propose = p.kind === 'propose';
+    return h('div', { class: 'db-dock-card compose' + (can ? '' : ' waiting') },
+      h('div', { class: 'db-dock-card-h' }, h('b', { text: propose ? t('run.compose.proposeTitle') : t('run.compose.title', { n: rows.length }) }),
         h('span', { class: 'db-hint', text: [...byDoc].map(([d, n]) => `${this.app.docTitle(d)} ${n}`).join(' · ') })),
-      h('p', { class: 'db-hint', text: (s.mode === 'propose' ? t('run.compose.propose') : t('run.compose.auto')) + ' ' + t('run.compose.safe') }),
+      h('p', { class: 'db-hint', text: (propose || s.mode === 'propose' ? t('run.compose.propose') : t('run.compose.auto')) + ' ' + t('run.compose.safe') }),
+      can ? null : h('p', { class: 'db-hint wait', text: t('run.compose.wait') }),
       h('div', { class: 'db-row' },
-        h('button', { class: 'db-btn primary', type: 'button', disabled: !can || !rows.length, onclick: () => void this.launch('handoff', rows.map((f) => f.id)) }, t('run.compose.start')),
+        h('button', { class: 'db-btn primary', type: 'button', disabled: !can || !rows.length, onclick: () => void this.launch(p.kind, rows.map((f) => f.id)) }, t(propose ? 'run.compose.proposeStart' : 'run.compose.start')),
         h('button', { class: 'db-btn ghost', type: 'button', onclick: () => { this.pending = null; this.render(); } }, t('compose.cancel')),
         !can && this.app.ad.notifier ? h('button', { class: 'db-btn sm', type: 'button', onclick: () => void this.terminalFallback(rows) }, t('run.terminal.btn')) : null));
   }
@@ -274,65 +284,59 @@ export class RunDock {
       h('button', { class: 'db-btn sm', type: 'button', onclick: async () => { const ok = await this.app.copy(prompt); this.app.toast(ok ? t('run.setup.copied') : t('run.setup.copyFail')); }, html: icon('copy') + ' ' + t('run.setup.copy') }));
   }
 
+  /**
+   * 연결 안내 — 필요한 순간(넘기기·제안을 눌렀을 때) 이 창에 뜬다. 단계: (기록 폴더) → Claude Code → 문구 붙여 넣기 → 연결을 기다림.
+   * 구독 로그인 그대로, API 키 없이. 연결되면 이 카드는 사라지고 기다리던 일을 이어서 맡긴다.
+   */
   private setupCard(av: RunsAvailability): HTMLElement {
     const t = this.t;
     const setup = this.ad.setup;
     const box = h('div', { class: 'db-dock-card setup' });
     const reason = av.reason || 'disabled';
-    box.append(h('div', { class: 'db-dock-card-h' }, h('span', { class: 'db-dock-ic warn', html: icon('warn') }), h('b', { text: t('run.setup.' + reason + '.title') })));
-    if (av.message) box.append(h('p', { class: 'db-hint', text: av.message }));
+    const copyBtn = (text: string, primary = true) => h('button', { class: 'db-btn sm' + (primary ? ' primary' : ' ghost'), type: 'button', onclick: async () => { const ok = await this.app.copy(text); this.app.toast(ok ? t('run.setup.copied') : t('run.setup.copyFail')); }, html: icon('copy') + ' ' + t('run.setup.copy') });
+    box.append(h('div', { class: 'db-dock-card-h' }, h('span', { class: 'db-dock-ic ' + (reason === 'no-runner' ? 'plug' : 'warn'), html: icon(reason === 'no-runner' ? 'plug' : 'warn') }), h('b', { text: t('run.setup.' + reason + '.title') })));
+    if (av.message && reason !== 'no-runner') box.append(h('p', { class: 'db-hint', text: av.message }));
     box.append(h('p', { text: t('run.setup.' + reason + '.body') }));
-    if (reason === 'no-runner' && setup) {
+    if (reason === 'no-runner' && setup?.noData) {
+      // 연결하려면 먼저 기록 자리가 있어야 한다 (앱이 그 폴더의 요청을 읽는다)
+      box.append(h('div', { class: 'db-row' }, h('button', { class: 'db-btn primary sm', type: 'button', onclick: async () => {
+        try { await this.ad.prepare?.(); } catch (e) { this.app.toast((e as Error).message); }
+        await this.refreshStatus(); this.render();
+      } }, t('run.setup.pickData'))), h('p', { class: 'db-hint', text: t('run.setup.pickData.why') }));
+    } else if (reason === 'no-runner' && setup) {
       const prompt = runnerSetupPrompt(setup);
-      const ta = h('textarea', { class: 'db-dock-prompt', readonly: true, rows: '6', 'aria-label': t('run.setup.prompt') }) as HTMLTextAreaElement;
+      const ta = h('textarea', { class: 'db-dock-prompt', readonly: true, rows: '5', 'aria-label': t('run.setup.prompt') }) as HTMLTextAreaElement;
       ta.value = prompt;
-      const runCmd = `node "%LOCALAPPDATA%\\docbench\\docbench.mjs" runner "<${t('run.setup.folder')}>"${setup.dataHome && setup.dataName ? ` --data "<${setup.dataHome}\\${setup.dataName}>"` : ''} --detach`;
       box.append(
         h('ol', { class: 'db-steps' },
           h('li', {}, h('b', { text: t('run.setup.step1') }), ' ', t('run.setup.step1.body')),
-          h('li', {}, h('b', { text: t('run.setup.step2') }), ' ', t('run.setup.step2.body')),
-          h('li', {}, h('b', { text: t('run.setup.step3') }), ' ', t('run.setup.step3.body'))),
-        ta,
-        h('div', { class: 'db-row' },
-          h('button', { class: 'db-btn primary sm', type: 'button', onclick: async () => { const ok = await this.app.copy(prompt); this.app.toast(ok ? t('run.setup.copied') : t('run.setup.copyFail')); if (!ok) { ta.focus(); ta.select(); } }, html: icon('copy') + ' ' + t('run.setup.copy') }),
-          h('span', { class: 'db-hint', text: t('run.setup.again') }),
-          h('code', { class: 'db-cmd', text: runCmd }),
-          h('button', { class: 'db-btn ghost sm', type: 'button', title: t('run.setup.copy'), onclick: async () => { await this.app.copy(runCmd); this.app.toast(t('run.setup.copied')); }, html: icon('copy') })),
+          h('li', {}, h('b', { text: t('run.setup.step2') }), ' ', t('run.setup.step2.body'), h('div', { class: 'db-row' }, copyBtn(prompt))),
+          h('li', { class: 'wait' }, h('span', { class: 'db-spin sm' }), h('b', { text: t('run.setup.step3') }), ' ', t('run.setup.step3.body'))),
+        h('details', { class: 'db-setup-more' }, h('summary', { text: t('run.setup.show') }), ta),
+        h('details', { class: 'db-setup-more' }, h('summary', { text: t('run.setup.trouble') }),
+          h('ul', {}, ...['t1', 't2', 't3', 't4'].map((k) => h('li', { text: t('run.setup.trouble.' + k) })))),
         h('p', { class: 'db-hint', text: t('run.setup.why') }));
     } else if (reason === 'not-mine') {
-      const me = this.app.me.name || '';
-      for (const r of (av.others || []).filter((x) => x.kind === 'runner')) {
+      for (const r of (av.others || []).filter((x) => x.kind !== 'server')) {
         box.append(h('div', { class: 'db-row' },
           h('code', { class: 'db-cmd', text: `${r.user}@${r.host}` }),
-          h('button', { class: 'db-btn sm primary', type: 'button', onclick: () => this.useRunner(r.id) }, t('run.notMine.use')),
-          me && r.user.toLowerCase() !== me.toLowerCase() ? h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => this.app.root.dispatchEvent(new CustomEvent('docbench:rename', { detail: { name: r.user }, bubbles: true })) }, t('run.name.use', { user: r.user })) : null));
+          h('button', { class: 'db-btn sm primary', type: 'button', onclick: () => this.useRunner(r.id) }, t('run.notMine.use'))));
       }
-    } else if (reason === 'old-claude' || reason === 'no-claude') {
-      box.append(h('code', { class: 'db-cmd', text: reason === 'old-claude' ? 'claude update' : 'npm install -g @anthropic-ai/claude-code' }));
+    } else if (reason === 'old-claude' || reason === 'no-claude' || reason === 'not-logged-in') {
+      const cmd = reason === 'old-claude' ? 'claude update' : reason === 'not-logged-in' ? 'claude auth login' : 'claude --version';
+      box.append(h('div', { class: 'db-row' }, h('code', { class: 'db-cmd', text: cmd }), copyBtn(cmd, false)));
     }
-    if (this.app.ad.notifier && (reason === 'no-runner' || reason === 'no-claude' || reason === 'old-claude')) {
-      const waiting = this.app.fb.filter((f) => turnOf(f) === 'assistant');
+    if (this.app.ad.notifier && (reason === 'no-runner' || reason === 'no-claude' || reason === 'old-claude' || reason === 'not-logged-in')) {
+      const waiting = this.app.scopedFb().filter((f) => turnOf(f) === 'assistant');
       if (waiting.length) box.append(h('p', { class: 'db-hint' }, t('run.terminal.alt') + ' ', h('button', { class: 'db-btn sm', type: 'button', onclick: () => void this.terminalFallback(waiting) }, t('run.terminal.btn'))));
     }
     return box;
   }
 
-  /** 단일 HTML: 실행기(이 PC 로그인 이름)와 화면 이름이 다르면 맞추자고 한다 — 서버·CLI 와 같은 사람으로 남게 */
-  private nameHint(): HTMLElement | null {
-    const r = this.av?.runner;
-    const me = this.app.me.name || '';
-    if (!r || r.kind !== 'runner' || !me || r.user.toLowerCase() === me.toLowerCase() || this.app.state.runs?.chosen === 'name-ok:' + r.user) return null;
-    const t = this.t;
-    return h('div', { class: 'db-dock-card hint' },
-      h('span', { text: t('run.name.hint', { user: r.user, me }) }),
-      h('button', { class: 'db-btn sm primary', type: 'button', onclick: () => this.app.root.dispatchEvent(new CustomEvent('docbench:rename', { detail: { name: r.user }, bubbles: true })) }, t('run.name.use', { user: r.user })),
-      h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => { this.settings().chosen = 'name-ok:' + r.user; this.app.saveState(); this.render(); } }, t('run.name.keep')));
-  }
-
   private chooser(av: RunsAvailability): HTMLElement {
     const all = [av.runner!, ...(av.others || [])];
     const e = h('select', { onchange: (ev: Event) => this.useRunner((ev.target as HTMLSelectElement).value) }) as HTMLSelectElement;
-    for (const r of all) e.append(h('option', { value: r.id, selected: r.id === av.runner!.id, text: `${r.user}@${r.host} · ${r.kind === 'server' ? 'serve' : 'runner'}` }));
+    for (const r of all) e.append(h('option', { value: r.id, selected: r.id === av.runner!.id, text: `${r.user}@${r.host} · ${r.kind === 'server' ? 'serve' : r.kind === 'app' ? this.t('run.kind.app') : 'runner'}` }));
     return h('div', { class: 'db-dock-card hint' }, h('span', { text: this.t('run.choose') }), e);
   }
 

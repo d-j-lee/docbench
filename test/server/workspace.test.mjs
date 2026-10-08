@@ -72,6 +72,10 @@ test('외부 편집 감지: 에디터가 직접 고치면 external 로 기록', 
   const dir = await tempWorkspace(); t.after(() => rm(dir));
   const ws = await new Workspace(dir).init();
   await ws.reconcileAll();
+  // 안 연 문서는 따라가지 않는다(D64) — 판을 적지 않고, 바뀌어도 이력에 남지 않는다
+  assert.deepEqual((await ws.known()).docs, {});
+  await ws.readDoc('docs/질의응답.md');
+  assert.deepEqual(Object.keys((await ws.known()).docs), ['docs/질의응답.md'], '연 문서부터 판을 적는다');
   const f = path.join(dir, 'docs/질의응답.md');
   await fs.appendFile(f, '\n## 추가 질문\n\n답.\n');
   assert.equal(await ws.reconcile('docs/질의응답.md'), true);

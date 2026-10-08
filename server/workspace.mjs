@@ -91,6 +91,8 @@ export async function locateData(root, o) {
       if (!free && !(await fs.readdir(cand).catch(() => [])).length) free = cand;
       continue;
     }
+    // 더 넓은 작업 공간의 기록으로 합쳐진 기록은 더 쓰지 않는다(D66) — 그 문서 폴더는 넓은 쪽 기록을 찾는다
+    if (marker.mergedInto) continue;
     if (marker.docsPath) {
       if (samePath(marker.docsPath, root) || samePath(marker.docsPath, real)) return { dir: cand, mode: 'outside', source: 'home', claimed: true };
       continue;
@@ -131,6 +133,43 @@ export async function setPcMapping(pcConfigFile, root, dataDir, o = {}) {
 
 /** @param {string} p */
 async function isDir(p) { const st = await fs.stat(p).catch(() => null); return !!st?.isDirectory(); }
+
+/**
+ * 이 PC 의 설정 맨 위 값 하나를 바꾼다(표시 이름 name 등). 읽지 못하는 설정 파일은 덮어쓰지 않는다. value 가 '' 면 지운다.
+ * @param {string} pcConfigFile @param {string} key @param {unknown} value
+ */
+export async function setPcValue(pcConfigFile, key, value) {
+  const text = await fs.readFile(pcConfigFile, 'utf8').catch((e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
+  /** @type {any} */
+  let c = {};
+  if (text != null) { try { c = core.parseJsonText(text) || {}; } catch { throw new DataLocationError(`이 PC 의 설정 파일을 읽지 못해 고치지 않았습니다(JSON 확인): ${pcConfigFile}`); } }
+  if (!c || typeof c !== 'object' || Array.isArray(c)) throw new DataLocationError(`이 PC 의 설정 파일 모양이 이상해 고치지 않았습니다: ${pcConfigFile}`);
+  if (value === '' || value == null) delete c[key]; else c[key] = value;
+  await fs.mkdir(path.dirname(pcConfigFile), { recursive: true });
+  await writeJson(pcConfigFile, c);
+}
+
+/**
+ * 이 PC 의 설정 workspaces[<문서 폴더>] 의 값을 고친다 (짝 지은 계정 owners·앱에 더한 표시 added 등). 같은 키는 경로 비교로 찾는다.
+ * @param {string} pcConfigFile @param {string} root @param {(cur: any) => any} fn 지금 값 → 새 값(빈 객체면 지운다)
+ */
+export async function updatePcWorkspace(pcConfigFile, root, fn) {
+  const text = await fs.readFile(pcConfigFile, 'utf8').catch((e) => (e.code === 'ENOENT' ? null : Promise.reject(e)));
+  /** @type {any} */
+  let c = {};
+  if (text != null) { try { c = core.parseJsonText(text) || {}; } catch { throw new DataLocationError(`이 PC 의 설정 파일을 읽지 못해 고치지 않았습니다(JSON 확인): ${pcConfigFile}`); } }
+  if (!c || typeof c !== 'object' || Array.isArray(c)) throw new DataLocationError(`이 PC 의 설정 파일 모양이 이상해 고치지 않았습니다: ${pcConfigFile}`);
+  c.workspaces = c.workspaces && typeof c.workspaces === 'object' && !Array.isArray(c.workspaces) ? c.workspaces : {};
+  const key = Object.keys(c.workspaces).find((k) => samePath(k, root)) || path.resolve(root);
+  const cur = c.workspaces[key] && typeof c.workspaces[key] === 'object' ? c.workspaces[key] : {};
+  const next = fn({ ...cur });
+  if (JSON.stringify(next) === JSON.stringify(cur)) return false;
+  if (next && Object.keys(next).length) c.workspaces[key] = next; else delete c.workspaces[key];
+  await fs.mkdir(path.dirname(pcConfigFile), { recursive: true });
+  await writeJson(pcConfigFile, c);
+  return true;
+}
+export { samePath, isInside };
 
 /** 문서 표본용으로 문서 폴더의 .md 를 가볍게 훑는다(기본 규칙: 숨김·node_modules 등 제외) @param {string} root */
 export async function quickDocList(root, limit = 400) {
@@ -243,7 +282,16 @@ export class Workspace {
     /** 폴더 나무 (상대 경로 → 문서가 아닌 파일 수) @type {Record<string, { files: number }>} */
     this.folders = { '': { files: 0 } };
     this.folderSig = '';
+    /** 문서 목록을 얼마나 찾았나 (D64) @type {{ complete: boolean, reason?: 'big-root' | 'many' }} */
+    this.index = { complete: true };
+    /** 마지막 훑기에서 들른 항목 수 — 작은 폴더만 감시·다시 훑기를 통째로 한다 */
+    this.lastVisits = 0;
+    /** 나무(tree)에서 찾은 문서 — 한도에 닿은 큰 폴더에서도 목록에 남긴다 @type {Set<string>} */
+    this.fromTree = new Set();
   }
+
+  /** 작은 폴더(다 훑었고 항목이 적다) — 재귀 감시·통째로 다시 훑기를 해도 되는 크기 */
+  get small() { return this.index.complete && this.lastVisits <= 5000; }
 
   // ------------------------------------------------------------ 시작
   async init() {
@@ -286,7 +334,8 @@ export class Workspace {
   }
 
   get userId() { return safeName(this.config.user || os.userInfo().username || 'me'); }
-  get me() { return { kind: 'human', id: this.userId, name: this.config.user || os.userInfo().username }; }
+  /** 나 — 계정은 이 PC 의 설정 user(없으면 로그인 이름), 표시 이름은 name(화면의 "나"에서 바꾼다) */
+  get me() { return { kind: 'human', id: this.userId, name: this.config.name || this.config.user || os.userInfo().username }; }
 
   // ------------------------------------------------------------ 경로
   /** @param {string} p */
@@ -307,28 +356,53 @@ export class Workspace {
   isDoc(rel) { return matchAny(rel, this.config.include) && !matchAny(rel, this.config.exclude); }
 
   // ------------------------------------------------------------ 훑기
-  async scan() {
+  /**
+   * 문서를 찾는다 — **한도 안에서만**(D64, 브라우저 폴더 어댑터와 같은 규칙): 들른 항목 수·시간(core.SCAN_LIMITS), 문서 수(maxDocs).
+   * 얕은 곳부터(너비 우선)라 한도에 닿으면 깊은 곳이 빠진다(펼치면 tree 가 더한다). 드라이브·홈 맨 위처럼 큰 폴더는 맨 위만.
+   * 예전에는 하위 12단계까지 전부 훑어 드라이브를 열면 멈췄다(주인 실사용).
+   * @param {{ visits: number, ms: number }} [lim]
+   */
+  async scan(lim = core.SCAN_LIMITS) {
     const found = new Map();
     const tally = core.folderTally();
-    const walk = async (dir, depth) => {
-      if (depth > 12 || found.size >= this.config.maxDocs) return;
-      let ents = [];
-      try { ents = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
+    /** @type {import('node:fs').Dirent[]} */
+    let top = [];
+    try { top = await fs.readdir(this.root, { withFileTypes: true }); } catch { /* 빈 목록 */ }
+    const big = core.looksBigRoot(path.basename(this.root) || this.root, top.map((e) => e.name));
+    const started = Date.now();
+    let visits = 0;
+    let capped = false;
+    /** @type {{ abs: string, depth: number, ents?: import('node:fs').Dirent[] }[]} */
+    const queue = [{ abs: this.root, depth: 0, ents: top }];
+    outer: while (queue.length) {
+      const { abs: dir, depth, ents: pre } = /** @type {any} */ (queue.shift());
+      let ents = pre;
+      if (!ents) { try { ents = await fs.readdir(dir, { withFileTypes: true }); } catch { ents = []; } }
       for (const e of ents) {
+        visits++;
         if (e.isSymbolicLink()) continue;
         const abs = path.join(dir, e.name);
-        if (e.isDirectory()) { if (core.walkable(e.name)) { tally.dir(this.rel(abs)); await walk(abs, depth + 1); } continue; }
+        if (e.isDirectory()) {
+          if (!core.walkable(e.name)) continue;
+          tally.dir(this.rel(abs));
+          if (!big && depth < 12) queue.push({ abs, depth: depth + 1 });
+          continue;
+        }
         const rel = this.rel(abs);
         const isDoc = this.isDoc(rel);
         if (e.isFile()) tally.file(rel, isDoc);
         if (!isDoc) continue;
+        if (found.size >= this.config.maxDocs) { capped = true; break outer; }
         const st = await fs.stat(abs).catch(() => null);
         if (!st) continue;
         const prev = this.docs.get(rel);
         found.set(rel, { abs, size: st.size, mtimeMs: st.mtimeMs, title: prev?.titleMtime === st.mtimeMs ? prev.title : undefined, titleMtime: prev?.titleMtime });
       }
-    };
-    await walk(this.root, 0);
+      if (visits > lim.visits || Date.now() - started > lim.ms) { capped = queue.length > 0; break; }
+    }
+    if (capped || big) for (const id of this.fromTree) { const prev = this.docs.get(id); if (prev && !found.has(id)) found.set(id, prev); }
+    this.index = big ? { complete: false, reason: 'big-root' } : capped ? { complete: false, reason: 'many' } : { complete: true };
+    this.lastVisits = visits;
     const folders = tally.result();
     const sig = Object.keys(folders).sort().join('|');
     const changed = found.size !== this.docs.size || [...found.keys()].some((k) => !this.docs.has(k)) || sig !== this.folderSig;
@@ -336,6 +410,36 @@ export class Workspace {
     this.folders = folders;
     this.folderSig = sig;
     return changed;
+  }
+
+  /**
+   * 폴더 하나의 항목 (탐색기 — 펼친 폴더만 읽는다). 여기서 본 문서는 문서 목록에도 더한다. 숨김·의존성·시스템 폴더와
+   * 심볼릭 링크·정션은 뺀다(작업 폴더 밖으로 나가지 않게). 없는 폴더·작업 폴더 밖이면 null.
+   * @param {string} dir 작업 폴더 기준 '/' 경로 ('' = 맨 위)
+   */
+  async tree(dir) {
+    const d = dir ? core.normalizeDocId(dir) : '';
+    if (d === null) return null;
+    const abs = d ? path.resolve(this.root, d) : this.root;
+    if (d && !isInside(abs, this.root)) return null;
+    // 경로 중간의 링크·정션으로 작업 폴더 밖을 가리키면 거부
+    const real = await fs.realpath(abs).catch(() => null);
+    this.realRoot ??= await fs.realpath(this.root).catch(() => this.root);
+    if (!real || (d && !isInside(real, this.realRoot) && !samePath(real, this.realRoot))) return null;
+    let ents;
+    try { ents = await fs.readdir(abs, { withFileTypes: true }); } catch { return null; }
+    const raw = ents.filter((e) => !e.isSymbolicLink() && (e.isDirectory() || e.isFile())).map((e) => ({ name: e.name, kind: /** @type {'file' | 'directory'} */ (e.isDirectory() ? 'directory' : 'file') }));
+    const items = core.toTreeEntries(raw, d, this.config, CI).slice(0, core.TREE_MAX);
+    for (const it of items) {
+      if (!it.doc) continue;
+      const a = path.join(abs, it.name);
+      const st = await fs.stat(a).catch(() => null);
+      if (!st) continue;
+      it.size = st.size;
+      it.modified = new Date(st.mtimeMs).toISOString();
+      if (!this.docs.has(it.path)) { this.docs.set(it.path, { abs: a, size: st.size, mtimeMs: st.mtimeMs }); this.fromTree.add(it.path); }
+    }
+    return items;
   }
 
   // ------------------------------------------------------------ 문서
@@ -404,6 +508,13 @@ export class Workspace {
     id = this.canonId(id);
     const r = await this.readRaw(id);
     await this.storeBlob(r.version, r.text);
+    // 연 문서부터 따라간다(D64) — 처음 열면 판을 적어 두어 그 뒤 바깥 편집을 이력에 남긴다. 알던 판은 덮지 않는다
+    if (!(await this.known()).docs?.[id]) await this.withLock(core.lockKey.state, async () => {
+      const s = await this.known();
+      if (s.docs?.[id]) return;
+      (s.docs ||= {})[id] = r.version;
+      await writeJson(path.join(this.dir, 'state.json'), s);
+    });
     const over = this.config.docs?.[id] || {};
     const cfgRO = !!this.config.readOnly || !!over.readOnly;
     return {
@@ -519,9 +630,24 @@ export class Workspace {
     await this.appendChange({ at: new Date(r.st.mtimeMs).toISOString(), docId: id, by: { kind: 'external' }, fromVersion: prev, toVersion: r.version, sections: ds ? [...ds.changed, ...ds.added] : undefined, removed: ds?.removed.length ? ds.removed : undefined });
     return true;
   }
+  /**
+   * 열 때 한 번: **알던 문서만**(state.json) 디스크와 맞춰 본다(D64). 처음 보는 문서는 읽지 않는다 — 열거나 피드백할 때 판을 적는다.
+   * 예전에는 모든 문서를 읽어 해시해 큰 폴더를 열면 오래 걸렸다.
+   */
   async reconcileAll() {
     let n = 0;
-    for (const id of this.docs.keys()) if (await this.reconcile(id)) n++;
+    const known = Object.keys((await this.known()).docs || {});
+    for (const id of known) {
+      if (!this.docs.has(id)) {
+        // 목록 밖(큰 폴더의 깊은 곳)이라도 디스크에 있으면 맞춰 본다
+        const abs = (() => { try { return this.resolve(id); } catch { return null; } })();
+        const st = abs ? await fs.stat(abs).catch(() => null) : null;
+        if (!st || !abs) continue;
+        this.docs.set(id, { abs, size: st.size, mtimeMs: st.mtimeMs });
+        this.fromTree.add(id);
+      }
+      if (await this.reconcile(id)) n++;
+    }
     return n;
   }
 
@@ -577,9 +703,15 @@ export class Workspace {
   async manifest() {
     /** @type {Map<string, { title: string, size?: number, mtimeMs?: number }>} */
     const info = new Map();
-    for (const [id, d] of this.docs) info.set(id, { title: await this.titleOf(id), size: d.size, mtimeMs: d.mtimeMs });
-    const m = core.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI, { folders: this.folders, rootName: path.basename(this.root) });
+    // 제목(첫 # 줄)은 앞 8 KB 를 읽어야 한다 — 한 번에 300개만 새로 읽고 나머지는 파일 이름(다음에 채운다)
+    let budget = 300;
+    for (const [id, d] of this.docs) {
+      const cached = d.title && d.titleMtime === d.mtimeMs;
+      info.set(id, { title: cached || budget-- > 0 ? await this.titleOf(id) : core.titleFromText('', id), size: d.size, mtimeMs: d.mtimeMs });
+    }
+    const m = core.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI, { folders: this.folders, rootName: path.basename(this.root) || this.root });
     m.project.storage = this.dataMode === 'inside' ? path.basename(this.root) + '/.docbench' : this.dir;
+    m.index = { ...this.index, docs: this.docs.size };
     return m;
   }
 
@@ -654,8 +786,10 @@ export class Workspace {
     const items = [];
     const max = this.config.maxInventory;
     const status = this.git && this.config.inventory?.flags !== false ? await gitStatus(this.root, this.git.prefix) : new Map();
+    // 큰 폴더(드라이브 맨 위 등)는 두 단계까지만
+    const maxDepth = this.index.reason === 'big-root' ? 1 : 10;
     const walk = async (dir, parent, depth) => {
-      if (depth > 10 || items.length >= max) return;
+      if (depth > maxDepth || items.length >= max) return;
       let ents = [];
       try { ents = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
       ents.sort((a, b) => a.name.localeCompare(b.name));
@@ -717,7 +851,7 @@ export class Workspace {
       later('doc:' + rel, async () => {
         const listChanged = await this.scan();
         if (listChanged) emit({ type: 'manifest' });
-        if (this.docs.has(rel) && (await this.reconcile(rel))) { emit({ type: 'doc', id: rel }); emit({ type: 'changes' }); }
+        if (this.docs.has(rel)) await this.touched(rel, emit);
       });
     };
     const self = this;
@@ -777,11 +911,22 @@ export class Workspace {
     let watcher = null;
     let dataWatcher = null;
     let poll = null;
-    try {
-      // 파일 이름 없이 오는 알림(Windows 버퍼 넘침 등)은 전체를 한 번 훑는다
-      watcher = fsWatch(this.root, { recursive: true }, (_ev, file) => (file ? onPath(String(file)) : later('poll', () => void pollAll(), 300)));
-      watcher.on('error', () => { watcher?.close(); watcher = null; startPoll(); });
-    } catch { startPoll(); }
+    if (this.small) {
+      try {
+        // 파일 이름 없이 오는 알림(Windows 버퍼 넘침 등)은 전체를 한 번 훑는다
+        watcher = fsWatch(this.root, { recursive: true }, (_ev, file) => (file ? onPath(String(file)) : later('poll', () => void pollAll(), 300)));
+        watcher.on('error', () => { watcher?.close(); watcher = null; startPoll(); });
+      } catch { startPoll(); }
+    } else {
+      // 큰 폴더(드라이브 등)는 통째로 감시하지 않는다(D64) — 아는 문서·안쪽 기록만 몇 초마다 본다
+      startPoll();
+      if (insideData) {
+        try {
+          dataWatcher = fsWatch(this.dir, { recursive: true }, (_ev, file) => (file ? onData(String(file)) : later('poll', () => void pollAll(), 300)));
+          dataWatcher.on('error', () => { dataWatcher?.close(); dataWatcher = null; });
+        } catch { /* 폴링 */ }
+      }
+    }
     if (!insideData) {
       // 기록 폴더가 문서 폴더 밖이면 따로 감시한다
       try {
@@ -797,9 +942,24 @@ export class Workspace {
   /** @param {(ev: {type: string, id?: string}) => void} emit */
   async pollOnce(emit) {
     const before = new Map([...this.docs].map(([k, v]) => [k, v.mtimeMs]));
-    const listChanged = await this.scan();
-    if (listChanged) emit({ type: 'manifest' });
-    for (const [id, d] of this.docs) if (before.get(id) !== d.mtimeMs && (await this.reconcile(id))) { emit({ type: 'doc', id }); emit({ type: 'changes' }); }
+    if (this.small) {
+      const listChanged = await this.scan();
+      if (listChanged) emit({ type: 'manifest' });
+    } else {
+      // 큰 폴더: 다시 훑지 않고 아는 문서(state.json)의 크기·시각만 본다
+      const known = Object.keys((await this.known()).docs || {}).filter((id) => this.docs.has(id)).slice(0, 400);
+      for (const id of known) { const d = this.docs.get(id); const st = await fs.stat(d.abs).catch(() => null); if (st) this.docs.set(id, { ...d, size: st.size, mtimeMs: st.mtimeMs }); }
+    }
+    for (const [id, d] of this.docs) if (before.has(id) && before.get(id) !== d.mtimeMs) await this.touched(id, emit);
+  }
+  /**
+   * 파일이 바뀐 문서: 따라가는 문서(연 적 있는 — state.json)면 외부 편집으로 기록하고 알린다.
+   * 아직 안 연 문서는 기록 없이 알리기만 한다(D64 — 열지 않은 문서로 기록 폴더를 채우지 않는다).
+   * @param {string} id @param {(ev: {type: string, id?: string}) => void} emit
+   */
+  async touched(id, emit) {
+    if (!(await this.known()).docs?.[id]) { emit({ type: 'doc', id }); return; }
+    if (await this.reconcile(id)) { emit({ type: 'doc', id }); emit({ type: 'changes' }); }
   }
 }
 

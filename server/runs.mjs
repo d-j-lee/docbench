@@ -79,17 +79,17 @@ function runQuick(cmd, args, ms, cwd) {
 const probeCache = new Map();
 
 /**
- * claude 가 있고 안전 실행 플래그를 아는지. 결과는 잠시 기억한다(실패는 1분, 성공은 10분).
- * 확인도 문서 폴더 밖(cwd)에서 띄운다.
+ * claude 가 있고 안전 실행 플래그를 알고 로그인돼 있는지. 결과는 잠시 기억한다(실패는 1분, 성공은 10분).
+ * 확인도 문서 폴더 밖(cwd)에서 띄운다. 로그인은 claude auth status --json 의 loggedIn — 그 명령이 없는 판이면 넘어간다.
  * @param {string[]} cmd @param {boolean} [force] @param {string} [cwd]
- * @returns {Promise<{ ok: boolean, version?: string, problem?: string, reason?: 'no-claude' | 'old-claude' }>}
+ * @returns {Promise<{ ok: boolean, version?: string, problem?: string, reason?: 'no-claude' | 'old-claude' | 'not-logged-in' }>}
  */
 export async function probeClaude(cmd, force = false, cwd) {
   const key = JSON.stringify(cmd);
   const hit = probeCache.get(key);
   if (hit && !force && Date.now() - hit.at < (hit.r.ok ? 600000 : 60000)) return hit.r;
   const v = await runQuick(cmd, ['--version'], 20000, cwd);
-  /** @type {{ ok: boolean, version?: string, problem?: string, reason?: 'no-claude' | 'old-claude' }} */
+  /** @type {{ ok: boolean, version?: string, problem?: string, reason?: 'no-claude' | 'old-claude' | 'not-logged-in' }} */
   let r;
   if (v.error || v.code !== 0) {
     r = { ok: false, reason: 'no-claude', problem: !cmd.length || (v.error && /** @type {any} */ (v.error).code === 'ENOENT')
@@ -102,6 +102,13 @@ export async function probeClaude(cmd, force = false, cwd) {
     r = missing.length
       ? { ok: false, version, reason: 'old-claude', problem: `이 Claude Code(${version || '?'})에는 안전 실행에 필요한 ${missing.join(' ')} 가 없습니다. claude update 로 올려 주세요.` }
       : { ok: true, version };
+    if (r.ok) {
+      // 구독 로그인 확인 — 안 돼 있으면 작업이 시작하자마자 실패하므로 미리 알린다(화면이 /login 을 안내)
+      const a = await runQuick(cmd, ['auth', 'status', '--json'], 20000, cwd);
+      let st = null;
+      try { st = a.code === 0 ? JSON.parse(a.out) : null; } catch { st = null; }
+      if (st && st.loggedIn === false) r = { ok: false, version, reason: 'not-logged-in', problem: 'Claude Code 에 로그인하지 않았습니다. 터미널에서 claude 를 켜고 /login 으로 구독 계정에 로그인하세요(또는 claude auth login).' };
+    }
   }
   probeCache.set(key, { at: Date.now(), r });
   return r;
@@ -126,7 +133,7 @@ function killTree(child) {
 
 /**
  * 이 PC·이 사용자의 엔진 id. 화면이 요청에 적는 runner 와 같아야 한다 — 이 PC 의 설정 user 가 있으면 그것.
- * @param {{ config: any }} ws @param {'runner' | 'server'} kind
+ * @param {{ config: any }} ws @param {'runner' | 'server' | 'app'} kind
  */
 export function engineId(ws, kind) {
   return `${kind}:${ws.config.user || os.userInfo().username || 'me'}@${os.hostname() || 'pc'}`;
@@ -135,7 +142,7 @@ export function engineId(ws, kind) {
 /**
  * 이 PC 가 직접 적어 두는 "내 엔진" 기록 (문서 폴더 밖, 이 PC 의 설정 폴더). 문서 폴더의 심장 박동 파일은 폴더를 함께 쓰는
  * 누구나 고칠 수 있으므로, 프로세스를 끝내거나 "이미 켜짐"을 판단할 때는 이 기록만 믿는다.
- * @param {{ pcConfigFile: string }} ws @param {string} root @param {'runner' | 'server'} kind
+ * @param {{ pcConfigFile: string }} ws @param {string} root @param {'runner' | 'server' | 'app'} kind
  */
 export function localEngineFile(ws, root, kind) {
   const key = crypto.createHash('sha1').update(process.platform === 'win32' ? path.resolve(root).toLowerCase() : path.resolve(root)).digest('hex').slice(0, 12);
@@ -147,7 +154,7 @@ export function localEngineFile(ws, root, kind) {
  *  - 이 PC 의 기록이 있고 그 pid 가 살아 있다
  *  - 기록이 이번 부팅 뒤의 것이다 (꺼짐·재부팅으로 남은 기록의 pid 를 다른 프로그램이 다시 받았을 수 있다)
  *  - 기록 폴더의 내 심장 박동이 최근이고 같은 pid 다 (엔진은 4초마다 적는다)
- * @param {{ pcConfigFile: string, config: any, dir: string }} ws @param {string} root @param {'runner' | 'server'} kind
+ * @param {{ pcConfigFile: string, config: any, dir: string }} ws @param {string} root @param {'runner' | 'server' | 'app'} kind
  * @returns {Promise<any | null>}
  */
 export async function localEngine(ws, root, kind) {
@@ -164,7 +171,7 @@ export async function localEngine(ws, root, kind) {
 export class RunEngine {
   /**
    * @param {import('./workspace.mjs').Workspace} ws
-   * @param {{ kind: 'runner' | 'server', emit?: (ev: { type: string, id?: string }) => void, log?: (line: any, run?: string) => void, claudeCommand?: string[], onStopRequest?: () => void }} o
+   * @param {{ kind: 'runner' | 'server' | 'app', emit?: (ev: { type: string, id?: string }) => void, log?: (line: any, run?: string) => void, claudeCommand?: string[], onStopRequest?: () => void }} o
    */
   constructor(ws, o) {
     this.ws = ws;
@@ -203,6 +210,14 @@ export class RunEngine {
     this.statusChain = new Map();
     /** 엔진이 꺼지며 마지막 상태를 적은 작업 — 그 뒤 도착하는 쓰기(진행·끝)는 버린다 @type {Set<string>} */
     this.sealed = new Set();
+    /** 이 엔진을 "내 것"으로 쓰는 계정 id — 이 PC 의 설정 workspaces[<문서 폴더>].owners (연결 안내가 link --owner 로 적는다) @type {string[]} */
+    this.owners = [];
+  }
+
+  /** 짝 지은 계정을 이 PC 의 설정에서 다시 읽는다 (연결 안내를 붙여 넣으면 켜진 앱도 따라온다) */
+  async loadOwners() {
+    const pc = core.pcSettingsFor(await readJson(this.ws.pcConfigFile, {}), [this.ws.root, this.ws.realRoot || this.ws.root], process.platform === 'win32');
+    this.owners = (pc.owners || []).filter((x) => typeof x === 'string').slice(0, 20);
   }
 
   get claudeCmd() { return this.o.claudeCommand || resolveClaudeCommand(this.ws.config.assistant?.command); }
@@ -215,6 +230,7 @@ export class RunEngine {
       startedAt: this.startedAt, seenAt: new Date().toISOString(),
       claude: { ok: this.claude.ok, version: this.claude.version, problem: this.claude.problem, reason: /** @type {any} */ (this.claude.reason) },
       models: core.RUN_MODELS, efforts: core.RUN_EFFORTS, busy: this.current?.id || null, queue: this.queue.length,
+      ...(this.owners.length ? { owners: this.owners } : {}),
     };
   }
 
@@ -239,9 +255,11 @@ export class RunEngine {
     await fs.mkdir(this.beatDir, { recursive: true });
     await fs.mkdir(this.workDir, { recursive: true });
     this.claude = await probeClaude(this.claudeCmd, false, this.workDir);
+    await this.loadOwners().catch(() => undefined);
     // 같은 PC·같은 폴더에 이미 도는 엔진 — 이 PC 가 적어 둔 기록으로만 판단한다(문서 폴더의 심장 박동은 남이 꾸밀 수 있다)
     const prev = await localEngine(this.ws, this.ws.root, this.o.kind);
-    if (prev) throw Object.assign(new Error(`같은 ${this.o.kind === 'runner' ? '실행기' : '서버'}가 이 폴더에서 이미 돌고 있습니다 (pid ${prev.pid}).${this.o.kind === 'runner' ? ' 끄려면: docbench runner --stop' : ''}`), { code: 'RUNNING' });
+    const label = this.o.kind === 'runner' ? '실행기' : this.o.kind === 'app' ? 'DocBench 앱' : '서버';
+    if (prev) throw Object.assign(new Error(`같은 ${label}가 이 폴더에서 이미 돌고 있습니다 (pid ${prev.pid}).${this.o.kind === 'runner' ? ' 끄려면: docbench runner --stop' : this.o.kind === 'app' ? ' 끄려면: docbench app --stop' : ''}`), { code: 'RUNNING' });
     await writeJson(this.localFile, { pid: process.pid, id: this.id, kind: this.o.kind, root: this.ws.root, startedAt: this.startedAt });
     // 지난번에 남은 끄기 요청은 지운다(켜자마자 꺼지지 않게)
     await fs.rm(this.stopFile, { force: true }).catch(() => undefined);
@@ -253,6 +271,7 @@ export class RunEngine {
     this.timers.push(setInterval(() => void this.scan(), 1500));
     // 실패한 확인은 1분마다 다시 (claude 를 설치·업데이트한 뒤 실행기를 다시 켜지 않아도 되게)
     this.timers.push(setInterval(async () => { if (!this.claude.ok) { this.claude = await probeClaude(this.claudeCmd, true, this.workDir); if (this.claude.ok) { await this.beat(); this.emit('runner'); void this.scan(); } } }, 60000));
+    this.timers.push(setInterval(() => void this.loadOwners().catch(() => undefined), 15000));
     await this.scan();
     void this.cleanup();
     return this;

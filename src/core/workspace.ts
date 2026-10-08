@@ -28,7 +28,7 @@
  *
  * 입출력(파일 읽기·쓰기·해시)은 각자 한다. 여기에는 모양과 규칙만 둔다.
  */
-import type { ChangeEntry, Manifest } from '../types';
+import type { ChangeEntry, Manifest, TreeEntry } from '../types';
 import { headingPlain } from './markdown';
 
 /** 밖에 둔 기록 폴더의 표식 — 어느 문서 폴더의 기록인지 */
@@ -41,7 +41,11 @@ export const DATA_PROTOCOL = 1;
  * 기록 폴더 표식. docs = 그 문서 폴더의 문서 몇 개(정렬, 최대 DATA_SAMPLE) — 이름이 같은 다른 문서 폴더를 가려낸다(브라우저는 경로를 모른다).
  * migrating = 문서 폴더 안 기록을 옮기는 중(끝나지 않았으면 다시 옮길 수 있다).
  */
-export interface DataMarker { protocol: number; docsName: string; docsPath?: string; createdAt: string; docs?: string[]; migrating?: boolean }
+export interface DataMarker {
+  protocol: number; docsName: string; docsPath?: string; createdAt: string; docs?: string[]; migrating?: boolean;
+  /** 더 넓은 작업 공간의 기록으로 합쳐짐 — 이 기록은 더 쓰지 않는다(지우지 않고 남긴다). to = 합친 기록 폴더 이름, prefix = 그 안의 이 폴더 경로 */
+  mergedInto?: { to: string; prefix: string; at: string };
+}
 export const DATA_SAMPLE = 40;
 
 /** 기록 보관함 안의 폴더 이름 = 문서 폴더 이름 (파일 이름에 못 쓰는 글자만 바꾼다). 드라이브 뿌리처럼 이름이 없으면 'root' */
@@ -56,7 +60,9 @@ export function parseDataMarker(x: unknown): DataMarker | null {
   const o = x as Record<string, unknown>;
   if (typeof o.docsName !== 'string') return null;
   const docs = Array.isArray(o.docs) ? o.docs.filter((x): x is string => typeof x === 'string').slice(0, DATA_SAMPLE) : undefined;
-  return { protocol: Number(o.protocol) || 1, docsName: o.docsName, docsPath: typeof o.docsPath === 'string' && o.docsPath ? o.docsPath : undefined, createdAt: typeof o.createdAt === 'string' ? o.createdAt : '', ...(docs?.length ? { docs } : {}), ...(o.migrating === true ? { migrating: true } : {}) };
+  const mi = o.mergedInto && typeof o.mergedInto === 'object' ? o.mergedInto as Record<string, unknown> : null;
+  const mergedInto = mi && typeof mi.to === 'string' && typeof mi.prefix === 'string' ? { to: mi.to, prefix: mi.prefix, at: typeof mi.at === 'string' ? mi.at : '' } : undefined;
+  return { protocol: Number(o.protocol) || 1, docsName: o.docsName, docsPath: typeof o.docsPath === 'string' && o.docsPath ? o.docsPath : undefined, createdAt: typeof o.createdAt === 'string' ? o.createdAt : '', ...(docs?.length ? { docs } : {}), ...(o.migrating === true ? { migrating: true } : {}), ...(mergedInto ? { mergedInto } : {}) };
 }
 
 export const newDataMarker = (docsName: string, docsPath?: string, docs?: string[]): DataMarker => ({ protocol: DATA_PROTOCOL, docsName, ...(docsPath ? { docsPath } : {}), createdAt: new Date().toISOString(), ...(docs?.length ? { docs: docsSample(docs) } : {}) });
@@ -137,7 +143,10 @@ export interface WorkspaceConfig {
   /** inbox: .docbench/inbox 에 요청 파일 · command: 넘기기 때 실행할 명령(배열, 서버만) · message: 화면에 보일 안내 */
   notify: { inbox?: boolean; command?: string[] | null; message?: string | null };
   readOnly: boolean;
+  /** 계정 (이 PC 의 설정 user — 없으면 운영체제 로그인) */
   user: string;
+  /** 표시 이름 (이 PC 의 설정 name — 없으면 user). 바꿔도 계정은 그대로 */
+  name: string;
   maxDocs: number;
   maxInventory: number;
   inventory: { flags?: boolean };
@@ -160,6 +169,7 @@ export const DEFAULT_CONFIG: WorkspaceConfig = {
   notify: { inbox: true, command: null, message: null },
   readOnly: false,
   user: '',
+  name: '',
   maxDocs: 2000,
   maxInventory: 4000,
   inventory: { flags: true },
@@ -168,10 +178,16 @@ export const DEFAULT_CONFIG: WorkspaceConfig = {
 /** 이 PC 에만 해당하는 설정 — 문서 폴더 밖(사용자 폴더)에서만 읽는다 */
 export interface PcSettings {
   user?: string;
+  /** 표시 이름 (화면의 "나"에서 바꾼다) */
+  name?: string;
   assistant?: WorkspaceConfig['assistant'];
   notify?: { command?: string[] | null };
   /** 이 문서 폴더의 기록 폴더 (workspaces[<폴더>].data) */
   data?: string;
+  /** 이 폴더의 Claude 작업을 "내 것"으로 맡기는 계정 id (workspaces[<폴더>].owners — 연결 안내가 link --owner 로 적는다) */
+  owners?: string[];
+  /** DocBench 앱의 작업 공간 목록에 더한 때 (workspaces[<폴더>].added) */
+  added?: string;
 }
 
 /**
@@ -199,6 +215,8 @@ export function pcSettingsFor(file: unknown, rootPaths: string[], ci = false): P
   for (const [k, v] of Object.entries(f.workspaces || {})) if (want.has(norm(k)) && v && typeof v === 'object') ws = v;
   return {
     user: ws.user ?? f.user,
+    name: typeof f.name === 'string' ? f.name : undefined,
+    owners: Array.isArray(ws.owners) ? ws.owners.filter((x) => typeof x === 'string') : undefined,
     assistant: ws.assistant ?? f.assistant,
     notify: { ...(f.notify || {}), ...(ws.notify || {}) },
   };
@@ -221,6 +239,7 @@ export function mergeConfig(raw: unknown, folderName: string, pc?: PcSettings): 
   if (shared.user) warnings.push(`문서 폴더 config.json 의 user 는 쓰지 않습니다 — 이름은 ${where}에 두세요.`);
   delete shared.assistant;
   delete shared.user;
+  delete (shared as Partial<WorkspaceConfig>).name;
   const sharedNotify = { ...(shared.notify || {}) };
   if (sharedNotify.command != null) warnings.push(`문서 폴더 config.json 의 notify.command 는 쓰지 않습니다 — ${where}에 두세요.`);
   delete sharedNotify.command;
@@ -229,6 +248,7 @@ export function mergeConfig(raw: unknown, folderName: string, pc?: PcSettings): 
     notify: { ...DEFAULT_CONFIG.notify, ...sharedNotify, ...(pc?.notify?.command != null ? { command: pc.notify.command } : {}) },
     assistant: pc?.assistant ?? null,
     user: pc?.user || '',
+    name: pc?.name || '',
   };
   if (!out.title) out.title = folderName;
   if (warnings.length) out.warnings = warnings;
@@ -277,7 +297,50 @@ export const isDocPath = (rel: string, c: Pick<WorkspaceConfig, 'include' | 'exc
   matchAny(rel, c.include, ci) && !matchAny(rel, c.exclude, ci);
 
 /** 훑을 폴더인가 — 숨김 폴더·빌드 산출물·의존성 폴더는 건너뛴다 */
-export const walkable = (dirName: string): boolean => !IGNORE_DIRS.has(dirName) && !dirName.startsWith('.');
+export const walkable = (dirName: string): boolean => !IGNORE_DIRS.has(dirName) && !dirName.startsWith('.') && !SYSTEM_DIRS.has(dirName);
+
+// ---------------------------------------------------------------- 가벼운 열기 (D64)
+
+/** 운영체제가 드라이브·홈 맨 위에 두는 것 — 문서를 찾으러 들어가지 않는다 */
+const SYSTEM_DIRS = new Set(['$RECYCLE.BIN', 'System Volume Information', '$Recycle.Bin', 'Recovery', '$WinREAgent', 'Config.Msi']);
+const BIG_ROOT_MARKS = ['Windows', 'Program Files', 'Program Files (x86)', 'ProgramData', 'Users', 'pagefile.sys', 'hiberfil.sys', 'swapfile.sys', '$RECYCLE.BIN', 'System Volume Information', 'AppData', 'NTUSER.DAT', 'Applications', 'Library', 'usr', 'etc', 'var'];
+
+/**
+ * 드라이브·홈·시스템 맨 위처럼 아주 큰 폴더인가 — 그러면 열 때 전부 훑지 않고 맨 위만 본다(펼친 폴더는 tree 로).
+ * 이름(드라이브 문자, 빈 이름)과 맨 위 항목(Windows·Program Files·$RECYCLE.BIN·AppData …)으로 가린다.
+ */
+export function looksBigRoot(rootName: string, topNames: string[]): boolean {
+  if (/^([a-zA-Z]:[\\/]?|[\\/]|)$/.test(rootName.trim())) return true;
+  const have = new Set(topNames);
+  const hits = BIG_ROOT_MARKS.filter((n) => have.has(n)).length;
+  return hits >= 2 || have.has('$RECYCLE.BIN') || have.has('System Volume Information') || have.has('NTUSER.DAT');
+}
+
+/** 열 때 문서를 찾는 한도 — 들른 항목 수·시간. 넘으면 찾은 데까지만 목록에(나머지는 펼칠 때) */
+export const SCAN_LIMITS = { visits: 20000, ms: 2500 };
+
+/** 나무 한 폴더에 보일 항목 수 한도 (더 있으면 잘라 내고 수를 알린다) */
+export const TREE_MAX = 2000;
+
+/**
+ * 폴더 하나의 항목 → 나무 항목. 숨김·의존성·시스템 폴더와 점으로 시작하는 파일은 뺀다. 폴더 먼저, 그다음 이름순(숫자는 크기순).
+ * 문서 여부는 설정의 include/exclude 를 따른다.
+ */
+/** 파일 이름 순서 — 탐색기처럼: 숫자는 크기순, 대소문자 무시, 숫자·영문·한글 차례 ('ko' 정렬은 한글을 영문 앞에 둔다) */
+export const fileNameOrder = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+
+export function toTreeEntries(raw: { name: string; kind: 'file' | 'directory'; size?: number; mtimeMs?: number }[], dir: string, c: Pick<WorkspaceConfig, 'include' | 'exclude'>, ci = false): TreeEntry[] {
+  const pre = dir ? dir.replace(/\/+$/, '') + '/' : '';
+  const out: TreeEntry[] = [];
+  for (const e of raw) {
+    if (e.kind === 'directory') { if (walkable(e.name)) out.push({ name: e.name, path: pre + e.name, kind: 'dir' }); continue; }
+    if (e.name.startsWith('.') || e.name.startsWith('~$')) continue;
+    const path = pre + e.name;
+    const doc = isDocPath(path, c, ci);
+    out.push({ name: e.name, path, kind: 'file', ...(doc ? { doc: true } : {}), ...(e.size != null ? { size: e.size } : {}), ...(e.mtimeMs != null ? { modified: new Date(e.mtimeMs).toISOString() } : {}) });
+  }
+  return out.sort((a, b) => (a.kind === b.kind ? fileNameOrder.compare(a.name, b.name) : a.kind === 'dir' ? -1 : 1));
+}
 
 // ---------------------------------------------------------------- 문서 id
 
@@ -391,7 +454,7 @@ export function buildManifest(c: WorkspaceConfig, docIds: string[], info: (id: s
   }
   return {
     schema: 2,
-    project: { name: c.title, subtitle: c.subtitle || subtitle, links: c.links },
+    project: { name: c.title, subtitle: c.subtitle || (subtitle !== c.title ? subtitle : ''), links: c.links },
     milestones: c.milestones,
     trust: c.trust,
     groups,

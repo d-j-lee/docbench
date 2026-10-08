@@ -3,7 +3,7 @@
  * 기본 대상은 같은 저장소의 로컬 작업 폴더 서버(`docbench serve`)지만,
  * 사내 대시보드 백엔드가 같은 계약을 구현하면 그대로 쓸 수 있다.
  */
-import { DocConflictError, DocReadOnlyError, FeedbackConflictError, type DocBenchAdapters, type DocEvent, type Feedback, type Person, type ProposeRequest, type RunLogLine, type RunsAvailability, type RunStatus, type ViewState } from '../types';
+import { DocConflictError, DocReadOnlyError, FeedbackConflictError, type DocBenchAdapters, type DocEvent, type Feedback, type Person, type ProposeRequest, type RunLogLine, type RunsAvailability, type RunStatus, type TreeEntry, type ViewState } from '../types';
 import { normalizeFeedback } from '../core/feedback';
 
 export interface RestOptions {
@@ -25,7 +25,9 @@ interface Session {
   permissions: string[];
   assistant?: { name: string } | null;
   notify?: { label?: string } | null;
-  features?: { base?: boolean; versions?: boolean; inventory?: boolean; changes?: boolean; runs?: boolean };
+  features?: { base?: boolean; versions?: boolean; inventory?: boolean; changes?: boolean; runs?: boolean; tree?: boolean };
+  /** 사람이 어디서 왔나 — 'pc' 면 화면의 "나"에서 표시 이름을 바꿀 수 있다(PUT /me) */
+  identity?: 'pc' | 'host';
 }
 
 export class HttpError extends Error {
@@ -132,6 +134,7 @@ export function createRestAdapters(o: RestOptions = {}): DocBenchAdapters & { re
       subscribe: (cb) => on((e) => { if (e.type !== 'feedback') cb(e); }),
       // 서버는 파일을 바로 감시한다 — "확인 n초 전" 대신 실시간
       refresh: async (id) => { await call('GET', '/doc', undefined, { id }); return false; },
+      tree: async (dir) => { try { return (await call<{ items: TreeEntry[] }>('GET', '/tree', undefined, { dir })).items; } catch (e) { if (e instanceof HttpError && e.status === 404) return null; throw e; } },
     },
     runs: {
       status: () => call<RunsAvailability>('GET', '/runs/status'),
@@ -163,6 +166,7 @@ export function createRestAdapters(o: RestOptions = {}): DocBenchAdapters & { re
     identity: {
       me: async () => (await ready).me,
       can: async (a) => (await ready).permissions.includes(a),
+      setName: async (name) => call<Person>('PUT', '/me', { name }),
     },
     assistant: {
       name: 'AI',
@@ -203,5 +207,10 @@ export async function trimBySession(ad: DocBenchAdapters & { ready: Promise<Sess
   if (!s.notify) delete out.notifier;
   if (!s.features?.runs) delete out.runs;
   if (s.features && s.features.base === false) out.docs = { ...out.docs, loadBase: undefined };
+  // 나무(펼친 폴더만 읽기)를 모르는 예전 서버·다른 백엔드면 빼고 예전 목록으로
+  if (!s.features?.tree) out.docs = { ...out.docs, tree: undefined };
+  // 사람을 호스트가 정하는 백엔드(대시보드 로그인)는 이름을 바꾸지 않는다
+  if (s.identity === 'pc') out.identity = { ...ad.identity!, source: 'pc' };
+  else out.identity = { me: ad.identity!.me, can: ad.identity!.can, source: 'host' };
   return out;
 }

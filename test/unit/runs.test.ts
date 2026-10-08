@@ -7,7 +7,7 @@ import { describe, it, expect } from 'vitest';
 import {
   normalizeRunInput, buildRunPrompt, planRun, checkSectionText, streamEventToLog, streamEventPhase, pickRunner, runnerAlive,
   completeJsonLines, locateSectionKey, runnerSetupPrompt, makeRunRequest, validModel, validRunId, newRunId, RUN_PROTOCOL,
-  cleanRunEntry, safeFolderName, terminalHandoffPrompt, liveRunners,
+  cleanRunEntry, safeFolderName, safeAccountId, terminalHandoffPrompt, liveRunners,
   type RunContext, type RunItem,
 } from '../../src/core/runs';
 import { folderTally } from '../../src/core/workspace';
@@ -148,22 +148,33 @@ describe('실행기 고르기', () => {
 });
 
 describe('설치 안내', () => {
-  it('주소·지문·폴더 이름·안전 확인이 들어 있다', () => {
-    const s = runnerSetupPrompt({ version: '0.3.0', cliUrl: 'https://raw.githubusercontent.com/d-j-lee/docbench/v0.3.0/release/docbench.mjs', sha256: 'ab'.repeat(32), folderName: '기획 문서' });
-    expect(s).toContain('/v0.3.0/release/docbench.mjs');
+  it('주소·지문·폴더 이름·안전 확인·로그인 확인이 들어 있고, 앱으로 맡긴다', () => {
+    const s = runnerSetupPrompt({ version: '0.5.0', cliUrl: 'https://raw.githubusercontent.com/d-j-lee/docbench/v0.5.0/release/docbench.mjs', sha256: 'ab'.repeat(32), folderName: '기획 문서' });
+    expect(s).toContain('/v0.5.0/release/docbench.mjs');
     expect(s).toContain('ab'.repeat(32));
     expect(s).toContain('"기획 문서"');
     expect(s).toMatch(/--restricted 와 --safe-mode/);
-    expect(s).toMatch(/runner "<문서 폴더>" --detach/);
+    expect(s).toMatch(/claude auth status/);
+    expect(s).toMatch(/link "<문서 폴더>"\n/);
+    expect(s).toMatch(/app --detach/);
     expect(s).toContain('.docbench');
+    expect(s).not.toMatch(/runner .*--detach/);
   });
-  it('기록이 문서 폴더 밖이면: 보관함·기록 폴더 이름과 --data (짝을 이 PC 의 설정에)', () => {
-    const s = runnerSetupPrompt({ version: '0.4.0', cliUrl: 'u', sha256: 's', folderName: '기획 문서', dataHome: 'docbench-기록', dataName: '기획 문서' });
+  it('기록이 문서 폴더 밖이면: 보관함·기록 폴더 이름과 --data, 화면의 계정은 --owner 로 (짝을 이 PC 의 설정에)', () => {
+    const s = runnerSetupPrompt({ version: '0.5.0', cliUrl: 'u', sha256: 's', folderName: '기획 문서', dataHome: 'docbench-기록', dataName: '기획 문서', owner: 'u-0123456789' });
     expect(s).toContain('"docbench-기록"');
     expect(s).toContain('docbench-data.json');
-    expect(s).toMatch(/runner "<문서 폴더>" --data "<기록 폴더>" --detach/);
+    expect(s).toMatch(/link "<문서 폴더>" --data "<기록 폴더>" --owner u-0123456789/);
     expect(s).not.toContain('.docbench 폴더가 있는 곳');
     expect(terminalHandoffPrompt('기획 문서', { dataHome: 'docbench-기록', dataName: '기획 문서' })).toMatch(/docbench link/);
+  });
+  it('계정 id 는 모양만 통과한다 (문구에 끼어들지 못하게)', () => {
+    const s = runnerSetupPrompt({ version: '0.5.0', cliUrl: 'u', sha256: 's', folderName: 'x', owner: 'u-1 && rm -rf ~' as string });
+    expect(s).not.toContain('rm -rf');
+    expect(s).not.toContain('--owner');
+    expect(safeAccountId('u-0a1b2c3d4e')).toBe('u-0a1b2c3d4e');
+    expect(safeAccountId('이동주')).toBe('이동주');
+    expect(safeAccountId('a b')).toBe('');
   });
 });
 

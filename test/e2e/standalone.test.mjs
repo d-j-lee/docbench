@@ -90,30 +90,56 @@ const writeOpfs = (page, name, p, text) => page.evaluate(async ([name, p, text])
 }, [name, p, text]);
 const listOpfs = (page, name, p) => page.evaluate(async ([name, p]) => {
   let d = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
-  for (const s of p.split('/')) d = await d.getDirectoryHandle(s);
+  for (const s of p.split('/').filter(Boolean)) d = await d.getDirectoryHandle(s);
   const out = []; for await (const k of d.keys()) out.push(k); return out;
 }, [name, p]);
 const sec = (page, key) => page.locator(`.db-sec[data-key="${key}"]`);
 
-test('file:// 로 열면 폴더 열기 화면, 오류 없음', async (t) => {
+test('file:// 로 열면 시작하기 작업대가 바로 — 이름·폴더를 묻지 않는다, 오류 없음', async (t) => {
   const { page, errors } = await newPage(t, pathToFileURL(html).href + '?lang=ko');
-  await page.locator('.db-start h1', { hasText: '문서 폴더 열기' }).waitFor();
-  assert.ok(await page.locator('.db-start .db-btn.primary', { hasText: '폴더 열기' }).isVisible(), '쓰기 가능한 브라우저면 폴더 열기 버튼');
+  await page.waitForSelector('.db-sec');
+  assert.equal(await page.locator('.db-docbench input[type="text"]:visible, .docbench input[type="text"]:visible').count(), 0, '처음에 이름 칸이 없다');
+  assert.match(await page.locator('.db-ws').innerText(), /시작하기/);
   assert.equal(await page.evaluate(() => isSecureContext), true, 'file:// 은 보안 문맥 — 폴더 쓰기 가능');
-  await page.locator('.db-start-msg', { hasText: '기억하지 않습니다' }).waitFor();   // file:// 은 다른 로컬 HTML 과 출처를 나눠 써서
-  // 이름 안내는 눈에 띄게 (사용자 피드백: 작은 회색 글씨라 안 보였다)
-  assert.match(await page.locator('.db-start-note').innerText(), /Windows 로그인 이름/);
-  assert.ok(await page.locator('.db-start-note').isVisible());
-  await page.locator('.db-start input[type="text"]').fill('');
-  await page.locator('.db-start .db-btn.primary', { hasText: '폴더 열기' }).click();
-  await page.locator('.db-start-msg', { hasText: '이름을 먼저' }).waitFor();          // 이름 없이 열면 모두가 같은 사람이 된다
+  // 계정은 이 브라우저에 저절로 — 이름 없이
+  const acct = JSON.parse(await page.evaluate(() => localStorage.getItem('docbench:account')));
+  assert.match(acct.id, /^u-[0-9a-f]{10}$/);
+  assert.equal(acct.name, undefined);
+  // 연습용 문서에는 Claude 가 남긴 되물음이 내 차례로 기다린다
+  await page.locator('.db-explorer .db-nav, .db-nav', { hasText: '연습' }).first().click();
+  await page.locator('.db-card.t-owner').first().waitFor();
+  // 작업 공간 메뉴: 첫째가 폴더 열기
+  await page.locator('.db-ws').click();
+  const first = page.locator('.db-menu .db-menu-i').first();
+  assert.match(await first.innerText(), /폴더 열기/);
+  assert.ok(await first.evaluate((e) => e.classList.contains('primary')));
+  await page.keyboard.press('Escape');
+  await page.locator('.db-menu').waitFor({ state: 'detached' });
+  // 나: 별명을 붙여도 계정 id 는 그대로 (예전 피드백이 계속 "내 것")
+  await page.locator('.db-me').click();
+  const dlg = page.locator('dialog.db-dialog[open]');
+  assert.match(await dlg.innerText(), new RegExp(acct.id));
+  await dlg.locator('input').fill('디제이');
+  await dlg.locator('.db-btn.primary').click();
+  await page.locator('.db-me', { hasText: '디제이' }).waitFor();
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('docbench:account'))), { id: acct.id, name: '디제이' });
   assert.equal(await page.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content.includes("img-src data: blob:")), true, '바깥 그림 주소로 새는 길을 막는다');
   assert.deepEqual(errors, []);
 });
 
+test('예전 판의 이름이 있으면 그 이름이 계정 — 예전 피드백이 계속 내 것', async (t) => {
+  const { page } = await newPage(t, base + '?pick&lang=ko');
+  await page.waitForSelector('.db-sec');
+  await page.evaluate(() => { localStorage.removeItem('docbench:account'); localStorage.setItem('docbench:standalone:name', 'dj'); });
+  await page.reload();
+  await page.waitForSelector('.db-sec');
+  assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('docbench:account'))), { id: 'dj', name: 'dj' });
+  assert.match(await page.locator('.db-me').innerText(), /dj/);
+});
+
 test('OPFS 폴더: 섹션 편집·피드백·밖에서 고친 피드백·CP949·BOM/CRLF 가 서버와 같은 디스크 모양으로', async (t) => {
   const { page, errors } = await newPage(t, base + '?pick&lang=ko');
-  await page.locator('.db-start').waitFor();
+  await page.waitForSelector('.db-sec');
   const name = await seed(page);
   await page.evaluate(async (n) => {
     const d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
@@ -190,16 +216,17 @@ test('OPFS 폴더: 섹션 편집·피드백·밖에서 고친 피드백·CP949·
 });
 
 /**
- * 이 PC 의 실행기를 페이지 안에서 흉내 낸다 (실제 실행기는 OPFS 를 볼 수 없다): 심장 박동을 쓰고, 요청 파일을 받으면
- * 상태·로그를 쓰고 문서·피드백을 바꾼다. 실제 실행기(server/runs.mjs)는 test/server/runs.test.mjs 가 본다.
+ * 이 PC 의 DocBench 앱(또는 예전 실행기)을 페이지 안에서 흉내 낸다 (실제 앱은 OPFS 를 볼 수 없다): 심장 박동을 쓰고, 요청 파일을 받으면
+ * 상태·로그를 쓰고 문서·피드백을 바꾼다. 실제 엔진(server/runs.mjs)은 test/server/runs.test.mjs 가 본다.
  */
-const simRunner = (page, name, user = 'dj') => page.evaluate(async ([name, user]) => {
+const simRunner = (page, name, o = {}) => page.evaluate(async ([name, o]) => {
+  const user = o.user || 'dj', kind = o.kind || 'runner';
   const root = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
   const dirOf = async (p) => { let d = root; for (const s of p.split('/')) d = await d.getDirectoryHandle(s, { create: true }); return d; };
   const write = async (p, text) => { const segs = p.split('/'); const f = segs.pop(); const w = await (await (await dirOf(segs.join('/'))).getFileHandle(f, { create: true })).createWritable(); await w.write(text); await w.close(); };
   const read = async (p) => { const segs = p.split('/'); const f = segs.pop(); return (await (await (await dirOf(segs.join('/'))).getFileHandle(f)).getFile()).text(); };
-  const id = 'runner:' + user + '@sim';
-  const beat = () => write('.docbench/runners/runner_' + user + '@sim.json', JSON.stringify({ id, kind: 'runner', user, host: 'sim', pid: 1, version: 'test', protocol: 1, startedAt: new Date().toISOString(), seenAt: new Date().toISOString(), claude: { ok: true, version: '2.1.293' }, models: ['opus', 'sonnet', 'haiku', 'fable'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }));
+  const id = kind + ':' + user + '@sim';
+  const beat = () => write('.docbench/runners/' + kind + '_' + user + '@sim.json', JSON.stringify({ id, kind, user, ...(o.owners ? { owners: o.owners } : {}), host: 'sim', pid: 1, version: 'test', protocol: 1, startedAt: new Date().toISOString(), seenAt: new Date().toISOString(), claude: { ok: true, version: '2.1.293' }, models: ['opus', 'sonnet', 'haiku', 'fable'], efforts: ['low', 'medium', 'high', 'xhigh', 'max'] }));
   await beat();
   const seen = new Set();
   window.__simReqs = [];
@@ -227,15 +254,17 @@ const simRunner = (page, name, user = 'dj') => page.evaluate(async ([name, user]
       await write(`.docbench/runs/${req.id}.json`, JSON.stringify({ ...st, state: 'done', endedAt: new Date().toISOString(), summary: { edited: req.feedbackIds.length, proposed: 0, answered: 0, asked: 0, declined: 0, skipped: 0, failed: 0 } }));
     }
   }, 400);
-}, [name, user]);
+}, [name, o]);
+const stopSim = (page) => page.evaluate(() => { clearInterval(window.__simLoop); clearInterval(window.__simBeat); }).catch(() => undefined);
+const openOpfs = (page, name, user) => page.evaluate(async ([n, u]) => { const d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n); await window.DocBenchStandalone.openHandle(document.getElementById('app'), d, u); }, [name, user]);
 
-test('Claude 작업(단일 HTML): 실행기 없으면 설치 안내(주소·지문) → 실행기가 켜지면 모델·노력 골라 넘기기 → 요청 파일 → 진행·결과 → 바뀐 글 표시', async (t) => {
+test('Claude 작업(단일 HTML): 연결 없으면 설치 안내(주소·지문·계정 짝) → 앱이 켜지면 모델·노력 골라 넘기기 → 요청 파일 → 진행·결과 → 바뀐 글 표시', async (t) => {
   const { page, errors } = await newPage(t, base + '?pick&lang=ko');
-  await page.locator('.db-start').waitFor();
+  await page.waitForSelector('.db-sec');
   const name = await seed(page);
   const fb = { id: 'fb-20261008-090000-e2e1', version: 1, docId: 'docs/운영-런북.md', target: { kind: 'section', path: ['알림 서비스 운영 런북', '배포 전 확인'], heading: '배포 전 확인' }, selector: { exact: '공급자 상태 페이지 확인' }, body: '확인 주기를 적어 줘', status: 'open', waitingOn: 'assistant', author: { kind: 'human', id: 'dj', name: 'dj' }, thread: [], createdAt: '2026-10-08T00:00:00Z', updatedAt: '2026-10-08T00:00:00Z' };
   await writeOpfs(page, name, '.docbench/feedback/' + fb.id + '.json', JSON.stringify(fb));
-  await page.evaluate(async (n) => { const d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n); await window.DocBenchStandalone.openHandle(document.getElementById('app'), d, 'dj'); }, name);
+  await openOpfs(page, name, 'dj');
   await page.evaluate(() => { location.hash = encodeURIComponent('docs/운영-런북.md'); });
   await page.locator(`.db-card[data-id="${fb.id}"]`).waitFor();
 
@@ -245,7 +274,7 @@ test('Claude 작업(단일 HTML): 실행기 없으면 설치 안내(주소·지�
   await page.locator(`.db-card[data-id="${fb.id}"]`).hover();
   await page.locator('mark.db-fbq.hl').first().waitFor();
 
-  // 넘기기 → 실행기가 없으니 설치 안내: 이 판의 CLI 주소와 지문
+  // 넘기기 → 연결이 없으니 설치 안내: 이 판의 CLI 주소와 지문, 이 화면의 계정과 짝짓기
   await page.locator('.db-send').click();
   await page.locator('.db-dock .db-dock-card.compose').waitFor();
   const setup = page.locator('.db-dock .db-dock-card.setup');
@@ -256,18 +285,21 @@ test('Claude 작업(단일 HTML): 실행기 없으면 설치 안내(주소·지�
   assert.ok(prompt.includes(sha), '설치 안내에 CLI 지문');
   assert.ok(prompt.includes(`/v${ver}/release/docbench.mjs`), '설치 안내에 이 판의 CLI 주소');
   assert.ok(prompt.includes(`"${name}"`), '폴더 이름');
+  assert.match(prompt, /link "<문서 폴더>" --owner dj/, '이 화면의 계정과 짝');
+  assert.match(prompt, /app --detach/);
+  assert.match(prompt, /claude auth status/);
   await setup.locator('.db-btn.primary', { hasText: '설치 문구 복사' }).click();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), prompt);
-  assert.equal(await page.locator('.db-dock .compose .db-btn.primary').isDisabled(), true, '실행기 없이는 시작 못 함');
+  assert.equal(await page.locator('.db-dock .compose .db-btn.primary').isDisabled(), true, '연결 없이는 시작 못 함');
 
-  // 실행기가 켜지면: 연결됨 → 모델·노력 고르고 시작 → 요청 파일
-  await simRunner(page, name);
-  await page.locator('.db-dock-state.ok').waitFor({ timeout: 12000 });
+  // 앱이 켜지면(이 화면의 계정과 짝지어진): 연결됨 → 모델·노력 고르고 시작 → 요청 파일
+  await simRunner(page, name, { kind: 'app', user: 'dj-pc', owners: ['dj'] });
+  await page.locator('.db-dock-state.ok', { hasText: 'DocBench 앱' }).waitFor({ timeout: 12000 });
   await page.locator('.db-dock-opt select').nth(0).selectOption('opus');
   await page.locator('.db-dock-opt select').nth(1).selectOption('high');
   await page.locator('.db-dock .compose .db-btn.primary').click();
   const req = await until(() => page.evaluate(() => window.__simReqs[0]), 6000);
-  assert.deepEqual([req.kind, req.model, req.effort, req.mode, req.runner, req.feedbackIds], ['handoff', 'opus', 'high', 'auto', 'runner:dj@sim', [fb.id]]);
+  assert.deepEqual([req.kind, req.model, req.effort, req.mode, req.runner, req.feedbackIds], ['handoff', 'opus', 'high', 'auto', 'app:dj-pc@sim', [fb.id]]);
   assert.equal(req.by.name, 'dj');
 
   // 진행·결과: 작업 목록·로그·알림, 피드백 회신, 문서에 바뀐 글
@@ -284,34 +316,78 @@ test('Claude 작업(단일 HTML): 실행기 없으면 설치 안내(주소·지�
   // 로그 줄의 "보기" → 그 문서
   await page.locator('.db-runlog .db-ll.link .db-btn').first().click();
 
-  // 왼쪽: 도구와 문서가 나뉘고, 폴더 보기에서 문서가 없는 폴더도 보인다 → 누르면 폴더 지도
+  // 왼쪽: 도구와 탐색기 — 문서가 없는 폴더도 펼치면 그 안의 파일이 보인다(문서가 아니라 흐리게)
   assert.equal(await page.locator('.db-tools .db-tool').count(), 3);
-  await page.locator('.db-railview button', { hasText: '폴더' }).click();
-  await page.locator('.db-dir.empty', { hasText: 'assets' }).click();
-  await page.locator('.db-doctitle', { hasText: '폴더 지도' }).waitFor();
-  await page.evaluate(() => { clearInterval(window.__simLoop); clearInterval(window.__simBeat); });
+  if (await page.locator('.db-railview').count()) await page.locator('.db-railview button', { hasText: '폴더' }).click();
+  await page.locator('.db-explorer .db-dir', { hasText: 'assets' }).click();
+  await page.locator('.db-explorer .db-file', { hasText: 'logo.png' }).waitFor();
+  await stopSim(page);
   assert.deepEqual(errors, []);
 });
 
-test('이름이 다른 실행기는 저절로 고르지 않는다 — 내 것이면 고르고, 이름을 맞추자고 한다', async (t) => {
+test('짝짓지 않은 연결은 저절로 고르지 않는다 — 내 것이면 고르고, 이 브라우저가 기억한다', async (t) => {
   const { page } = await newPage(t, base + '?pick&lang=ko');
-  await page.locator('.db-start').waitFor();
-  const name = await seed(page);
-  await page.evaluate(async (n) => { const d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n); await window.DocBenchStandalone.openHandle(document.getElementById('app'), d, '김철수'); }, name);
   await page.waitForSelector('.db-sec');
-  await simRunner(page, name, 'kimcs');
-  await page.locator('.db-claude').click();
-  // 동료의 실행기일 수 있다 — 알리기만 하고 맡기지 않는다
-  const notMine = page.locator('.db-dock-card.setup', { hasText: '내 이름과 다릅니다' });
+  const name = await seed(page);
+  await openOpfs(page, name, '김철수');
+  await page.waitForSelector('.db-sec');
+  await simRunner(page, name, { user: 'kimcs' });
+  await page.locator('.db-claude, .db-tool[data-tool="claude"]').first().click();
+  // 동료의 것일 수 있다 — 알리기만 하고 맡기지 않는다
+  const notMine = page.locator('.db-dock-card.setup', { hasText: '내 것인지' });
   await notMine.waitFor({ timeout: 12000 });
-  assert.match(await page.locator('.db-dock-state').innerText(), /내 실행기 아님/);
+  assert.match(await page.locator('.db-dock-state').innerText(), /내 것인지 확인 필요/);
   await notMine.getByRole('button', { name: '내 실행기로 쓰기' }).click();
   await page.locator('.db-dock-state.ok').waitFor({ timeout: 8000 });
-  const hint = page.locator('.db-dock-card.hint', { hasText: 'kimcs' });
-  await hint.waitFor({ timeout: 12000 });
-  await Promise.all([page.waitForNavigation(), hint.locator('.db-btn.primary').click()]);
-  assert.equal(await page.evaluate(() => localStorage.getItem('docbench:standalone:name')), 'kimcs');
-  await page.evaluate(() => { clearInterval(window.__simLoop); clearInterval(window.__simBeat); }).catch(() => undefined);
+  // 다시 열어도 고른 것을 쓴다
+  await page.reload();
+  await page.waitForSelector('.db-sec');
+  await openOpfs(page, name, '김철수');
+  await simRunner(page, name, { user: 'kimcs' });
+  // 창은 열린 채로 기억된다(보기 상태) — 닫혀 있으면 연다
+  if (await page.locator('.db-dock').isHidden()) await page.locator('.db-claude, .db-tool[data-tool="claude"]').first().click();
+  await page.locator('.db-dock-state.ok').waitFor({ timeout: 12000 });
+  await stopSim(page);
+});
+
+test('큰 폴더(드라이브·홈)를 열면 맨 위만 — 펼친 폴더만 읽고, 기록 폴더도 만들지 않는다', async (t) => {
+  const { page, errors } = await newPage(t, base + '?pick&lang=ko');
+  await page.waitForSelector('.db-sec');
+  const name = await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const n = 'big-' + Math.random().toString(36).slice(2, 8);
+    const d = await root.getDirectoryHandle(n, { create: true });
+    const put = async (p, text) => { let x = d; const segs = p.split('/'); const f = segs.pop(); for (const s of segs) x = await x.getDirectoryHandle(s, { create: true }); const w = await (await x.getFileHandle(f, { create: true })).createWritable(); await w.write(text); await w.close(); };
+    await put('Windows/System32/drivers.txt', 'x');
+    await put('Program Files/App/readme.md', '# 앱 설명\n');
+    await put('Users/dj/notes/회의.md', '# 주간 회의\n\n## 결정\n\n본문\n');
+    await put('Users/dj/notes/메모.md', '# 메모\n');
+    await put('맨위.md', '# 맨 위 문서\n');
+    for (let i = 0; i < 60; i++) await put(`data/f${i}.bin`, 'x');
+    return n;
+  });
+  const t0 = Date.now();
+  await page.evaluate(async (n) => {
+    const d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
+    await window.DocBenchStandalone.openWith(document.getElementById('app'), d, async () => { throw new Error('묻지 않아야 한다'); });
+  }, name);
+  assert.ok(Date.now() - t0 < 5000);
+  await page.locator('.db-index-note', { hasText: '맨 위만' }).waitFor();
+  const docsOf = () => page.evaluate(async () => Object.keys((await window.DocBenchStandalone.adapters.docs.manifest()).docs).sort());
+  assert.deepEqual(await docsOf(), ['맨위.md'], '깊은 문서는 아직 읽지 않는다');
+  // 탐색기: 폴더 → 펼치면 그 폴더만 읽는다
+  await page.locator('.db-explorer .db-dir', { hasText: 'Users' }).click();
+  await page.locator('.db-explorer .db-dir', { hasText: 'dj' }).click();
+  await page.locator('.db-explorer .db-dir', { hasText: 'notes' }).click();
+  await page.locator('.db-explorer .db-nav', { hasText: '회의' }).click();
+  await page.locator('.db-doctitle', { hasText: '주간 회의' }).waitFor();
+  // 다른 파일이 많은 폴더는 접어 둔다
+  await page.locator('.db-explorer .db-dir', { hasText: 'data' }).click();
+  await page.locator('.db-tree-more').waitFor();
+  assert.ok(await page.locator('.db-explorer .db-file').count() <= 40);
+  // 보기만 했다 — 문서 폴더에도 기록도 아무것도 생기지 않는다
+  assert.deepEqual((await listOpfs(page, name, '')).sort(), ['Program Files', 'Users', 'Windows', 'data', '맨위.md'].sort());
+  assert.deepEqual(errors, []);
 });
 
 test('브라우저 CP949 역표 = iconv-lite cp949 (BMP 전체·2바이트 전체)', async (t) => {
@@ -349,69 +425,102 @@ test('브라우저 CP949 역표 = iconv-lite cp949 (BMP 전체·2바이트 전�
   assert.deepEqual(ddiff.slice(0, 20), [], `다르게 읽는 쌍 ${ddiff.length}개`);
 });
 
-test('기록 보관함: 예전 안쪽 기록은 옮기고, 다음 문서 폴더는 묻지 않고 보관함에 — 문서 폴더에는 아무것도 생기지 않는다', async (t) => {
+test('기록 폴더는 처음 저장할 때 한 번 — 문서 폴더에는 아무것도 안 생기고, 다음 폴더는 묻지 않고, 안쪽 기록은 옮기고, 하위 폴더 기록은 합친다', async (t) => {
   const { page, errors } = await newPage(t, base + '?pick&lang=ko');
-  await page.locator('.db-start').waitFor();
-  const name = await seed(page);   // 예제처럼 .docbench/config.json 이 안에 있다
+  await page.waitForSelector('.db-sec');
   const home = 'home-' + Math.random().toString(36).slice(2, 8);
   const ls = (p) => page.evaluate(async (p) => { let d = await navigator.storage.getDirectory(); for (const s of p.split('/').filter(Boolean)) d = await d.getDirectoryHandle(s); const out = []; for await (const k of d.keys()) out.push(k); return out.sort(); }, p);
-  await page.evaluate(async ([n, h]) => {
-    const root = await navigator.storage.getDirectory();
-    const d = await root.getDirectoryHandle(n);
-    const hh = await root.getDirectoryHandle(h, { create: true });
-    window.__start = window.DocBenchStandalone.startWith(document.getElementById('app'), d, '김철수', async () => hh);
-  }, [name, home]);
-  const step = page.locator('.db-start-data');
-  await step.waitFor();
-  assert.match(await step.innerText(), /예전 기록/);
-  await step.getByRole('button', { name: '기록 보관함으로 옮기기' }).click();
-  await page.waitForSelector('.db-sec');
-  assert.ok(!(await ls(name)).includes('.docbench'), '안쪽 기록은 옮긴 뒤 지운다');
-  assert.deepEqual(await ls(home), ['docbench-home.json', name]);
-  assert.ok((await ls(home + '/' + name)).includes('config.json'), '설정도 옮긴다');
-  assert.ok((await ls(home + '/' + name)).includes('docbench-data.json'));
-  assert.match(await page.locator('.db-rail-store').innerText(), new RegExp(`기록: ${home}/${name}`));
-  // 화면에서 단 피드백은 보관함 아래로
-  const fid = await page.evaluate(async () => (await window.DocBenchStandalone.adapters.feedback.create({ docId: 'docs/운영-런북.md', target: { kind: 'doc' }, body: '확인' })).id);
-  assert.ok((await ls(home + '/' + name + '/feedback')).includes(fid + '.json'));
-  assert.ok(!(await ls(name)).includes('.docbench'));
+  const mkFolder = (p, files) => page.evaluate(async ([p, files]) => {
+    let d = await navigator.storage.getDirectory();
+    for (const s of p.split('/')) d = await d.getDirectoryHandle(s, { create: true });
+    for (const [f, text] of Object.entries(files)) {
+      let x = d; const segs = f.split('/'); const fn = segs.pop();
+      for (const s of segs) x = await x.getDirectoryHandle(s, { create: true });
+      const w = await (await x.getFileHandle(fn, { create: true })).createWritable(); await w.write(text); await w.close();
+    }
+  }, [p, files]);
+  const openAt = (p, pick) => page.evaluate(async ([p, home, pick]) => {
+    let d = await navigator.storage.getDirectory();
+    for (const s of p.split('/')) d = await d.getDirectoryHandle(s);
+    const hh = await (await navigator.storage.getDirectory()).getDirectoryHandle(home, { create: true });
+    window.__open = window.DocBenchStandalone.openWith(document.getElementById('app'), d, pick ? async () => hh : async () => { throw new Error('묻지 않아야 한다'); });
+    await window.__open;
+  }, [p, home, pick]);
+  const store = () => page.evaluate(() => document.querySelector('.db-rail-store')?.textContent || '');
 
-  // 같은 브라우저에서 다른 문서 폴더: 기억한 보관함으로 묻지 않고 연다
-  const name2 = await page.evaluate(async () => {
-    const root = await navigator.storage.getDirectory();
-    const n = 'ws2-' + Math.random().toString(36).slice(2, 8);
-    const d = await root.getDirectoryHandle(n, { create: true });
-    const w = await (await d.getFileHandle('메모.md', { create: true })).createWritable(); await w.write('# 메모\n\n본문\n'); await w.close();
-    return n;
-  });
-  await page.evaluate(async (n) => {
-    const d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
-    window.__start2 = window.DocBenchStandalone.startWith(document.getElementById('app'), d, '김철수', async () => { throw new Error('묻지 않아야 한다'); });
-  }, name2);
-  await page.waitForFunction((n) => document.title.startsWith(n), name2);
-  await page.waitForSelector('.db-sec');
-  assert.deepEqual(await ls(name2), ['메모.md'], '문서 폴더에는 문서만');
-  assert.deepEqual((await ls(home)).sort(), ['docbench-home.json', name, name2].sort());
+  // 1) 처음 여는 폴더: 보기만 할 때는 아무것도 묻지도 만들지도 않는다
+  const a = 'a-' + Math.random().toString(36).slice(2, 6);
+  await mkFolder(a, { '메모.md': '# 메모\n\n## 할 일\n\n본문\n' });
+  await openAt(a, true);
+  await page.locator('.db-sec').first().waitFor();
+  assert.deepEqual(await ls(a), ['메모.md']);
+  assert.deepEqual(await ls(home), []);
+  // 피드백을 남기는 순간 기록 자리를 묻는다 → 보관함 고르기
+  const k = '메모 › 할 일';
+  await sec(page, k).locator('> .db-sec-head').hover();
+  await sec(page, k).locator('> .db-sec-head .db-act').first().click();
+  const dlg = page.locator('dialog.db-dialog[open]');
+  await dlg.locator('textarea').fill('마감일을 적어 줘');
+  await dlg.locator('.db-btn.primary').click();
+  const ask = page.locator('dialog.db-dialog[open] .db-ask', { hasText: '기록을 어디에 둘까요?' });
+  await ask.waitFor();
+  await ask.getByRole('button', { name: '기록 보관함 고르기…' }).click();
+  await until(async () => (await ls(home)).includes(a) && (await ls(`${home}/${a}`)).includes('feedback'), 6000);
+  assert.deepEqual(await ls(a), ['메모.md'], '문서 폴더에는 문서만');
+  assert.deepEqual(await ls(home), ['docbench-home.json', a].sort());
+  assert.equal((await ls(`${home}/${a}/feedback`)).filter((f) => f.endsWith('.json')).length, 1, '고른 뒤 그 피드백이 저장된다');
+  await until(async () => (await store()).includes(`${home}/${a}`), 4000);
 
-  // 이름이 같은 다른 문서 폴더(다른 곳의 '기획') — 문서 목록이 달라 보관함에서 '기획 (2)' 로 따로, 다시 열면 각자 제 기록으로
-  const mk = (parent, files) => page.evaluate(async ([parent, files]) => {
-    const root = await navigator.storage.getDirectory();
-    const d = await (await root.getDirectoryHandle(parent, { create: true })).getDirectoryHandle('기획', { create: true });
-    for (const f of files) { const w = await (await d.getFileHandle(f, { create: true })).createWritable(); await w.write('# ' + f + '\n\n본문\n'); await w.close(); }
-  }, [parent, files]);
+  // 2) 다음 문서 폴더: 기억한 보관함으로 묻지 않고
+  const b = 'b-' + Math.random().toString(36).slice(2, 6);
+  await mkFolder(b, { '노트.md': '# 노트\n' });
+  await openAt(b, false);
+  await page.waitForFunction((n) => document.title.startsWith(n), b);
+  const fid = await page.evaluate(async () => (await window.DocBenchStandalone.adapters.feedback.create({ docId: '노트.md', target: { kind: 'doc' }, body: '확인' })).id);
+  assert.ok((await ls(`${home}/${b}/feedback`)).includes(fid + '.json'));
+  assert.deepEqual(await ls(b), ['노트.md']);
+
+  // 3) 예전 판처럼 안쪽 .docbench 가 있으면 그대로 쓰고, 옮기자고 한다 → 옮기면 안쪽은 지운다
+  const name = await seed(page);
+  await openAt(name, false);
+  await page.waitForSelector('.db-sec');
+  const toast = page.locator('.db-toast', { hasText: '문서 폴더 안(.docbench)' });
+  await toast.waitFor();
+  await toast.getByRole('button', { name: '기록 보관함으로 옮기기' }).click();
+  await until(async () => !(await ls(name)).includes('.docbench'), 8000);
+  assert.ok((await ls(home)).includes(name));
+  assert.ok((await ls(`${home}/${name}`)).includes('config.json'), '설정도 옮긴다');
+  assert.ok((await ls(`${home}/${name}`)).includes('docbench-data.json'));
+  await until(async () => (await store()).includes(`${home}/${name}`), 6000);
+
+  // 4) 이름이 같은 다른 문서 폴더('기획')는 따로: '기획', '기획 (2)' — 다시 열면 제 기록으로
   const pa = 'pa-' + Math.random().toString(36).slice(2, 6), pb = 'pb-' + Math.random().toString(36).slice(2, 6);
-  await mk(pa, ['가.md', '나.md', '다.md']);
-  await mk(pb, ['라.md', '마.md', '바.md']);
-  const openSub = async (parent) => {
-    await page.evaluate(async (parent) => {
-      const d = await (await (await navigator.storage.getDirectory()).getDirectoryHandle(parent)).getDirectoryHandle('기획');
-      window.__s = window.DocBenchStandalone.startWith(document.getElementById('app'), d, '김철수', async () => { throw new Error('묻지 않아야 한다'); });
-    }, parent);
-    await page.waitForFunction(() => /기록: /.test(document.querySelector('.db-rail-store')?.textContent || '') && window.DocBenchStandalone.adapters);
-    return page.evaluate(() => document.querySelector('.db-rail-store').textContent);
-  };
-  assert.match(await openSub(pa), new RegExp(`${home}/기획$`));
-  assert.match(await openSub(pb), new RegExp(`${home}/기획 \\(2\\)$`));
-  assert.match(await openSub(pa), new RegExp(`${home}/기획$`), '다시 열면 제 기록');
+  await mkFolder(`${pa}/기획`, { '가.md': '# 가\n', '나.md': '# 나\n', '다.md': '# 다\n' });
+  await mkFolder(`${pb}/기획`, { '라.md': '# 라\n', '마.md': '# 마\n', '바.md': '# 바\n' });
+  const openSub = async (p) => { await openAt(p, false); await until(async () => /기록: /.test(await store()), 4000); return store(); };
+  assert.match(await openSub(`${pa}/기획`), new RegExp(`${home}/기획$`));
+  assert.match(await openSub(`${pb}/기획`), new RegExp(`${home}/기획 \\(2\\)$`));
+  assert.match(await openSub(`${pa}/기획`), new RegExp(`${home}/기획$`), '다시 열면 제 기록');
+
+  // 5) 하위 폴더를 따로 쓰던 기록 → 넓은 폴더를 열면 합치자고 한다
+  const w = 'w-' + Math.random().toString(36).slice(2, 6);
+  await mkFolder(`${w}/proj`, { '설계.md': '# 설계\n', '일정.md': '# 일정\n' });
+  await mkFolder(w, { '개요.md': '# 개요\n' });
+  await openAt(`${w}/proj`, false);
+  const pf = await page.evaluate(async () => (await window.DocBenchStandalone.adapters.feedback.create({ docId: '설계.md', target: { kind: 'doc' }, body: '하위 폴더에서 단 피드백' })).id);
+  await openAt(w, false);
+  const mq = page.locator('dialog.db-dialog[open] .db-ask', { hasText: '"proj" 폴더의 기록을 합칠까요?' });
+  await mq.waitFor({ timeout: 8000 });
+  await mq.getByRole('button', { name: '합치기' }).click();
+  await page.locator('.db-toast', { hasText: '합쳤습니다' }).waitFor();
+  const rowsOf = () => page.evaluate(() => new Promise((res) => { let off = null; off = window.DocBenchStandalone.adapters.feedback.subscribe((rows) => { res(rows); setTimeout(() => off?.(), 0); }); }));
+  let merged;
+  await until(async () => (merged = (await rowsOf()).find((f) => f.id === pf)), 6000);
+  assert.equal(merged.docId, 'proj/설계.md', '경로를 넓은 폴더 기준으로');
+  const marker = JSON.parse((await readOpfs(page, home, 'proj/docbench-data.json')).toString());
+  assert.equal(marker.mergedInto.to, w);
+  // 하위 폴더를 다시 따로 열면: 새로 시작하고, 기록이 어디로 갔는지 알려 준다
+  await openAt(`${w}/proj`, false);
+  await page.locator('.db-toast', { hasText: `"${w}" 작업 공간에 합쳐졌습니다` }).waitFor();
   assert.deepEqual(errors, []);
 });

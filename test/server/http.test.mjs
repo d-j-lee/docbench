@@ -95,8 +95,15 @@ test('실시간: 파일을 직접 고치면 SSE 로 doc·changes 이벤트', asy
   const res = await fetch(base + '/api/events', { signal: ac.signal });
   (async () => { try { for await (const chunk of res.body) events.push(Buffer.from(chunk).toString('utf8')); } catch { /* 끊김 */ } })();
   await new Promise((r) => setTimeout(r, 150));
+  // 안 연 문서: 알리기만(이력 없음)
+  await fs.appendFile(path.join(dir, 'README.md'), '\n외부 편집.\n');
+  await until(() => events.join('').includes('event: doc\ndata: {"type":"doc","id":"README.md"}'), 5000);
+  // 연 문서: 외부 편집으로 기록하고 doc·changes
+  await fetch(base + '/api/doc?id=' + q('docs/설계-노트.md'));
   await fs.appendFile(path.join(dir, 'docs/설계-노트.md'), '\n## 부록\n\n외부 편집.\n');
-  await until(() => events.join('').includes('event: doc') && events.join('').includes('event: changes'), 5000);
+  await until(() => events.join('').includes('설계-노트.md') && events.join('').includes('event: changes'), 5000);
+  const ch = await (await fetch(base + '/api/changes')).json();
+  assert.deepEqual(ch.items.filter((c) => c.by?.kind === 'external').map((c) => c.docId), ['docs/설계-노트.md']);
   await fs.writeFile(path.join(dir, '.docbench/feedback/fb-x.json'), JSON.stringify({ docId: 'README.md', body: 'cli', target: { kind: 'doc' } }));
   await until(() => events.join('').includes('event: feedback'), 5000);
 });

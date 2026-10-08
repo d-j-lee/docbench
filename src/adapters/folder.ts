@@ -15,7 +15,7 @@
  */
 import {
   DocConflictError, DocReadOnlyError, FeedbackConflictError,
-  type ChangeEntry, type DocBenchAdapters, type DocContent, type DocEvent, type Feedback, type Inventory, type InventoryItem, type Manifest, type Person, type ViewState,
+  type ChangeEntry, type DocBenchAdapters, type DocContent, type DocEvent, type Feedback, type Inventory, type InventoryItem, type Manifest, type Person, type TreeEntry, type ViewState,
 } from '../types';
 import { normalizeFeedback, newFeedbackId } from '../core/feedback';
 import { diffSections } from '../core/source';
@@ -24,14 +24,38 @@ import {
   mergeConfig, isDocPath, walkable, buildManifest, parseChanges, lastChangeIs, changeLine, jsonFile, normalizeDocId, canonDocId,
   validFeedbackId, safeName, lockKey, requestFileName, titleFromText, parseJsonText, completeChangeLines, mergeGitignore, folderTally,
   DOT_GITIGNORE, LOCK_STALE_MS, INVENTORY_FLAG_LABELS, DATA_MARKER, newDataMarker, parseDataMarker, dataFolderName, docsSample, nextDocsSample, type WorkspaceConfig,
+  looksBigRoot, toTreeEntries, SCAN_LIMITS, TREE_MAX,
 } from '../core/workspace';
-import { FsReadOnlyError, subFs, type FsLike, type FsStat } from './folder-fs';
+import { FsReadOnlyError, subFs, type FsEntry, type FsLike, type FsStat } from './folder-fs';
 import { cleanRunEntry, completeJsonLines, liveRunners, makeRunRequest, pickRunner, runnerAlive, runFiles, validRunId } from '../core/runs';
 import type { RunsAdapter, RunStatus, RunnerInfo, RunLogLine } from '../types';
 
+/** 기록 폴더를 붙일 때 (처음 쓸 때 고르거나, 기억한 자리를 조용히) */
+export interface DataAttach {
+  fs: FsLike;
+  mode: 'inside' | 'outside';
+  /** 밖에 둘 때: 기록 보관함 폴더 이름과 그 안의 기록 폴더 이름 (설치 안내·화면 표시용) */
+  home?: string;
+  name?: string;
+}
+
 export interface FolderOptions {
-  /** 피드백 작성자 이름. config.json 의 user 가 있으면 그것이 먼저 */
+  /**
+   * 이 화면을 쓰는 사람 — id 는 계정(작성자·보기 상태·실행기 짝을 잇는 열쇠), name 은 표시 이름(별명, 없어도 된다).
+   * 단일 HTML 은 이 브라우저에 계정을 자동으로 만든다(D63) — 처음에 이름을 묻지 않는다.
+   */
+  user?: { id: string; name?: string };
+  /** (예전) 피드백 작성자 이름 — user 가 없으면 이것을 계정·이름으로 */
   userName?: string;
+  /** 표시 이름을 바꿨을 때 (부르는 쪽이 기억한다) */
+  onUserChange?: (u: { id: string; name?: string }) => void;
+  /**
+   * 기록 폴더가 아직 없을 때(data: null) 처음 쓰는 순간 부른다(D65) — 사람에게 자리를 묻고 붙일 것을 돌려준다.
+   * null 이면 쓰지 않는다(RecordsNeededError). 보기 상태처럼 사람이 누르지 않은 쓰기에는 부르지 않는다.
+   */
+  requestData?: () => Promise<DataAttach | null>;
+  /** 열 때 문서를 찾는 한도 (기본 SCAN_LIMITS) */
+  scanLimits?: { visits: number; ms: number };
   /** CP949 코덱. 기본: 브라우저 내장 euc-kr 디코더로 만든 역표 (null = CP949 문서는 읽기 전용) */
   legacy?: LegacyCodec | null;
   /** 바뀜 확인 주기(ms). 기본 2500 */
@@ -44,8 +68,9 @@ export interface FolderOptions {
   /**
    * 기록 폴더 (D57). 주지 않으면 문서 폴더 안 .docbench. 밖에 둘 때는 기록 보관함 아래 <문서 폴더 이름>/ —
    * subFs(fsFromHandle(보관함), dataFolderName(문서 폴더 이름)). 문서 폴더 안이나 문서 폴더를 품는 자리는 부르는 쪽이 막는다.
+   * null = 아직 없음 — 읽기·둘러보기는 그대로 되고, 처음 쓸 때 requestData 로 묻는다(D65).
    */
-  data?: FsLike;
+  data?: FsLike | null;
   /** 기록 보관함의 폴더 이름과 그 안의 기록 폴더 이름 (밖에 둘 때 — 설치 안내·화면 표시용) */
   dataHome?: string;
   dataName?: string;
@@ -62,10 +87,20 @@ const P = {
   runs: 'runs', runners: 'runners',
 };
 const utf8 = new TextDecoder();
+/** 몇 번에 한 번 다시 훑어도 되는 작은 폴더 (들른 항목 수) */
+const SMALL_VISITS = 5000;
+/** manifest 한 번에 새로 읽을 제목 수 */
+const TITLE_BUDGET = 300;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const hex = (b: ArrayBuffer | Uint8Array) => Array.from(b instanceof Uint8Array ? b : new Uint8Array(b), (x) => x.toString(16).padStart(2, '0')).join('');
 
 class FolderError extends Error { constructor(public code: string, msg: string) { super(msg); } }
+
+/** 기록 폴더를 고르지 않아 쓰지 않았다 (사람이 "취소"를 눌렀다) */
+export class RecordsNeededError extends Error {
+  readonly code = 'NO_RECORDS';
+  constructor() { super('기록 폴더를 고르지 않아 저장하지 않았습니다'); }
+}
 
 /** 판 = 바이트 sha256 앞 16자 (서버와 같다). 보안 문맥이 아니라 subtle 이 없으면 순수 JS 로 */
 export async function versionOf(bytes: Uint8Array): Promise<string> {
@@ -106,51 +141,105 @@ export class FolderWorkspace {
   /** 문서마다 마지막으로 디스크와 맞춰 본 시각 (화면의 "확인 n초 전") */
   readonly checked = new Map<string, number>();
 
-  /** 기록 폴더 — 안(.docbench)이든 밖이든 같은 모양 */
-  readonly data: FsLike;
-  readonly dataMode: 'inside' | 'outside';
+  /** 기록 폴더 — 안(.docbench)이든 밖이든 같은 모양. null = 아직 없음(처음 쓸 때 묻는다) */
+  data: FsLike | null;
+  dataMode: 'inside' | 'outside' | 'none';
+  private dataNames: { home?: string; name?: string } = {};
+  private user: { id: string; name?: string };
+  /** 문서 목록을 얼마나 찾았나 (manifest.index) */
+  index: { complete: boolean; reason?: 'big-root' | 'many' } = { complete: true };
 
   constructor(public fs: FsLike, private o: FolderOptions = {}) {
     this.ci = o.caseInsensitive ?? guessWindows();
     this.legacy = o.legacy === undefined ? createBrowserCp949() : o.legacy;
     this.config = mergeConfig({}, fs.name);
-    this.data = o.data || subFs(fs, INSIDE_DIR);
-    this.dataMode = o.data ? 'outside' : 'inside';
+    this.data = o.data === undefined ? subFs(fs, INSIDE_DIR) : o.data;
+    this.dataMode = o.data === undefined ? 'inside' : o.data ? 'outside' : 'none';
+    this.dataNames = { home: o.dataHome, name: o.dataName };
+    this.user = o.user ? { ...o.user } : o.userName ? { id: safeName(o.userName), name: o.userName } : { id: 'me' };
   }
 
-  get writable(): boolean { return this.fs.writable && this.data.writable; }
-  /** 화면에 보일 기록 자리 — '기획 문서/.docbench' 또는 '기록 보관함/기획 문서' */
-  get dataLabel(): string { return this.dataMode === 'inside' ? `${this.fs.name}/${INSIDE_DIR}` : this.o.dataHome ? `${this.o.dataHome}/${this.o.dataName || dataFolderName(this.fs.name)}` : this.data.name; }
-  get userName(): string { return this.config.user || this.o.userName || (this.o.locale === 'en' ? 'Me' : '나'); }
-  get me(): Person { return { kind: 'human', id: safeName(this.config.user || this.o.userName || 'me'), name: this.userName }; }
+  /** 문서 폴더에 쓸 수 있고, 기록 폴더가 있으면 거기에도 쓸 수 있다 (기록이 아직 없으면 처음 쓸 때 묻는다) */
+  get writable(): boolean { return this.fs.writable && (!this.data || this.data.writable); }
+  /** 기록 폴더가 붙어 있다 */
+  get hasData(): boolean { return !!this.data; }
+  /** 화면에 보일 기록 자리 — '기획 문서/.docbench' 또는 '기록 보관함/기획 문서' (없으면 '') */
+  get dataLabel(): string {
+    if (!this.data) return '';
+    return this.dataMode === 'inside' ? `${this.fs.name}/${INSIDE_DIR}` : this.dataNames.home ? `${this.dataNames.home}/${this.dataNames.name || dataFolderName(this.fs.name)}` : this.data.name;
+  }
+  get dataHomeName(): string | undefined { return this.dataMode === 'outside' ? this.dataNames.home : undefined; }
+  get dataFolderName(): string | undefined { return this.dataMode === 'outside' ? this.dataNames.name || dataFolderName(this.fs.name) : undefined; }
+  get userName(): string { return this.user.name || ''; }
+  get me(): Person { return { kind: 'human', id: this.user.id, ...(this.user.name ? { name: this.user.name } : {}) }; }
+  setUserName(name: string): Person {
+    this.user = { ...this.user, name: name.trim().slice(0, 60) || undefined };
+    this.o.onUserChange?.({ ...this.user });
+    return this.me;
+  }
 
   async init(): Promise<this> {
     await this.loadConfig();
-    if (this.writable && this.dataMode === 'inside') {
+    await this.scan();
+    if (this.data) await this.prepareData();
+    return this;
+  }
+
+  /** 붙은 기록 폴더 준비: 안이면 .gitignore, 밖이면 어느 문서 폴더의 기록인지 표식 */
+  private async prepareData(): Promise<void> {
+    if (!this.data || !this.writable) return;
+    if (this.dataMode === 'inside') {
       // 서버 init 과 같이 .docbench/ 를 만든다 — CLI 는 이 폴더가 있어야 작업 폴더로 알아본다.
       // 예전 판이 만든 .gitignore 에도 빠진 줄을 덧붙인다(사람이 더한 줄은 그대로)
       const gi = await this.readText(P.gitignore).catch(() => null);
       const next = gi == null ? DOT_GITIGNORE : mergeGitignore(gi);
       if (next != null) await this.data.write(P.gitignore, next);
+      return;
     }
-    await this.scan();
-    if (this.writable && this.dataMode === 'outside') {
-      // 밖에 둔 기록: 어느 문서 폴더의 기록인지 표식(브라우저는 경로를 모른다 — 실행기·CLI 가 docsPath 를 채운다).
-      // 문서 표본은 문서가 늘고 줄어도 따라가게 연 때마다 고친다(이름이 같은 다른 문서 폴더를 가려내는 데 쓴다)
-      const m = parseDataMarker(await this.readJson<unknown>(P.marker, null));
-      if (!m) await this.writeJson(P.marker, newDataMarker(this.fs.name, undefined, docsSample(this.docs.keys())));
-      else {
-        if (m.docsName !== this.fs.name) this.markerMismatch = m.docsName;
-        const docs = nextDocsSample(m.docs, this.docs.keys());
-        if (!m.migrating && JSON.stringify(m.docs || []) !== JSON.stringify(docs)) await this.writeJson(P.marker, { ...m, docs });
-      }
+    // 밖에 둔 기록: 어느 문서 폴더의 기록인지 표식(브라우저는 경로를 모른다 — 앱·CLI 가 docsPath 를 채운다).
+    // 문서 표본은 문서가 늘고 줄어도 따라가게 연 때마다 고친다(이름이 같은 다른 문서 폴더를 가려내는 데 쓴다)
+    const m = parseDataMarker(await this.readJson<unknown>(P.marker, null));
+    if (!m) await this.writeJson(P.marker, newDataMarker(this.fs.name, undefined, docsSample(this.docs.keys())));
+    else {
+      if (m.docsName !== this.fs.name) this.markerMismatch = m.docsName;
+      const docs = nextDocsSample(m.docs, this.docs.keys());
+      if (!m.migrating && JSON.stringify(m.docs || []) !== JSON.stringify(docs)) await this.writeJson(P.marker, { ...m, docs });
     }
-    return this;
+  }
+
+  /** 기록 폴더가 붙으면 (어댑터가 화면에 피드백·목록을 다시 읽게 알린다) */
+  onDataAttached: (() => void) | null = null;
+
+  /** 기록 폴더를 붙인다 (처음 쓸 때 고른 자리) — 설정을 다시 읽고, 아는 문서를 맞춰 본다 */
+  async attachData(a: DataAttach): Promise<void> {
+    this.data = a.fs;
+    this.dataMode = a.mode;
+    this.dataNames = { home: a.home, name: a.name };
+    await this.loadConfig();
+    await this.prepareData();
+    await this.reconcileAll().catch(() => 0);
+    this.onDataAttached?.();
+  }
+
+  private asking: Promise<void> | null = null;
+  /** 쓰기 전에: 기록 폴더가 없으면 사람에게 묻는다(한 번에 하나) — 고르지 않으면 RecordsNeededError */
+  async ensureData(): Promise<FsLike> {
+    if (this.data) return this.data;
+    if (!this.o.requestData) throw new RecordsNeededError();
+    this.asking ||= (async () => {
+      try {
+        const a = await this.o.requestData!();
+        if (a) await this.attachData(a);
+      } finally { this.asking = null; }
+    })();
+    await this.asking;
+    if (!this.data) throw new RecordsNeededError();
+    return this.data;
   }
 
   async loadConfig(): Promise<void> {
-    // 서버와 같은 규칙. 브라우저는 PC 설정을 읽지 않는다 — 명령은 실행하지 않고, 이름은 사람이 처음 화면에서 적는다
-    this.config = mergeConfig(await this.readJson(P.config, {}), this.fs.name);
+    // 서버와 같은 규칙. 브라우저는 PC 설정을 읽지 않는다 — 명령은 실행하지 않고, 사람은 이 브라우저의 계정으로
+    this.config = mergeConfig(this.data ? await this.readJson(P.config, {}) : {}, this.fs.name);
   }
 
   /** 기록 폴더의 표식이 다른 이름의 문서 폴더를 가리킨다(같은 기록 폴더를 다른 문서 폴더에 고름) — 화면이 알린다 */
@@ -158,13 +247,14 @@ export class FolderWorkspace {
 
   // ------------------------------------------------------------ 작은 파일 도우미 (기록 폴더)
   async readText(path: string): Promise<string | null> {
+    if (!this.data) return null;
     const f = await this.data.read(path);
     return f ? utf8.decode(f.bytes) : null;
   }
   async readJson<T>(path: string, fallback: T): Promise<T> {
     try { const t = await this.readText(path); return t == null ? fallback : (parseJsonText(t) as T); } catch { return fallback; }
   }
-  async writeJson(path: string, obj: unknown): Promise<void> { await this.data.write(path, jsonFile(obj)); }
+  async writeJson(path: string, obj: unknown): Promise<void> { await (await this.ensureData()).write(path, jsonFile(obj)); }
 
   // ------------------------------------------------------------ 줄 세우기
   /**
@@ -179,53 +269,81 @@ export class FolderWorkspace {
     this.chains.set(key, tail);
     await prev;
     let file: string | null = null;
+    const data = this.data;
     try {
-      if (this.writable) {
+      if (this.writable && data) {
         file = `${P.locks}/${await lockFileName(key)}`;
         const token = `browser-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const started = Date.now();
         for (;;) {
-          const st = await this.data.stat(file);
+          const st = await data.stat(file);
           if (st && Date.now() - st.mtimeMs <= LOCK_STALE_MS) {
             // 죽은 잠금이 치워질 때(15초)보다 조금 더 기다린다
             if (Date.now() - started > LOCK_STALE_MS + 3000) throw new FolderError('BUSY', '다른 프로그램이 같은 문서를 쓰고 있습니다. 잠시 뒤 다시 시도하세요.');
             await sleep(30 + Math.random() * 40);
             continue;
           }
-          await this.data.write(file, token);
+          await data.write(file, token);
           await sleep(25);
           if ((await this.readText(file)) === token) break;
         }
       }
       return await fn();
     } finally {
-      if (file) await this.data.remove(file).catch(() => undefined);
+      if (file && data) await data.remove(file).catch(() => undefined);
       release();
       if (this.chains.get(key) === tail) this.chains.delete(key);
     }
   }
 
   // ------------------------------------------------------------ 훑기
+  /** 나무에서 찾은 문서 — 한도에 닿아 다 훑지 못한 큰 폴더에서도 목록에 남긴다 */
+  private fromTree = new Set<string>();
+  /** 마지막 훑기에서 들른 항목 수 (작은 폴더만 몇 번에 한 번 다시 훑는다) */
+  private lastVisits = 0;
+
+  /**
+   * 문서를 찾는다 — **한도 안에서만**(D64): 들른 항목 수·시간(SCAN_LIMITS), 문서 수(maxDocs). 얕은 곳부터(너비 우선)라 한도에 닿으면
+   * 깊은 곳이 빠진다(펼치면 tree 가 더한다). 드라이브·홈 맨 위처럼 큰 폴더는 맨 위만 본다.
+   * 예전에는 하위 12단계까지 전부 훑고 문서를 모두 읽어 드라이브를 열면 멈췄다(주인 실사용).
+   */
   async scan(): Promise<boolean> {
+    const lim = this.o.scanLimits || SCAN_LIMITS;
     const found = new Map<string, DocInfo>();
     const tally = folderTally();
-    const walk = async (dir: string, depth: number): Promise<void> => {
-      if (depth > 12 || found.size >= this.config.maxDocs) return;
-      const ents = (await this.fs.list(dir).catch(() => null)) || [];
+    const top = (await this.fs.list('').catch(() => null)) || [];
+    const big = looksBigRoot(this.fs.name, top.map((e) => e.name));
+    const started = Date.now();
+    let visits = 0;
+    let capped = false;
+    const queue: { dir: string; depth: number; ents?: FsEntry[] }[] = [{ dir: '', depth: 0, ents: top }];
+    outer: while (queue.length) {
+      const { dir, depth, ents: pre } = queue.shift()!;
+      const ents = pre || (await this.fs.list(dir).catch(() => null)) || [];
       for (const e of ents) {
+        visits++;
         const rel = dir ? `${dir}/${e.name}` : e.name;
-        if (e.kind === 'directory') { if (walkable(e.name)) { tally.dir(rel); await walk(rel, depth + 1); } continue; }
-        if (found.size >= this.config.maxDocs) break;
+        if (e.kind === 'directory') {
+          if (!walkable(e.name)) continue;
+          tally.dir(rel);
+          if (!big && depth < 12) queue.push({ dir: rel, depth: depth + 1 });
+          continue;
+        }
         const isDoc = isDocPath(rel, this.config, this.ci);
         tally.file(rel, isDoc);
         if (!isDoc) continue;
+        if (found.size >= this.config.maxDocs) { capped = true; break outer; }
         const st = await this.fs.stat(rel).catch(() => null);
         if (!st) continue;
         const prev = this.docs.get(rel);
         found.set(rel, { ...st, title: prev?.titleMtime === st.mtimeMs ? prev.title : undefined, titleMtime: prev?.titleMtime });
       }
-    };
-    await walk('', 0);
+      if (visits > lim.visits || Date.now() - started > lim.ms) { capped = queue.length > 0; break; }
+    }
+    // 한도에 닿았으면 나무에서 찾은 문서를 남긴다(다 훑었으면 디스크가 정답)
+    if (capped || big) for (const id of this.fromTree) { const prev = this.docs.get(id); if (prev && !found.has(id)) found.set(id, prev); }
+    this.index = big ? { complete: false, reason: 'big-root' } : capped ? { complete: false, reason: 'many' } : { complete: true };
+    this.lastVisits = visits;
     const folders = tally.result();
     const sig = Object.keys(folders).sort().join('|');
     const changed = found.size !== this.docs.size || [...found.keys()].some((k) => !this.docs.has(k)) || sig !== this.folderSig;
@@ -233,6 +351,24 @@ export class FolderWorkspace {
     this.folders = folders;
     this.folderSig = sig;
     return changed;
+  }
+
+  /**
+   * 폴더 하나의 항목 — 탐색기처럼 펼친 폴더만 읽는다. 여기서 본 문서는 문서 목록에도 더한다(큰 폴더에서 열고 피드백할 수 있게).
+   * 숨김·의존성·시스템 폴더는 뺀다. 한 폴더에 TREE_MAX 개까지.
+   */
+  async tree(dir: string): Promise<TreeEntry[] | null> {
+    const d = dir ? normalizeDocId(dir) : '';
+    if (d === null) return null;
+    const ents = await this.fs.list(d).catch(() => null);
+    if (!ents) return null;
+    const items = toTreeEntries(ents, d, this.config, this.ci).slice(0, TREE_MAX);
+    for (const it of items) {
+      if (!it.doc || this.docs.has(it.path)) continue;
+      this.docs.set(it.path, { size: 0, mtimeMs: 0 });
+      this.fromTree.add(it.path);
+    }
+    return items;
   }
 
   // ------------------------------------------------------------ 문서
@@ -256,6 +392,8 @@ export class FolderWorkspace {
     id = this.canonId(id);
     const r = await this.readRaw(id);
     await this.storeBlob(r.version, r.text);
+    // 연 문서부터 따라간다(D64) — 처음 열면 판을 적어 두어, 그 뒤 바깥 편집을 이력에 남긴다. 알던 판은 덮지 않는다(바뀐 것을 잃지 않게)
+    await this.trackFirst(id, r.version);
     const cfgRO = !!this.config.readOnly || !!this.config.docs?.[id]?.readOnly;
     return {
       id, md: r.text, version: r.version, encoding: r.encoding, eol: r.eol, bom: r.bom, mixedEol: r.mixed || undefined,
@@ -270,6 +408,8 @@ export class FolderWorkspace {
     if (this.config.readOnly || this.config.docs?.[id]?.readOnly) throw new DocReadOnlyError('config', '읽기 전용 문서');
     if (!this.writable) throw new DocReadOnlyError('folder', new FsReadOnlyError().message);
     if (typeof md !== 'string') throw new FolderError('BAD_REQUEST', 'md 가 필요합니다');
+    // 이력·판·잠금은 기록 폴더에 — 아직 없으면 지금 묻는다(D65)
+    await this.ensureData();
     return this.withLock(lockKey.doc(id), () => this.writeDocLocked(id, md, o));
   }
 
@@ -306,7 +446,7 @@ export class FolderWorkspace {
         if (!(e instanceof DocConflictError)) await this.setKnown(id, cur.version);
         throw e;
       }
-      await this.data.append(P.changes, changeLine({ at: updatedAt, docId: id, by: o.by || this.me, summary: o.summary || undefined, fromVersion: cur.version, toVersion: version, feedbackIds: o.feedbackIds?.length ? o.feedbackIds : undefined, sections: [...ds.changed, ...ds.added], removed: ds.removed.length ? ds.removed : undefined }));
+      await this.data!.append(P.changes, changeLine({ at: updatedAt, docId: id, by: o.by || this.me, summary: o.summary || undefined, fromVersion: cur.version, toVersion: version, feedbackIds: o.feedbackIds?.length ? o.feedbackIds : undefined, sections: [...ds.changed, ...ds.added], removed: ds.removed.length ? ds.removed : undefined }));
     });
     const st = await this.fs.stat(this.resolve(id)).catch(() => null);
     if (st) this.docs.set(id, { ...st });
@@ -322,10 +462,11 @@ export class FolderWorkspace {
   }
 
   async storeBlob(version: string, text: string): Promise<void> {
-    if (!this.writable) return;
+    const data = this.data;
+    if (!this.writable || !data) return;
     const f = `${P.blobs}/${version}.md`;
-    if (await this.data.stat(f)) return;
-    await this.data.write(f, text);
+    if (await data.stat(f)) return;
+    await data.write(f, text);
   }
 
   // ------------------------------------------------------------ 외부 편집 감지
@@ -333,8 +474,20 @@ export class FolderWorkspace {
     const s = await this.readJson<{ docs?: Record<string, string> }>(P.state, { docs: {} });
     return { ...s, docs: s?.docs || {} };
   }
+  /** 처음 연 문서의 판을 적는다 (이미 알던 문서는 그대로 — 바뀌었으면 reconcile 이 이력으로 남긴다) */
+  async trackFirst(id: string, v: string): Promise<void> {
+    if (!this.writable || !this.data) return;
+    if ((await this.known()).docs[id]) return;
+    await this.withLock(lockKey.state, async () => {
+      const s = await this.known();
+      if (s.docs[id]) return;
+      s.docs[id] = v;
+      await this.writeJson(P.state, s);
+    });
+  }
+
   async setKnown(id: string, v: string): Promise<void> {
-    if (!this.writable) return;
+    if (!this.writable || !this.data) return;
     await this.withLock(lockKey.state, async () => {
       const s = await this.known();
       s.docs[id] = v;
@@ -344,7 +497,7 @@ export class FolderWorkspace {
 
   /** 마지막으로 알던 판과 지금 파일이 다르면 '외부 편집' 기록을 남긴다. 바뀌었으면 true */
   async reconcile(id: string): Promise<boolean> {
-    if (!this.writable) return false;
+    if (!this.writable || !this.data) return false;
     let r: Raw;
     try { r = await this.readRaw(id); } catch { return false; }
     const prev = (await this.known()).docs[id];
@@ -359,32 +512,22 @@ export class FolderWorkspace {
     return true;
   }
   /**
-   * 열 때 한 번: 처음 보는 문서는 판을 한꺼번에 적고(잠금·쓰기 한 번), 알던 판과 다른 문서만 하나씩 외부 편집으로 기록한다.
-   * 문서마다 잠금을 잡으면 처음 여는 큰 폴더가 수십 초 걸렸다(독립 검토에서 실측).
+   * 열 때 한 번: **알던 문서만** 디스크와 맞춰 본다(바뀌었으면 외부 편집으로 기록). 처음 보는 문서는 읽지 않는다 —
+   * 열거나 피드백할 때 판을 적는다(D64). 예전에는 문서를 모두 읽어 해시해 큰 폴더(드라이브)를 열면 멈췄다(주인 실사용).
    */
   async reconcileAll(): Promise<number> {
-    if (!this.writable) return 0;
+    if (!this.writable || !this.data) return 0;
     const known = (await this.known()).docs;
-    const fresh: Record<string, string> = {};
-    const changed: string[] = [];
-    const ids = [...this.docs.keys()];
-    for (let i = 0; i < ids.length; i += 8) {
-      await Promise.all(ids.slice(i, i + 8).map(async (id) => {
-        let r: Raw;
-        try { r = await this.readRaw(id); } catch { return; }
-        if (known[id] === r.version) return;
-        if (!known[id]) { fresh[id] = r.version; await this.storeBlob(r.version, r.text); } else changed.push(id);
-      }));
-    }
-    if (Object.keys(fresh).length) {
-      await this.withLock(lockKey.state, async () => {
-        const s = await this.known();
-        for (const [id, v] of Object.entries(fresh)) s.docs[id] ??= v;
-        await this.writeJson(P.state, s);
-      });
-    }
+    const ids = Object.keys(known).filter((id) => this.docs.has(id) || this.docs.has(this.canonId(id)));
     let n = 0;
-    for (const id of changed) if (await this.reconcile(id)) n++;
+    for (let i = 0; i < ids.length; i += 8) {
+      const res = await Promise.all(ids.slice(i, i + 8).map(async (id) => {
+        let r: Raw;
+        try { r = await this.readRaw(id); } catch { return false; }
+        return known[id] !== r.version ? this.reconcile(id) : false;
+      }));
+      n += res.filter(Boolean).length;
+    }
     return n;
   }
 
@@ -400,7 +543,8 @@ export class FolderWorkspace {
 
   /** 브라우저에는 O_APPEND 가 없어 파일을 바꿔 끼운다 — 탭 안·서버·CLI 와 같은 잠금 안에서 덧붙여야 줄이 사라지지 않는다 */
   async appendChange(entry: ChangeEntry): Promise<void> {
-    await this.withLock(lockKey.changes, () => this.data.append(P.changes, changeLine(entry)));
+    const data = await this.ensureData();
+    await this.withLock(lockKey.changes, () => data.append(P.changes, changeLine(entry)));
   }
 
   // ------------------------------------------------------------ 매니페스트
@@ -428,11 +572,19 @@ export class FolderWorkspace {
 
   async manifest(): Promise<Manifest> {
     const info = new Map<string, { title: string; size: number; mtimeMs: number }>();
-    for (const [id, d] of this.docs) info.set(id, { title: await this.titleOf(id), size: d.size, mtimeMs: d.mtimeMs });
+    // 제목(첫 # 줄)은 앞 8 KB 를 읽어야 한다 — 문서가 많으면 한 번에 TITLE_BUDGET 개만 새로 읽고 나머지는 파일 이름(다음에 채운다)
+    let budget = TITLE_BUDGET;
+    for (const [id, d] of this.docs) {
+      const cached = d.title && d.titleMtime === d.mtimeMs;
+      const title = cached || budget-- > 0 ? await this.titleOf(id) : titleFromText('', id);
+      info.set(id, { title, size: d.size, mtimeMs: d.mtimeMs });
+    }
     const m = buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.fs.name, this.ci, { folders: this.folders, rootName: this.fs.name });
     // 기록 폴더의 표식이 다른 이름의 문서 폴더를 가리키면(같은 이름의 다른 폴더 등) 화면 아래 기록 자리 옆에 알린다
     const mm = this.markerMismatch;
-    m.project.storage = this.dataLabel + (mm ? (this.o.locale === 'en' ? ` — marked as records of "${mm}"` : ` — "${mm}" 의 기록으로 표시됨`) : '');
+    const en = this.o.locale === 'en';
+    m.project.storage = this.data ? this.dataLabel + (mm ? (en ? ` — marked as records of "${mm}"` : ` — "${mm}" 의 기록으로 표시됨`) : '') : (en ? 'not chosen yet — asked when you first save' : '아직 없음 — 처음 저장할 때 고릅니다');
+    m.index = { ...this.index, docs: this.docs.size };
     return m;
   }
 
@@ -442,6 +594,7 @@ export class FolderWorkspace {
     return `${P.fb}/${id}.json`;
   }
   async listFeedback(): Promise<Feedback[]> {
+    if (!this.data) return [];
     const names = (await this.data.list(P.fb)) || [];
     const out: Feedback[] = [];
     for (const n of names) {
@@ -458,6 +611,7 @@ export class FolderWorkspace {
   }
   async createFeedback(input: Record<string, unknown>): Promise<Feedback> {
     if (!this.writable) throw new FsReadOnlyError();
+    await this.ensureData();
     const id = newFeedbackId();
     const now = new Date().toISOString();
     const f = normalizeFeedback({ ...input, author: input.author || this.me, version: 1, createdAt: now, updatedAt: now } as never, id);
@@ -468,6 +622,7 @@ export class FolderWorkspace {
   async updateFeedback(id: string, patch: Partial<Feedback>, version?: number): Promise<Feedback> {
     if (!this.writable) throw new FsReadOnlyError();
     this.fbPath(id);
+    await this.ensureData();
     return this.withLock(lockKey.feedback(id), async () => {
       const cur = await this.getFeedback(id);
       if (version != null && cur.version != null && version !== cur.version) throw new FeedbackConflictError(cur);
@@ -480,12 +635,13 @@ export class FolderWorkspace {
       return next;
     });
   }
-  async deleteFeedback(id: string): Promise<void> { if (!this.writable) throw new FsReadOnlyError(); await this.data.remove(this.fbPath(id)); }
+  async deleteFeedback(id: string): Promise<void> { if (!this.writable) throw new FsReadOnlyError(); await (await this.ensureData()).remove(this.fbPath(id)); }
 
   // ------------------------------------------------------------ 보기 상태·요청함
   viewStatePath(): string { return `${P.viewstate}/${safeName(this.me.id || 'me')}.json`; }
   async viewState(): Promise<ViewState | null> { return this.readJson<ViewState | null>(this.viewStatePath(), null); }
-  async saveViewState(s: ViewState): Promise<void> { if (this.writable) await this.writeJson(this.viewStatePath(), s); }
+  /** 보기 상태는 사람이 누른 쓰기가 아니다 — 기록 폴더가 아직 없으면 묻지 않고 건너뛴다(화면은 브라우저에 따로 둔다) */
+  async saveViewState(s: ViewState): Promise<void> { if (this.writable && this.data) await this.writeJson(this.viewStatePath(), s); }
   async addRequest(req: Record<string, unknown>): Promise<string> {
     const f = `${P.inbox}/${requestFileName()}`;
     await this.writeJson(f, { at: new Date().toISOString(), ...req });
@@ -495,6 +651,7 @@ export class FolderWorkspace {
   // ------------------------------------------------------------ Claude 작업 (실행기와 파일로 주고받는다)
   async listRunners(): Promise<RunnerInfo[]> {
     const out: RunnerInfo[] = [];
+    if (!this.data) return out;
     for (const n of (await this.data.list(P.runners).catch(() => null)) || []) {
       if (n.kind !== 'file' || !n.name.endsWith('.json')) continue;
       const r = await this.readJson<RunnerInfo | null>(`${P.runners}/${n.name}`, null);
@@ -503,6 +660,7 @@ export class FolderWorkspace {
     return out;
   }
   async listRuns(limit = 30): Promise<RunStatus[]> {
+    if (!this.data) return [];
     const names = ((await this.data.list(P.runs).catch(() => null)) || []).map((n) => n.name);
     const ids = [...new Set(names.map((n) => n.replace(/\.(req\.json|json|log\.jsonl|cancel)$/, '')).filter(validRunId))].sort().reverse().slice(0, limit);
     const out: RunStatus[] = [];
@@ -518,7 +676,7 @@ export class FolderWorkspace {
   }
   async runLog(id: string, from = 0): Promise<{ lines: RunLogLine[]; next: number }> {
     if (!validRunId(id)) throw new FolderError('BAD_REQUEST', '잘못된 작업 id');
-    const f = await this.data.read(`${P.runs}/${runFiles(id).log}`).catch(() => null);
+    const f = this.data ? await this.data.read(`${P.runs}/${runFiles(id).log}`).catch(() => null) : null;
     if (!f) return { lines: [], next: 0 };
     if (from > f.bytes.length) from = 0;
     const { items, consumed } = completeJsonLines<RunLogLine>(f.bytes.subarray(from));
@@ -559,6 +717,9 @@ export class FolderWorkspace {
    *  - 문서 파일이 바뀌었으면(에디터·AI 의 직접 편집) 외부 편집으로 기록하고 doc
    * 화면이 보고 있는 문서(focus)는 매번, 전체 문서는 네 번에 한 번 본다.
    */
+  private recordsTick: (emit: (ev: DocEvent) => void, n: number) => Promise<void> = async () => undefined;
+  private docsTick: (emit: (ev: DocEvent) => void, n: number) => Promise<void> = async () => undefined;
+
   watch(emit: (ev: DocEvent) => void, pollMs = 2500): () => void {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -572,19 +733,26 @@ export class FolderWorkspace {
     const sigOf = (st: FsStat | null) => (st ? `${st.size}:${st.mtimeMs}` : '');
     const tick = async () => {
       tickN++;
+      await this.recordsTick(emit, tickN);
+      await this.docsTick(emit, tickN);
+    };
+    // 기록 폴더(설정·이력·작업·피드백) — 아직 없으면 건너뛴다. 붙으면 그때부터 본다
+    this.recordsTick = async (emit2, n) => {
+      const data = this.data;
+      if (!data) return;
       // 서명은 파일이 없을 때도 같은 값('none')이어야 한다 — 빈 값과 비교하면 매번 바뀐 것으로 보인다
-      const cfgNowSig = 'cfg:' + sigOf(await this.data.stat(P.config).catch(() => null));
-      if (cfgSig && cfgNowSig !== cfgSig) { await this.loadConfig(); await this.scan(); emit({ type: 'manifest' }); }
+      const cfgNowSig = 'cfg:' + sigOf(await data.stat(P.config).catch(() => null));
+      if (cfgSig && cfgNowSig !== cfgSig) { await this.loadConfig(); await this.scan(); emit2({ type: 'manifest' }); }
       cfgSig = cfgNowSig;
 
-      const ch = await this.data.stat(P.changes).catch(() => null);
+      const ch = await data.stat(P.changes).catch(() => null);
       const size = ch?.size ?? 0;
       if (changesOffset < 0 || size < changesOffset) {
         // 처음이거나 파일이 줄었다(되돌림) — 지난 줄을 다시 알리지 않고 지금 끝부터 본다
-        if (changesOffset >= 0) emit({ type: 'changes' });
+        if (changesOffset >= 0) emit2({ type: 'changes' });
         changesOffset = size;
       } else if (size > changesOffset) {
-        const f = await this.data.read(P.changes).catch(() => null);
+        const f = await data.read(P.changes).catch(() => null);
         if (f) {
           const { entries, consumed } = completeChangeLines(f.bytes.subarray(changesOffset));
           changesOffset += consumed;
@@ -595,41 +763,53 @@ export class FolderWorkspace {
             if (e.toVersion && this.ownWrites.has(k)) { this.ownWrites.delete(k); continue; }
             ids.add(e.docId);
           }
-          ids.forEach((id) => emit({ type: 'doc', id }));
-          if (consumed) emit({ type: 'changes' });
+          ids.forEach((id) => emit2({ type: 'doc', id }));
+          if (consumed) emit2({ type: 'changes' });
         }
       }
 
       // Claude 작업: 요청·상태·로그 파일 묶음이 바뀌면 runs, 실행기가 켜지고 꺼지면 runner
-      const rn = ((await this.data.list(P.runs).catch(() => null)) || []).filter((n) => n.kind === 'file').map((n) => n.name).sort();
-      const rsts = await Promise.all(rn.filter((n) => !n.endsWith('.req.json')).map((n) => this.data.stat(`${P.runs}/${n}`).catch(() => null)));
+      const rn = ((await data.list(P.runs).catch(() => null)) || []).filter((x) => x.kind === 'file').map((x) => x.name).sort();
+      const rsts = await Promise.all(rn.filter((x) => !x.endsWith('.req.json')).map((x) => data.stat(`${P.runs}/${x}`).catch(() => null)));
       const runSigNow = rn.join('|') + '#' + rsts.map(sigOf).join('|');
-      if (runSig && runSigNow !== runSig) emit({ type: 'runs' });
+      if (runSig && runSigNow !== runSig) emit2({ type: 'runs' });
       runSig = runSigNow;
-      if (tickN % 2 === 1) {
+      if (n % 2 === 1) {
         const alive = (await this.listRunners()).filter((r) => runnerAlive(r)).map((r) => r.id + ':' + r.claude?.ok).sort().join('|') || 'none';
-        if (runnerSig && alive !== runnerSig) emit({ type: 'runner' });
+        if (runnerSig && alive !== runnerSig) emit2({ type: 'runner' });
         runnerSig = alive;
       }
 
-      const names = ((await this.data.list(P.fb).catch(() => null)) || []).filter((n) => n.name.endsWith('.json')).map((n) => n.name).sort();
-      const sts = await Promise.all(names.map((n) => this.data.stat(`${P.fb}/${n}`).catch(() => null)));
-      const sig = names.map((n, i) => n + '@' + sigOf(sts[i])).join('|') || 'none';
-      if (fbSig && sig !== fbSig) emit({ type: 'feedback' });
+      const names = ((await data.list(P.fb).catch(() => null)) || []).filter((x) => x.name.endsWith('.json')).map((x) => x.name).sort();
+      const sts = await Promise.all(names.map((x) => data.stat(`${P.fb}/${x}`).catch(() => null)));
+      const sig = names.map((x, i) => x + '@' + sigOf(sts[i])).join('|') || 'none';
+      if (fbSig && sig !== fbSig) emit2({ type: 'feedback' });
       fbSig = sig;
-
-      if (tickN % 4 === 1) {
+    };
+    // 문서 — 보고 있는 문서는 매번. 네 번에 한 번: 작은 폴더(다 훑었고 항목이 적음)는 다시 훑고, 큰 폴더는 아는 문서만 크기·시각을 본다(D64)
+    this.docsTick = async (emit2, n) => {
+      if (n % 4 === 1) {
+        const small = this.index.complete && this.lastVisits <= SMALL_VISITS;
         const before = new Map([...this.docs].map(([k, v]) => [k, v.mtimeMs + ':' + v.size]));
-        if (await this.scan()) emit({ type: 'manifest' });
+        if (small) {
+          if (await this.scan()) emit2({ type: 'manifest' });
+        } else {
+          const ids = [...new Set([...Object.keys((await this.known()).docs), ...(this.watching ? [this.watching] : [])])].filter((id) => this.docs.has(id)).slice(0, 400);
+          for (const id of ids) { const st = await this.fs.stat(id).catch(() => null); if (st) this.docs.set(id, { ...this.docs.get(id)!, ...st }); }
+        }
         const now = Date.now();
-        for (const id of this.docs.keys()) this.checked.set(id, now);
-        for (const [id, d] of this.docs) if (before.has(id) && before.get(id) !== d.mtimeMs + ':' + d.size) await this.onDocTouched(id, emit);
+        for (const id of this.docs.keys()) if (small || before.get(id) !== undefined) this.checked.set(id, now);
+        for (const [id, d] of this.docs) { const b = before.get(id); if (b && b !== '0:0' && b !== d.mtimeMs + ':' + d.size) await this.onDocTouched(id, emit2); }
       } else if (this.watching) {
         const id = this.watching;
         const d = this.docs.get(id);
         const st = await this.fs.stat(id).catch(() => null);
         if (st) this.checked.set(id, Date.now());
-        if (d && st && (st.mtimeMs !== d.mtimeMs || st.size !== d.size)) { this.docs.set(id, { ...d, ...st }); await this.onDocTouched(id, emit); }
+        if (d && st && (st.mtimeMs !== d.mtimeMs || st.size !== d.size)) {
+          this.docs.set(id, { ...d, ...st });
+          // 나무에서 막 찾은 문서(크기·시각을 아직 모름)는 처음 본 것 — 바뀐 것으로 치지 않는다
+          if (d.mtimeMs || d.size) await this.onDocTouched(id, emit2);
+        }
       }
     };
     const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
@@ -653,8 +833,12 @@ export class FolderWorkspace {
     };
   }
 
+  /**
+   * 파일이 바뀐 문서: 따라가는 문서(연 적 있는)면 외부 편집으로 기록하고 알린다. 기록 폴더가 아직 없거나(D65)
+   * 안 연 문서면 기록 없이 알리기만 한다 — 보고 있는 문서는 그래도 새로 읽힌다.
+   */
   private async onDocTouched(id: string, emit: (ev: DocEvent) => void): Promise<void> {
-    if (!this.writable) { emit({ type: 'doc', id }); return; }
+    if (!this.writable || !this.data || !(await this.known()).docs[id]) { emit({ type: 'doc', id }); return; }
     if (await this.reconcile(id)) { emit({ type: 'doc', id }); emit({ type: 'changes' }); }
   }
 }
@@ -677,11 +861,12 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
     return () => { listeners.delete(l); if (!listeners.size && stop) { stop(); stop = null; } };
   };
 
+  ws.onDataAttached = () => { fire({ type: 'feedback' }); fire({ type: 'manifest' }); fire({ type: 'runner' }); fire({ type: 'changes' }); };
   const notifyOn = ws.writable && ws.config.notify?.inbox !== false;
   let chosenRunner: string | null = null;
   const runsStatus = async () => {
     const list = liveRunners(await ws.listRunners());
-    const r = pickRunner(list, { me: ws.userName, chosen: chosenRunner });
+    const r = pickRunner(list, { me: ws.userName, meId: ws.me.id, chosen: chosenRunner });
     const others = list.filter((x) => x.id !== r?.id);
     if (!ws.writable) return { available: false, reason: 'read-only' as const, others };
     // 이름이 다른 실행기만 켜져 있으면 저절로 맡기지 않는다 — 내 PC 의 것이면 사람이 고른다
@@ -692,6 +877,7 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
   const runs: RunsAdapter = {
     status: runsStatus,
     async start(input) {
+      await ws.ensureData();
       const st = await runsStatus();
       if (!st.available || !st.runner) throw new FolderError('UNAVAILABLE', st.message || '실행기가 꺼져 있습니다');
       const req = makeRunRequest(input, { runner: st.runner.id, by: ws.me });
@@ -701,19 +887,29 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
     },
     async cancel(id) {
       if (!validRunId(id)) throw new FolderError('BAD_REQUEST', '잘못된 작업 id');
-      await ws.data.write(`${P.runs}/${runFiles(id).cancel}`, new Date().toISOString());
+      await (await ws.ensureData()).write(`${P.runs}/${runFiles(id).cancel}`, new Date().toISOString());
       fire({ type: 'runs', id });
     },
     list: (limit) => ws.listRuns(limit),
     log: (id, from) => ws.runLog(id, from),
     choose(id) { chosenRunner = id || null; },
-    setup: o.runnerSetup ? { ...o.runnerSetup, folderName: fs.name, ...(ws.dataMode === 'outside' && o.dataHome ? { dataHome: o.dataHome, dataName: o.dataName || dataFolderName(fs.name) } : {}) } : undefined,
+    prepare: async () => { await ws.ensureData(); },
   };
+  // 연결 안내의 재료 — 기록 자리는 처음 쓸 때 정해질 수 있어 그때그때 만든다
+  if (o.runnerSetup) {
+    const rs = o.runnerSetup;
+    Object.defineProperty(runs, 'setup', {
+      enumerable: true,
+      get: () => ({ ...rs, folderName: fs.name, owner: ws.me.id, ...(ws.hasData ? {} : { noData: true }), ...(ws.dataMode === 'outside' && ws.dataHomeName ? { dataHome: ws.dataHomeName, dataName: ws.dataFolderName } : {}) }),
+    });
+  }
   const adapters: FolderAdapters = {
     workspace: ws,
     close: () => { listeners.clear(); stop?.(); stop = null; },
     docs: {
-      manifest: async () => { await ws.scan(); return ws.manifest(); },
+      // 다시 훑기는 확인 고리(watch)가 맡는다 — 목록을 부를 때마다 훑으면 큰 폴더에서 매번 몇 초씩 걸린다
+      manifest: () => ws.manifest(),
+      tree: (dir) => ws.tree(dir),
       load: (id) => ws.readDoc(id),
       focus: (id) => { ws.watching = id ? ws.canonId(id) : null; },
       checkedAt: (id) => ws.checked.get(ws.canonId(id)),
@@ -743,7 +939,9 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
     },
     viewState: { load: () => ws.viewState(), save: (s) => ws.saveViewState(s) },
     identity: {
+      source: 'browser',
       me: async () => ws.me,
+      setName: async (name) => ws.setUserName(name),
       can: (a) => {
         if (!ws.writable) return false;
         if (a === 'doc.edit') return !ws.config.readOnly;

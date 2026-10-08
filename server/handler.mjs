@@ -14,7 +14,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ConflictError, NotFoundError, BadRequestError } from './workspace.mjs';
+import { ConflictError, NotFoundError, BadRequestError, setPcValue } from './workspace.mjs';
 import { proposeWithClaudeCli, claudeWorkDir } from './assistant.mjs';
 import { RunEngine, listRunners } from './runs.mjs';
 import { core } from './core.mjs';
@@ -29,7 +29,8 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
  * runs: Claude 작업(백그라운드 실행)을 이 서버에서 띄울지. **처리기는 기본 끔** — 대시보드에 끼우는 쪽이 "이 PC 사람 한 명이 쓰는
  * 로컬 도구"일 때만 true 로 켠다(여러 사람이 접속하면 서버 PC 에서 claude 가 그 계정·구독으로 돈다). docbench serve(startServer)는 기본 켬.
  * @param {import('./workspace.mjs').Workspace} ws
- * @param {{ base?: string, token?: string, allowOrigins?: string[], allowHosts?: string[], ui?: boolean, uiBase?: string, runs?: boolean }} [opts]
+ * engine: 이미 돌고 있는 엔진을 쓴다(DocBench 앱 — 한 프로세스가 작업 공간마다 엔진 하나를 갖고, 처리기는 그것을 빌려 쓴다. 닫을 때 끄지 않는다)
+ * @param {{ base?: string, token?: string, allowOrigins?: string[], allowHosts?: string[], ui?: boolean, uiBase?: string, runs?: boolean, engine?: RunEngine }} [opts]
  */
 export function createDocBenchHandler(ws, opts = {}) {
   const base = (opts.base || '/api').replace(/\/$/, '');
@@ -50,9 +51,9 @@ export function createDocBenchHandler(ws, opts = {}) {
   let engine = null;
   /** @type {string} */
   let engineProblem = '';
-  const runsOn = opts.runs === true;
+  const runsOn = opts.runs === true || !!opts.engine;
   /** @type {Promise<void>} */
-  const engineReady = !runsOn ? Promise.resolve() : (async () => {
+  const engineReady = opts.engine ? Promise.resolve().then(() => { engine = opts.engine || null; }) : !runsOn ? Promise.resolve() : (async () => {
     const e = new RunEngine(ws, { kind: 'server', emit });
     try { await e.start(); engine = e; } catch (err) { engineProblem = String(/** @type {any} */ (err)?.message || err); await e.stop().catch(() => undefined); }
   })();
@@ -102,11 +103,21 @@ export function createDocBenchHandler(ws, opts = {}) {
         me: ws.me, permissions: perms,
         assistant: ws.config.assistant ? { name: ws.config.assistantName || 'Claude' } : null,
         notify: ws.config.notify?.inbox !== false || ws.config.notify?.command ? { label: (ws.config.assistantName || 'AI') + '에게 넘기기' } : null,
-        features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn },
+        features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn, tree: true },
+        identity: 'pc',
         workspace: { root: ws.root, git: !!ws.git, data: { mode: ws.dataMode, dir: ws.dir } },
       });
     }
-    if (m === 'GET' && p === '/manifest') { await ws.scan(); return send(res, 200, await ws.manifest()); }
+    // 작은 폴더만 부를 때마다 다시 훑는다 — 큰 폴더(드라이브 등)는 감시·나무가 목록을 채운다(D64)
+    if (m === 'GET' && p === '/manifest') { if (ws.small) await ws.scan(); return send(res, 200, await ws.manifest()); }
+    if (m === 'GET' && p === '/tree') { const items = await ws.tree(q('dir')); return items ? send(res, 200, { items }) : send(res, 404, { error: 'NOT_FOUND' }); }
+    if (m === 'PUT' && p === '/me') {
+      const b = await body(req);
+      const name = typeof b.name === 'string' ? b.name.trim().slice(0, 60) : '';
+      await setPcValue(ws.pcConfigFile, 'name', name);
+      await ws.loadConfig();
+      return send(res, 200, ws.me);
+    }
     if (m === 'GET' && p === '/doc') return send(res, 200, await ws.readDoc(q('id')));
     if (m === 'PUT' && p === '/doc') {
       const b = await body(req);
@@ -232,7 +243,7 @@ export function createDocBenchHandler(ws, opts = {}) {
     } catch { send(res, 404, { error: 'NOT_FOUND' }); }
   }
 
-  handle.close = async () => { stopWatch(); clearInterval(beat); for (const c of clients) c.end(); clients.clear(); for (const r of running.values()) r.abort(); await engineReady; await engine?.stop(); };
+  handle.close = async () => { stopWatch(); clearInterval(beat); for (const c of clients) c.end(); clients.clear(); for (const r of running.values()) r.abort(); await engineReady; if (!opts.engine) await engine?.stop(); };
   /** 시험·호스트용: Claude 작업 엔진 (꺼져 있으면 null) */
   handle.runs = async () => { await engineReady; return engine; };
   handle.emit = emit;

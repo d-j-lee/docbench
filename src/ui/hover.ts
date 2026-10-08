@@ -135,7 +135,7 @@ export class Hover {
     const app = this.app;
     const t = this.t;
     const turn = turnOf(f);
-    const who = f.author.kind === 'assistant' ? t('fb.by.assistant') : f.author.name || t('fb.by.me');
+    const who = f.author.kind === 'assistant' ? t('fb.by.assistant') : app.personLabel(f.author);
     const last = f.thread[f.thread.length - 1];
     const run = app.dock?.activeFor(f.id);
     const card = h('div', { class: 'db-pop-fb t-' + turn },
@@ -145,7 +145,7 @@ export class Hover {
         f.severity ? h('span', { class: 'db-sev ' + f.severity, text: t('fb.sev.' + f.severity) }) : null),
       f.title ? h('div', { class: 'db-c-title', text: f.title }) : null,
       h('div', { class: 'db-pop-body', text: f.body || f.kind || '' }));
-    if (last) card.append(h('div', { class: 'db-pop-last' + (last.author.kind === 'assistant' ? ' assistant' : '') }, h('b', { text: (last.author.kind === 'assistant' ? last.author.name || app.ai : last.author.name || t('fb.by.me')) + ': ' }), last.text));
+    if (last) card.append(h('div', { class: 'db-pop-last' + (last.author.kind === 'assistant' ? ' assistant' : '') }, h('b', { text: app.personLabel(last.author) + ': ' }), last.text));
     if (f.proposal?.state === 'pending') card.append(h('div', { class: 'db-pop-prop', text: t('pop.proposal') }));
     if (single) card.append(h('div', { class: 'db-hint', text: t('pop.click') }));
     return card;

@@ -32,7 +32,7 @@ export const $$ = <T extends Element = HTMLElement>(sel: string, root: ParentNod
 
 export const CARET = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-export type IconName = 'caret' | 'close' | 'edit' | 'chat' | 'spark' | 'folder' | 'folderOpen' | 'doc' | 'history' | 'map' | 'refresh' | 'copy' | 'check' | 'stop' | 'clock' | 'warn' | 'eye';
+export type IconName = 'caret' | 'close' | 'edit' | 'chat' | 'spark' | 'folder' | 'folderOpen' | 'doc' | 'history' | 'map' | 'refresh' | 'copy' | 'check' | 'stop' | 'clock' | 'warn' | 'eye' | 'pin' | 'file' | 'user' | 'plug' | 'down' | 'plus';
 
 export function icon(name: IconName): string {
   const s = (d: string, vb = '0 0 14 14') => `<svg viewBox="${vb}" aria-hidden="true">${d}</svg>`;
@@ -55,6 +55,12 @@ export function icon(name: IconName): string {
     case 'clock': return s(`<circle cx="7" cy="7" r="5.2" ${st}/><path d="M7 4v3.2l2 1.2" ${st}/>`);
     case 'warn': return s(`<path d="M7 1.8l5.6 10H1.4zM7 5.6v3M7 10.2v.1" ${st}/>`);
     case 'eye': return s(`<path d="M1.2 7S3.2 3 7 3s5.8 4 5.8 4-2 4-5.8 4S1.2 7 1.2 7z" ${st}/><circle cx="7" cy="7" r="1.6" ${st}/>`);
+    case 'pin': return s(`<path d="M5.2 1.8h3.6l-.5 3.4 2 2H3.7l2-2zM7 7.2v5" ${st}/>`);
+    case 'file': return s(`<path d="M3.2 1.8h5l2.6 2.6v7.8H3.2zM8.2 1.8v2.6h2.6" ${st}/>`);
+    case 'user': return s(`<circle cx="7" cy="4.8" r="2.4" ${st}/><path d="M2.4 12.2c.6-2.4 2.4-3.6 4.6-3.6s4 1.2 4.6 3.6" ${st}/>`);
+    case 'plug': return s(`<path d="M4.6 1.8v2.6M9.4 1.8v2.6M3.2 4.4h7.6v2.2a3.8 3.8 0 0 1-7.6 0zM7 10.4v1.8" ${st}/>`);
+    case 'down': return s(`<path d="M3.4 5.4L7 9l3.6-3.6" ${st}/>`);
+    case 'plus': return s(`<path d="M7 2.6v8.8M2.6 7h8.8" ${st}/>`);
   }
 }
 
