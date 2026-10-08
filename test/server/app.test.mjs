@@ -196,3 +196,39 @@ test('CLI: app --detach · --status · --stop (이 PC 에 하나)', async (t) =>
   await until(async () => { try { process.kill(up.pid, 0); return false; } catch { return true; } }, 10000, 200);
   await assert.rejects(fs.stat(path.join(pcHome, 'app.json')), '꺼지면 기록 파일을 지운다');
 });
+
+test('앱: 팀 기록(.docbench)을 쓰는 안쪽 작업 공간은 합치지 않고 따로, 짝 계정은 넓은 쪽으로 옮긴다, 오류 코드', async (t) => {
+  const { call, pcConfigFile } = await boot(t);
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), 'dbapp-keep-'));
+  t.after(() => fs.rm(parent, { recursive: true, force: true }));
+  for (const n of ['team', 'mine']) { await fs.mkdir(path.join(parent, n)); await fs.writeFile(path.join(parent, n, 'README.md'), `# ${n}\n`); }
+  await fs.mkdir(path.join(parent, 'team', '.docbench'));
+  const team = (await call('POST', '/api/app/workspaces', { path: path.join(parent, 'team') })).data;
+  const mine = (await call('POST', '/api/app/workspaces', { path: path.join(parent, 'mine') })).data;
+  // 단일 HTML 의 계정이 mine 에 짝지어져 있다
+  const pc = JSON.parse(await fs.readFile(pcConfigFile, 'utf8'));
+  const key = Object.keys(pc.workspaces).find((k) => k.endsWith('mine'));
+  pc.workspaces[key].owners = ['u-0a1b2c3d4e'];
+  await fs.writeFile(pcConfigFile, JSON.stringify(pc));
+  const ask = await call('POST', '/api/app/workspaces', { path: parent });
+  assert.deepEqual(ask.data.needsMerge.map((x) => x.rel), ['mine']);
+  assert.deepEqual(ask.data.kept.map((x) => x.rel), ['team']);
+  const r = await call('POST', '/api/app/workspaces', { path: parent, merge: true });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.deepEqual(r.data.kept.map((x) => x.rel), ['team']);
+  const ids = (await call('GET', '/api/app/info')).data.workspaces.map((w) => w.id).sort();
+  assert.deepEqual(ids, [r.data.id, team.id].sort(), '팀 기록 쪽은 그대로, 합친 쪽은 빠진다');
+  assert.ok(!ids.includes(mine.id));
+  const after = JSON.parse(await fs.readFile(pcConfigFile, 'utf8'));
+  const outerKey = Object.keys(after.workspaces).find((k) => path.resolve(k) === path.resolve(parent));
+  assert.deepEqual(after.workspaces[outerKey].owners, ['u-0a1b2c3d4e'], '짝 계정을 넓은 쪽으로');
+  assert.equal(after.workspaces[key]?.owners, undefined);
+  // 오류: 없는 폴더 404, 1 MB 넘는 본문 413(연결을 끊지 않고 답한다)
+  const nf = await call('POST', '/api/app/workspaces', { path: path.join(parent, 'nope') });
+  assert.deepEqual([nf.status, nf.data.error], [404, 'NOT_FOUND']);
+  const big = await call('POST', '/api/app/workspaces', { path: 'x'.repeat(1100 * 1024) });
+  assert.deepEqual([big.status, big.data.error], [413, 'TOO_LARGE']);
+  // 작업 공간 화면의 "나" — 앱은 이 PC 사람 한 명의 도구라 이름을 바꿀 수 있고, 켜 둔 다른 작업 공간도 따른다
+  const me = await call('PUT', `/api/w/${team.id}/me`, { name: '디제이' });
+  assert.deepEqual([me.status, me.data.name], [200, '디제이']);
+});

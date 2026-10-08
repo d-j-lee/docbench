@@ -15,7 +15,7 @@ export { RunEngine, probeClaude, resolveClaudeCommand, listRunners } from './run
 export async function startServer(o) {
   const ws = await new Workspace(o.root, { pcConfigFile: o.pcConfigFile, dataDir: o.dataDir }).init();
   await ws.reconcileAll();
-  const handle = createDocBenchHandler(ws, { token: o.token, allowOrigins: o.allowOrigins, allowHosts: o.allowHosts, runs: o.runs !== false });
+  const handle = createDocBenchHandler(ws, { token: o.token, allowOrigins: o.allowOrigins, allowHosts: o.allowHosts, runs: o.runs !== false, identity: 'pc' });
   const server = http.createServer((req, res) => { if (!handle(req, res)) { res.writeHead(404).end(); } });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(o.port ?? 4317, o.host || '127.0.0.1', () => resolve(undefined)); });
   const addr = /** @type {import('node:net').AddressInfo} */ (server.address());

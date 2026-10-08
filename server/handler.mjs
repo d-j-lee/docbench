@@ -14,7 +14,7 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { ConflictError, NotFoundError, BadRequestError, setPcValue } from './workspace.mjs';
+import { ConflictError, NotFoundError, BadRequestError, DataLocationError, setPcValue } from './workspace.mjs';
 import { proposeWithClaudeCli, claudeWorkDir } from './assistant.mjs';
 import { RunEngine, listRunners } from './runs.mjs';
 import { core } from './core.mjs';
@@ -30,7 +30,9 @@ const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; cha
  * 로컬 도구"일 때만 true 로 켠다(여러 사람이 접속하면 서버 PC 에서 claude 가 그 계정·구독으로 돈다). docbench serve(startServer)는 기본 켬.
  * @param {import('./workspace.mjs').Workspace} ws
  * engine: 이미 돌고 있는 엔진을 쓴다(DocBench 앱 — 한 프로세스가 작업 공간마다 엔진 하나를 갖고, 처리기는 그것을 빌려 쓴다. 닫을 때 끄지 않는다)
- * @param {{ base?: string, token?: string, allowOrigins?: string[], allowHosts?: string[], ui?: boolean, uiBase?: string, runs?: boolean, engine?: RunEngine }} [opts]
+ * identity: 'pc' = 이 PC 사람 한 명이 쓰는 도구(serve·앱) — 화면의 "나"에서 표시 이름을 바꾸면 이 PC 의 설정에 적는다(PUT /me).
+ * 기본 'host' = 대시보드에 끼운 처리기 — 여러 사람이 붙을 수 있어 웹에서 이 PC 의 설정을 고치지 않는다(사람은 대시보드가 정한다).
+ * @param {{ base?: string, token?: string, allowOrigins?: string[], allowHosts?: string[], ui?: boolean, uiBase?: string, runs?: boolean, engine?: RunEngine, identity?: 'pc' | 'host' }} [opts]
  */
 export function createDocBenchHandler(ws, opts = {}) {
   const base = (opts.base || '/api').replace(/\/$/, '');
@@ -104,7 +106,7 @@ export function createDocBenchHandler(ws, opts = {}) {
         assistant: ws.config.assistant ? { name: ws.config.assistantName || 'Claude' } : null,
         notify: ws.config.notify?.inbox !== false || ws.config.notify?.command ? { label: (ws.config.assistantName || 'AI') + '에게 넘기기' } : null,
         features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn, tree: true },
-        identity: 'pc',
+        identity: opts.identity === 'pc' ? 'pc' : 'host',
         workspace: { root: ws.root, git: !!ws.git, data: { mode: ws.dataMode, dir: ws.dir } },
       });
     }
@@ -112,6 +114,7 @@ export function createDocBenchHandler(ws, opts = {}) {
     if (m === 'GET' && p === '/manifest') { if (ws.small) await ws.scan(); return send(res, 200, await ws.manifest()); }
     if (m === 'GET' && p === '/tree') { const items = await ws.tree(q('dir')); return items ? send(res, 200, { items }) : send(res, 404, { error: 'NOT_FOUND' }); }
     if (m === 'PUT' && p === '/me') {
+      if (opts.identity !== 'pc') return send(res, 403, { error: 'FORBIDDEN', message: '이 처리기는 표시 이름을 바꾸지 않습니다 — 사람은 대시보드가 정합니다' });
       const b = await body(req);
       const name = typeof b.name === 'string' ? b.name.trim().slice(0, 60) : '';
       await setPcValue(ws.pcConfigFile, 'name', name);
@@ -269,6 +272,7 @@ function fail(res, e) {
   if (e && e.code === 'BUSY') return send(res, 409, { error: 'BUSY', message: e.message });
   if (e && e.code === 'BAD_REQUEST') return send(res, 400, { error: 'BAD_REQUEST', message: e.message });
   if (e && e.code === 'UNAVAILABLE') return send(res, 503, { error: 'UNAVAILABLE', message: e.message });
+  if (e instanceof DataLocationError) return send(res, 409, { error: e.code || 'DATA_LOCATION', message: e.message });
   send(res, 500, { error: 'INTERNAL', message: String(e?.message || e).slice(0, 500) });
 }
 

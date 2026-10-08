@@ -362,3 +362,16 @@ describe('기록은 처음 쓸 때 (D65) · 펼친 폴더만 (D64)', () => {
     expect((await a.docs.load('Users/dj/notes/회의.md')).md).toContain('주간 회의');
   });
 });
+
+describe('짝짓지 않은 앱 (D54·D63)', () => {
+  it('이 화면의 계정과 짝짓지 않은 앱만 켜져 있으면 저절로 고르지 않고 "내 것인지" 묻는다 — 짝지은 앱은 고른다', async () => {
+    const fs = fsFromMemory({ 'a.md': '# A\n' });
+    const a = await open(fs, { user: { id: 'u-0a1b2c3d4e', name: '디제이' } });
+    const beat = (o: object) => JSON.stringify({ id: 'app:dj-pc@h', kind: 'app', user: 'dj-pc', host: 'h', pid: 1, version: 't', protocol: 1, startedAt: '', seenAt: new Date().toISOString(), claude: { ok: true }, models: [], efforts: [], ...o });
+    await fs.write('.docbench/runners/app_dj-pc@h.json', beat({}));
+    expect((await a.runs!.status()).reason).toBe('not-mine');
+    await fs.write('.docbench/runners/app_dj-pc@h.json', beat({ owners: ['u-0a1b2c3d4e'] }));
+    const st = await a.runs!.status();
+    expect([st.available, st.runner?.id]).toEqual([true, 'app:dj-pc@h']);
+  });
+});

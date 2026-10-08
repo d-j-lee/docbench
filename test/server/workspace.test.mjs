@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { Workspace } from '../../server/workspace.mjs';
+import { Workspace, locateData } from '../../server/workspace.mjs';
+import os from 'node:os';
 import { tempWorkspace, rm, pcFileFor } from './helpers.mjs';
 import crypto from 'node:crypto';
 
@@ -176,4 +177,21 @@ test('이력: 지운 섹션도 남는다', async (t) => {
   await ws.writeDoc(d.id, next, { baseVersion: d.version });
   const last = (await ws.changes()).at(-1);
   assert.ok(last.removed?.includes('알림 서비스 운영 런북 › 장애 대응'), JSON.stringify(last));
+});
+
+test('기록 찾기: 넓은 작업 공간으로 합쳐진 기록은 더 쓰지 않는다 — 찾기만 하면 어디로 갔는지, 만들 때는 새로 (D66)', async (t) => {
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), 'dbmerged-')); t.after(() => fs.rm(base, { recursive: true, force: true }));
+  const docs = path.join(base, 'work', 'proj'); await fs.mkdir(docs, { recursive: true });
+  await fs.writeFile(path.join(docs, 'a.md'), '# a\n');
+  const home = path.join(base, 'home'); await fs.mkdir(path.join(home, 'proj'), { recursive: true });
+  const pcConfigFile = path.join(base, 'pc', 'config.json'); await fs.mkdir(path.dirname(pcConfigFile), { recursive: true });
+  await fs.writeFile(pcConfigFile, JSON.stringify({ dataHome: home }));
+  const marker = { protocol: 1, docsName: 'proj', docsPath: docs, createdAt: '', mergedInto: { to: 'work', prefix: 'proj', at: '' } };
+  await fs.writeFile(path.join(home, 'proj', 'docbench-data.json'), JSON.stringify(marker));
+  await assert.rejects(locateData(docs, { pcConfigFile, create: false }), (e) => e.code === 'DATA_MERGED' && /"work"/.test(e.message));
+  const fresh = await locateData(docs, { pcConfigFile, create: true });
+  assert.equal(fresh.dir, path.join(home, 'proj (2)'));
+  // 이 PC 의 설정에 짝이 적혀 있어도(브라우저가 합침 — 설정은 못 고친다) 합쳐진 기록이면 쓰지 않는다
+  await fs.writeFile(pcConfigFile, JSON.stringify({ dataHome: home, workspaces: { [docs]: { data: path.join(home, 'proj') } } }));
+  await assert.rejects(locateData(docs, { pcConfigFile, create: false }), (e) => e.code === 'DATA_MERGED');
 });

@@ -869,8 +869,8 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
     const r = pickRunner(list, { me: ws.userName, meId: ws.me.id, chosen: chosenRunner });
     const others = list.filter((x) => x.id !== r?.id);
     if (!ws.writable) return { available: false, reason: 'read-only' as const, others };
-    // 이름이 다른 실행기만 켜져 있으면 저절로 맡기지 않는다 — 내 PC 의 것이면 사람이 고른다
-    if (!r) return { available: false, reason: (others.some((x) => x.kind === 'runner') ? 'not-mine' : 'no-runner') as 'not-mine' | 'no-runner', others };
+    // 짝짓지 않은(계정·이름이 다른) 앱·실행기만 켜져 있으면 저절로 맡기지 않는다 — 내 PC 의 것이면 사람이 고른다(D54·D63)
+    if (!r) return { available: false, reason: (others.some((x) => x.kind !== 'server') ? 'not-mine' : 'no-runner') as 'not-mine' | 'no-runner', others };
     if (!r.claude?.ok) return { available: false, reason: (r.claude?.reason || 'no-claude') as 'no-claude' | 'old-claude', message: r.claude?.problem, runner: r, others };
     return { available: true, runner: r, others };
   };

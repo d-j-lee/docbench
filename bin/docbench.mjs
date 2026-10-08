@@ -312,7 +312,7 @@ async function main() {
 
   const { root, dataDir } = await findWorkspace(a);
   let ws;
-  try { ws = await new Workspace(root, { actor: actorOf(a), dataDir, create: false }).init(); } catch (e) { die(e.message, ['NO_DATA', 'DATA_MISSING', 'DATA_CONFLICT'].includes(e.code) ? 2 : 1); }
+  try { ws = await new Workspace(root, { actor: actorOf(a), dataDir, create: false }).init(); } catch (e) { die(e.message, ['NO_DATA', 'DATA_MISSING', 'DATA_CONFLICT', 'DATA_MERGED'].includes(e.code) ? 2 : 1); }
 
   if (cmd === 'status') {
     const rows = await ws.listFeedback();
@@ -339,7 +339,7 @@ async function main() {
     }
     out(a, { root, data: ws.dir, dataMode: ws.dataMode, docs: ws.docs.size, feedback: c, byDoc: by, inbox, runners, activeRuns: active, warnings, pcConfigFile: ws.pcConfigFile }, () =>
       (`작업 폴더 ${root} · 문서 ${ws.docs.size}개${inbox ? ` · 넘기기 요청 ${inbox}건` : ''}\n기록: ${ws.dir}${ws.dataMode === 'inside' ? ' (문서 폴더 안)' : ''}\nAI 차례 ${c.assistant} · 사람 차례 ${c.owner} · 반영됨 ${c.resolved} · 보류 ${c.declined}\n` +
-      `Claude 작업: ${runners.length ? runners.map((r) => `${r.kind === 'server' ? '서버' : '실행기'} ${r.id.split(':')[1]}${r.claude?.ok ? '' : ' (쓸 수 없음)'}${r.busy ? ' — 작업 중' : ''}`).join(', ') : '켜진 실행기·서버 없음'}\n` +
+      `Claude 작업: ${runners.length ? runners.map((r) => `${r.kind === 'server' ? '서버' : r.kind === 'app' ? '앱' : '실행기'} ${r.id.split(':')[1]}${r.claude?.ok ? '' : ' (쓸 수 없음)'}${r.busy ? ' — 작업 중' : ''}`).join(', ') : '켜진 앱·실행기·서버 없음'}\n` +
       active.map((r) => `  ${r.state === 'running' ? '실행 중' : '대기'} ${r.id}: 피드백 ${r.feedbackIds.join(', ')}\n`).join('') +
       `이 PC 의 설정: ${ws.pcConfigFile}${existsSync(ws.pcConfigFile) ? '' : ' (없음)'}\n` +
       warnings.map((w) => '주의: ' + w + '\n').join('') +
@@ -548,10 +548,11 @@ async function appCmd(a) {
     const cur = c.app && Array.isArray(c.app.allowOrigins) ? c.app.allowOrigins : [];
     await setPcValue(pcConfigFile, 'app', { ...(c.app || {}), allowOrigins: [...new Set([...cur, ...add])] });
     out(a, { allowOrigins: [...new Set([...cur, ...add])] }, `대시보드 출처를 허용했습니다: ${add.join(', ')}\n(켜진 앱은 몇 초 안에 따릅니다)`);
-    if (!a.detach && !a.open && !a.status) return;
   }
-  if (a.startup === 'on' || a.startup === 'off') return appStartup(a.startup === 'on', a);
-  if (a.shortcut === 'on' || a.shortcut === 'off') return appShortcut(a.shortcut === 'on', a);
+  // 설정만 바꾸는 것들은 함께 줄 수 있다(--allow-origin … --startup on --shortcut on) — 켜기·열기·상태를 함께 주지 않았으면 여기서 끝
+  if (a.startup === 'on' || a.startup === 'off') await appStartup(a.startup === 'on', a);
+  if (a.shortcut === 'on' || a.shortcut === 'off') await appShortcut(a.shortcut === 'on', a);
+  if ((a['allow-origin'] || a.startup || a.shortcut) && !a.detach && !a.open && !a.status && !a.stop) return;
 
   const { rec, token, info } = await runningApp();
   if (a.status) {

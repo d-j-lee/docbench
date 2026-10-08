@@ -228,7 +228,7 @@ export function pcSettingsFor(file: unknown, rootPaths: string[], ci = false): P
  * **실행 명령과 이름은 이 PC 의 설정에서만 받는다**: `assistant`(헤드리스 claude 명령·인자), `notify.command`, `user` 는
  * 문서 폴더 밖 PC 설정(pc)에서만 쓴다. git·OneDrive·공유 폴더로 퍼지는 config.json 에 누가 명령을 적어 넣어도
  * 다른 사람 PC 에서 "넘기기"·"제안" 때 실행되지 않고, 모두가 한 사람으로 기록되지도 않게 한다. 무시한 것은 warnings 로 알린다.
- * 브라우저(단일 HTML)는 pc 를 넘기지 않는다 — 명령을 실행하지 않고, 이름은 사람이 적는다.
+ * 브라우저(단일 HTML)는 pc 를 넘기지 않는다 — 명령을 실행하지 않고, 사람은 그 브라우저의 계정(표시 이름은 화면의 "나", D63).
  */
 export function mergeConfig(raw: unknown, folderName: string, pc?: PcSettings): WorkspaceConfig {
   const obj = (v: unknown) => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Partial<WorkspaceConfig>) : {});

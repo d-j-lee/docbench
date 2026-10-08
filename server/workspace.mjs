@@ -73,10 +73,15 @@ export async function locateData(root, o) {
   }
   if (await isDir(inside)) return { dir: inside, mode: 'inside', source: 'inside' };
   const pc = core.pcDataFor(await readJson(o.pcConfigFile, {}), [root, real], CI);
+  /** 이 폴더의 기록이 합쳐진 곳 (D66) — 찾지 못하면 그렇다고 알린다 @type {string | null} */
+  let mergedTo = null;
   if (pc.data) {
     const d = path.resolve(path.dirname(o.pcConfigFile), pc.data);
     if (!(await isDir(d))) throw new DataLocationError(`이 문서 폴더의 기록 폴더가 없습니다: ${d}\n드라이브가 붙어 있는지 보세요. 다른 자리로 옮겼으면: docbench link "${root}" --data <기록 폴더>`, 'DATA_MISSING');
-    return { dir: d, mode: mode(d), source: 'pc' };
+    // 짝 지은 기록이 넓은 작업 공간으로 합쳐졌으면(브라우저가 합침 — 이 PC 의 설정은 못 고친다) 더 쓰지 않는다
+    const m = core.parseDataMarker(await readJson(path.join(d, core.DATA_MARKER)));
+    if (!m?.mergedInto) return { dir: d, mode: mode(d), source: 'pc' };
+    mergedTo = m.mergedInto.to;
   }
   const home = pc.dataHome ? path.resolve(path.dirname(o.pcConfigFile), pc.dataHome) : defaultDataHome(o.pcConfigFile);
   let docs = o.docs;
@@ -91,8 +96,11 @@ export async function locateData(root, o) {
       if (!free && !(await fs.readdir(cand).catch(() => [])).length) free = cand;
       continue;
     }
-    // 더 넓은 작업 공간의 기록으로 합쳐진 기록은 더 쓰지 않는다(D66) — 그 문서 폴더는 넓은 쪽 기록을 찾는다
-    if (marker.mergedInto) continue;
+    // 더 넓은 작업 공간의 기록으로 합쳐진 기록은 더 쓰지 않는다(D66) — 만들 때는 새로 시작하고, 찾기만 할 때는 어디로 갔는지 알린다
+    if (marker.mergedInto) {
+      if (marker.docsPath ? samePath(marker.docsPath, root) || samePath(marker.docsPath, real) : core.sameDocsFolder(marker, (docs ??= await quickDocList(root)))) mergedTo ??= marker.mergedInto.to;
+      continue;
+    }
     if (marker.docsPath) {
       if (samePath(marker.docsPath, root) || samePath(marker.docsPath, real)) return { dir: cand, mode: 'outside', source: 'home', claimed: true };
       continue;
@@ -101,7 +109,10 @@ export async function locateData(root, o) {
     docs ??= await quickDocList(root);
     if (core.sameDocsFolder(marker, docs)) return { dir: cand, mode: 'outside', source: 'home', claimed: false };
   }
-  if (!o.create) return null;
+  if (!o.create) {
+    if (mergedTo) throw new DataLocationError(`이 문서 폴더의 기록은 넓은 작업 공간 "${mergedTo}" 의 기록으로 합쳐졌습니다 — 그 넓은 폴더에서 쓰세요. 여기서 새로 시작하려면: docbench init "${root}"`, 'DATA_MERGED');
+    return null;
+  }
   if (!free) throw new DataLocationError(`기록 보관함(${home})에 "${path.basename(root)}" 이름의 자리가 모두 다른 문서 폴더의 것입니다. 기록 자리를 정해 주세요: docbench init "${root}" --data <기록 폴더>`, 'DATA_CONFLICT');
   return { dir: free, mode: 'outside', source: 'new' };
 }

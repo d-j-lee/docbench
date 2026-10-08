@@ -275,7 +275,7 @@ export class RunDock {
   /** 실행기 판이 이 화면과 다르면 한 줄 — 설치 문구를 다시 붙여 넣으면 같은 판으로 바뀐다 */
   private staleRunner(av: RunsAvailability | null): HTMLElement | null {
     const setup = this.ad.setup, r = av?.runner;
-    if (!av?.available || !setup || !r || r.kind !== 'runner' || !r.version || r.version === setup.version || setup.version === 'dev' || r.version === 'dev') return null;
+    if (!av?.available || !setup || !r || r.kind === 'server' || !r.version || r.version === setup.version || setup.version === 'dev' || r.version === 'dev') return null;
     const t = this.t;
     const prompt = runnerSetupPrompt(setup);
     return h('div', { class: 'db-dock-card stale' },

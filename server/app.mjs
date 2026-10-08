@@ -56,7 +56,7 @@ export async function appToken(pcConfigFile) {
 }
 
 /**
- * @typedef {{ id: string, root: string, ws: Workspace | null, engine: RunEngine | null, handler: any, problem?: string, added: boolean, linked: boolean }} Entry
+ * @typedef {{ id: string, root: string, ws: Workspace | null, engine: RunEngine | null, handler: any, problem?: string, problemCode?: string, added: boolean, linked: boolean }} Entry
  */
 
 /**
@@ -68,7 +68,8 @@ export async function startApp(o = {}) {
   const log = o.log || (() => undefined);
   /** @type {Map<string, Entry>} */
   const reg = new Map();
-  let allowOrigins = [...new Set(o.allowOrigins || [])];
+  /** 허용한 대시보드 출처 — 같은 배열을 고쳐 쓴다(작업 공간 처리기의 CORS 가 같은 목록을 본다) @type {string[]} */
+  const allowOrigins = [...new Set(o.allowOrigins || [])];
   let pcSig = '';
   let closing = false;
 
@@ -77,7 +78,7 @@ export async function startApp(o = {}) {
   /** 이 PC 의 설정에서 작업 공간 목록: 앱에 더한 것(added)과 단일 HTML 의 연결 안내로 이은 것(owners) */
   async function loadList() {
     const c = await readPc();
-    allowOrigins = [...new Set([...(o.allowOrigins || []), ...((c.app && Array.isArray(c.app.allowOrigins)) ? c.app.allowOrigins.filter((x) => typeof x === 'string') : [])])];
+    allowOrigins.splice(0, allowOrigins.length, ...new Set([...(o.allowOrigins || []), ...((c.app && Array.isArray(c.app.allowOrigins)) ? c.app.allowOrigins.filter((x) => typeof x === 'string') : [])]));
     const ws = c.workspaces && typeof c.workspaces === 'object' ? c.workspaces : {};
     /** @type {{ root: string, added: boolean, linked: boolean }[]} */
     const out = [];
@@ -106,7 +107,7 @@ export async function startApp(o = {}) {
       e.problem = undefined;
       const engine = new RunEngine(ws, { kind: 'app', emit: (ev) => e.handler?.emit(ev) });
       try { await engine.start(); e.engine = engine; } catch (err) { e.problem = String(/** @type {any} */ (err)?.message || err); await engine.stop().catch(() => undefined); }
-    } catch (err) { e.problem = String(/** @type {any} */ (err)?.message || err); }
+    } catch (err) { e.problem = String(/** @type {any} */ (err)?.message || err); e.problemCode = /** @type {any} */ (err)?.code; }
     return e;
   }
 
@@ -118,6 +119,8 @@ export async function startApp(o = {}) {
     pcSig = sig;
     const list = await loadList();
     const want = new Set(list.map((x) => workspaceId(x.root)));
+    // 이 PC 의 설정이 바뀌었다(표시 이름·짝 계정 등) — 켜 둔 작업 공간도 다시 읽는다
+    for (const e of reg.values()) await e.ws?.loadConfig().catch(() => undefined);
     for (const x of list) await ensure(x.root, x);
     for (const [id, e] of reg) if (!want.has(id)) await drop(e);
   }
@@ -151,6 +154,10 @@ export async function startApp(o = {}) {
     // 앱 화면 껍데기 — 비밀이 없다. 열쇠는 화면이 주소(?t=)에서 받아 이 출처의 localStorage 에 둔다
     if (p === '/' || p === '/index.html') return page(res, 'app', '');
 
+    // CORS 사전 요청(OPTIONS)은 열쇠를 싣지 않는다 — 작업 공간 처리기가 허용 출처에만 답한다(데이터 없음)
+    const wpre = req.method === 'OPTIONS' && p.match(/^\/api\/w\/([a-f0-9]{12})(\/.*)?$/);
+    if (wpre) { const e = reg.get(wpre[1]); if (e?.ws) { e.handler ||= makeHandler(e); if (e.handler(req, res)) return; } return res.writeHead(204).end(); }
+
     if (!authed(req, url)) {
       if (p.startsWith('/api/')) return send(res, 401, { error: 'UNAUTHORIZED', message: 'DocBench 앱 열쇠가 필요합니다 — docbench app --open 으로 여세요' });
       return page(res, 'locked', '', 401);
@@ -165,11 +172,14 @@ export async function startApp(o = {}) {
     if (wm) {
       const e = reg.get(wm[1]);
       if (!e || !e.ws) return send(res, 404, { error: 'NOT_FOUND', message: e?.problem || '이 작업 공간이 없습니다' });
-      e.handler ||= createDocBenchHandler(e.ws, { base: `/api/w/${e.id}`, ui: false, engine: e.engine || undefined, allowOrigins });
+      e.handler ||= makeHandler(e);
       if (e.handler(req, res)) return;
     }
     send(res, 404, { error: 'NOT_FOUND' });
   }
+
+  /** 작업 공간 하나의 REST 처리기 — serve 와 같은 것, 엔진은 앱이 켠 것 @param {Entry} e */
+  const makeHandler = (e) => createDocBenchHandler(/** @type {Workspace} */ (e.ws), { base: `/api/w/${e.id}`, ui: false, engine: e.engine || undefined, allowOrigins, identity: 'pc' });
 
   /** 앱 API — 작업 공간 목록·더하기·빼기, 폴더 둘러보기, 나 @param {any} req @param {any} res @param {URL} url @param {string} p */
   async function appApi(req, res, url, p) {
@@ -233,29 +243,37 @@ export async function startApp(o = {}) {
       const scope = samePath(outer.root, root) ? '' : path.relative(outer.root, root).split(path.sep).join('/');
       return { id: outer.id, scope, existing: true };
     }
+    // 품는 폴더: 안쪽 작업 공간의 기록을 넓은 쪽으로 합친다. 단 기록이 문서 폴더 안(.docbench — 팀이 git 으로 함께 쓰는 기록)이면
+    // 합치지 않고 따로 둔다 — 합쳤다는 표시를 그 안에 적으면 팀 모두의 CLI 가 그 기록을 놓는다
     const inner = added.filter((e) => isInside(e.root, root));
-    if (inner.length && b.merge !== true) {
-      return { needsMerge: inner.map((e) => ({ id: e.id, root: e.root, rel: path.relative(root, e.root).split(path.sep).join('/') })) };
+    const mergeable = inner.filter((e) => e.ws?.dataMode === 'outside');
+    const kept = inner.filter((e) => !mergeable.includes(e)).map((e) => ({ id: e.id, root: e.root, rel: path.relative(root, e.root).split(path.sep).join('/') }));
+    if (mergeable.length && b.merge !== true) {
+      return { needsMerge: mergeable.map((e) => ({ id: e.id, root: e.root, rel: path.relative(root, e.root).split(path.sep).join('/') })), kept };
     }
     await updatePcWorkspace(pcConfigFile, root, (cur) => ({ ...cur, added: new Date().toISOString() }));
     const e = await ensure(root, { added: true, linked: false, create: true });
-    if (!e.ws) throw new Error(e.problem || '작업 공간을 열지 못했습니다');
+    if (!e.ws) throw Object.assign(new Error(e.problem || '작업 공간을 열지 못했습니다'), { code: e.problemCode || 'INTERNAL' });
+    const ws = e.ws;
     let merged = 0;
-    for (const c of inner) {
-      if (!c.ws) continue;
+    for (const c of mergeable) {
+      const cws = c.ws;
+      if (!cws) continue;
       const rel = path.relative(root, c.root).split(path.sep).join('/');
-      const r = await e.ws.withLock(core.lockKey.changes, () => e.ws.withLock(core.lockKey.state, () => core.mergeRecords(nodeFs(c.ws.dir), nodeFs(e.ws.dir), rel)));
-      merged += r.feedback;
-      if (c.ws.dataMode === 'outside') {
-        const mk = path.join(c.ws.dir, core.DATA_MARKER);
-        const m = core.parseDataMarker(await readJson(mk));
-        if (m) await writeJson(mk, { ...m, mergedInto: { to: path.basename(e.ws.dir), prefix: rel, at: new Date().toISOString() } });
-      }
-      await updatePcWorkspace(pcConfigFile, c.root, (cur) => { delete cur.added; delete cur.data; return cur; });
+      // 안쪽 작업 공간을 먼저 내린다(그 처리기·엔진이 합치는 사이 쓰지 않게)
       await drop(c);
+      const r = await ws.withLock(core.lockKey.changes, () => ws.withLock(core.lockKey.state, () => core.mergeRecords(nodeFs(cws.dir), nodeFs(ws.dir), rel)));
+      merged += r.feedback;
+      const mk = path.join(cws.dir, core.DATA_MARKER);
+      const m = core.parseDataMarker(await readJson(mk));
+      if (m) await writeJson(mk, { ...m, mergedInto: { to: path.basename(ws.dir), prefix: rel, at: new Date().toISOString() } });
+      // 짝 지은 계정(단일 HTML 의 Claude 작업)은 넓은 쪽으로 옮긴다 — 그 사람의 작업을 넓은 작업 공간의 엔진이 맡는다
+      let owners = /** @type {string[]} */ ([]);
+      await updatePcWorkspace(pcConfigFile, c.root, (cur) => { owners = Array.isArray(cur.owners) ? cur.owners : []; delete cur.added; delete cur.data; delete cur.owners; return cur; });
+      if (owners.length) await updatePcWorkspace(pcConfigFile, root, (cur) => ({ ...cur, owners: [...new Set([...(Array.isArray(cur.owners) ? cur.owners : []), ...owners])].slice(-20) }));
     }
     pcSig = '';
-    return { id: e.id, scope: '', merged };
+    return { id: e.id, scope: '', merged, ...(kept.length ? { kept } : {}) };
   }
 
   /**
@@ -361,19 +379,22 @@ function send(res, status, data) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
   res.end(JSON.stringify(data));
 }
+/** 앱 API 의 오류 → 상태 코드. 아는 코드만 내보낸다(노드 오류 이름 등은 INTERNAL) */
+const APP_ERRORS = /** @type {Record<string, number>} */ ({ BAD_REQUEST: 400, NOT_FOUND: 404, TOO_LARGE: 413, BUSY: 409, DATA_LOCATION: 409, DATA_CONFLICT: 409, DATA_MISSING: 409, DATA_MERGED: 409, NO_DATA: 409 });
 /** @param {any} res @param {any} e */
 function fail(res, e) {
-  const code = e?.code;
-  const status = code === 'BAD_REQUEST' ? 400 : code === 'NOT_FOUND' ? 404 : e instanceof DataLocationError ? 409 : 500;
-  send(res, status, { error: code || 'INTERNAL', message: String(e?.message || e).slice(0, 500) });
+  const code = e instanceof DataLocationError ? e.code || 'DATA_LOCATION' : typeof e?.code === 'string' && APP_ERRORS[e.code] ? e.code : 'INTERNAL';
+  send(res, APP_ERRORS[code] || 500, { error: code, message: String(e?.message || e).slice(0, 500) });
 }
 /** @param {any} req */
 function body(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
-    req.on('data', (c) => { size += c.length; if (size > 1024 * 1024) { reject(Object.assign(new Error('요청이 너무 큽니다'), { code: 'BAD_REQUEST' })); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => { try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { reject(Object.assign(new Error('JSON 이 아닙니다'), { code: 'BAD_REQUEST' })); } });
+    let over = false;
+    // 한도를 넘으면 더 모으지 않고 413 으로 답한다(연결을 바로 끊으면 응답이 가지 않는다 — handler.mjs 와 같게)
+    req.on('data', (c) => { if (over) return; size += c.length; if (size > 1024 * 1024) { over = true; chunks.length = 0; reject(Object.assign(new Error('요청이 1 MB 를 넘습니다'), { code: 'TOO_LARGE' })); } else chunks.push(c); });
+    req.on('end', () => { if (over) return; try { resolve(chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {}); } catch { reject(Object.assign(new Error('JSON 이 아닙니다'), { code: 'BAD_REQUEST' })); } });
     req.on('error', reject);
   });
 }

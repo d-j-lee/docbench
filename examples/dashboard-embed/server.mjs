@@ -1,4 +1,5 @@
 // 대시보드에 끼우기 예 (PORTING §3-C): 대시보드 백엔드(여기선 Node http) 한 프로세스에 DocBench API 를 끼운다.
+// 백엔드 언어와 상관없이 이 PC 의 DocBench 앱을 탭에 끼우는 길(권장)은 ../dashboard-tab (PORTING §2).
 //   node examples/dashboard-embed/server.mjs [작업 폴더] [포트]
 import http from 'node:http';
 import path from 'node:path';

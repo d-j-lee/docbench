@@ -5,16 +5,17 @@ description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 
 
 # DocBench 피드백 처리
 
-사람은 화면(대시보드 패널·`docbench serve`·단일 HTML `docbench.html`)에서 문서에 피드백을 달고, 너는 이 터미널에서 `docbench` CLI 로 같은 작업 폴더를 다룬다.
-화면이 켜져 있으면 네가 고친 글이 화면에 표시된다(서버는 바로, 단일 HTML 은 몇 초 안에 — 바뀐 글을 초록·취소선으로). 꺼져 있어도 파일만으로 기록이 맞는다.
+사람은 화면(DocBench 앱·대시보드 탭·대시보드 패널·`docbench serve`·단일 HTML `docbench.html`)에서 문서에 피드백을 달고, 너는 이 터미널에서 `docbench` CLI 로 같은 작업 폴더를 다룬다.
+화면이 켜져 있으면 네가 고친 글이 화면에 표시된다(앱·서버는 바로, 단일 HTML 은 몇 초 안에 — 바뀐 글을 초록·취소선으로). 꺼져 있어도 파일만으로 기록이 맞는다.
 
 **CLI 찾기** — 처음 된 것을 쓴다:
 1. `docbench` (PATH)
 2. `node "${CLAUDE_PLUGIN_ROOT}/cli/docbench.mjs"` — 이 플러그인에 들어 있는 CLI 파일 하나(Node 20.11+). 이 경로가 실제 폴더로 바뀌어 있지 않으면(플러그인이 아니라 복사해 둔 스킬) 건너뛴다
-3. `node "%LOCALAPPDATA%\docbench\docbench.mjs"` (macOS `~/Library/Application Support/docbench/`, Linux `~/.config/docbench/`) — 화면의 Claude 작업 실행기를 설치했으면 여기 있다
+3. `node "%LOCALAPPDATA%\docbench\docbench.mjs"` (macOS `~/Library/Application Support/docbench/`, Linux `~/.config/docbench/`) — 화면의 Claude 연결로 DocBench 앱(또는 예전 실행기)을 설치했으면 여기 있다
 4. `node <DocBench 위치>/bin/docbench.mjs` — 대시보드에 붙였다면 보통 `vendor/docbench`
-**작업 폴더와 기록 폴더**: 피드백·이력은 문서 폴더가 아니라 **기록 폴더**에 있다 — 기본은 문서 폴더 밖(기록 보관함/<문서 폴더 이름>), 예전·팀 공유 폴더는 문서 폴더 안 `.docbench`. CLI 는 현재 폴더에서 위로 문서 폴더를 찾고 기록 폴더도 스스로 찾는다(`docbench status` 가 둘 다 보여 준다). 다른 곳에서 부르면 `--root <문서 폴더>`(`DOCBENCH_ROOT`). 종료 코드 2 = 못 찾음 — 만들지 않는다:
-- 브라우저(단일 HTML)로만 쓰던 폴더면 기록 짝이 아직 없다. 사용자에게 기록 보관함 위치를 물어 `docbench link "<문서 폴더>" --data "<보관함>/<문서 폴더 이름>"` 로 한 번 잇는다(그 폴더에 `docbench-data.json` 이 있다).
+**작업 폴더와 기록 폴더**: 피드백·이력은 문서 폴더가 아니라 **기록 폴더**에 있다 — 기본은 문서 폴더 밖(기록 보관함/<문서 폴더 이름>), 예전·팀 공유 폴더는 문서 폴더 안 `.docbench`. CLI 는 현재 폴더에서 위로 문서 폴더를 찾고 기록 폴더도 스스로 찾는다(`docbench status` 가 둘 다 보여 준다). 다른 곳에서 부르면 `--root <문서 폴더>`(`DOCBENCH_ROOT`). 화면이 복사해 준 넘기기 한 줄은 문서 폴더의 **이름**만 알려 준다 — 지금 폴더가 그 폴더(또는 그 안)가 아니면 드라이브를 넓게 뒤지지 말고 사용자에게 전체 경로를 묻는다. 종료 코드 2 = 못 찾음 — 만들지 않는다:
+- 브라우저(단일 HTML)로만 쓰던 폴더면 기록 짝이 아직 없다. 넘기기 한 줄이 기록 보관함·기록 폴더 이름을 알려 주면 그것으로, 아니면 사용자에게 기록 보관함 위치를 물어 `docbench link "<문서 폴더>" --data "<보관함>/<기록 폴더 이름>"` 로 한 번 잇는다(기록 폴더 이름은 보통 문서 폴더 이름, 같은 이름이 이미 있으면 `<이름> (2)` — 그 폴더에 `docbench-data.json` 이 있다). 문서 목록이 달라 `link` 가 멈추면 그 내용을 보여 주고 묻는다(`--force` 는 사용자가 맞다고 할 때만).
+- 단일 HTML 은 처음 저장할 때 기록을 만든다 — 한 번도 저장하지 않은 폴더에는 기록도 피드백도 없다.
 - 기록 폴더 안의 파일은 직접 읽거나 고치지 않는다 — 언제나 CLI 로.
 
 **화면의 "Claude 작업"과 함께 쓸 때**: 화면이 같은 폴더의 피드백을 백그라운드 Claude 에 맡겼을 수 있다. `docbench status` 에 `실행 중`·`대기` 줄로 보이는 피드백은 건드리지 말고(그 작업이 처리한다), 사용자에게 그렇다고 알린다. 동시에 잡아도 판 비교로 한쪽만 반영되지만, 같은 일을 두 번 하게 된다.
@@ -23,6 +24,7 @@ description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 
 
 1. **현황**: `docbench status`(맡겨 둔 Claude 작업이 있는지도) → `docbench fb list --waiting assistant`
    `docbench inbox` 에 "넘기기" 요청이 있으면 거기 적힌 문서·`feedbackIds` 부터.
+   넘기기 한 줄에 피드백 id 가 적혀 있으면(`… 피드백 2건(fb-…, fb-…)을 …` — 대시보드 탭에서 넘긴 것) 그 피드백만 처리한다.
 2. **한 건씩**: `docbench fb show <id>`
    - 피드백 내용·인용문·대화, 그리고 **지금 그 섹션 원문**과 줄 번호가 나온다.
    - 문서 인코딩(utf-8 / euc-kr / utf-16le), 줄바꿈(LF / CRLF), BOM 도 나온다.

@@ -145,7 +145,8 @@ async function welcome(root: HTMLElement): Promise<void> {
 async function addFolder(root: HTMLElement): Promise<void> {
   const chosen = await browseDialog(root);
   if (!chosen) return;
-  let r = await api<{ id?: string; scope?: string; existing?: boolean; needsMerge?: { id: string; root: string; rel: string }[] }>('POST', '/api/app/workspaces', { path: chosen });
+  type Added = { id?: string; scope?: string; existing?: boolean; needsMerge?: { id: string; root: string; rel: string }[]; kept?: { rel: string }[] };
+  let r = await api<Added>('POST', '/api/app/workspaces', { path: chosen });
   if (r.needsMerge) {
     const ok = await bench!.ask({ title: t('app.merge.q'), body: t('app.merge.body', { list: r.needsMerge.map((x) => x.rel).join(', ') }), choices: [{ id: 'merge', label: t('merge.do'), primary: true }], note: t('merge.note') });
     if (ok !== 'merge') return;
@@ -154,6 +155,8 @@ async function addFolder(root: HTMLElement): Promise<void> {
   info = await api<AppInfo>('GET', '/api/app/info');
   await openWorkspace(root, r.id!, r.scope || '');
   if (r.existing && r.scope) bench?.toast(t('app.inside', { name: info.workspaces.find((w) => w.id === r.id)?.name || '' }));
+  // 안쪽 작업 공간 중 팀 기록(.docbench)을 쓰는 것은 합치지 않고 따로 둔다
+  if (r.kept?.length) bench?.toast(t('app.kept', { list: r.kept.map((x) => x.rel).join(', ') }), { sticky: true });
 }
 
 function browseDialog(root: HTMLElement): Promise<string | null> {

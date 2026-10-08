@@ -461,6 +461,7 @@ const ko: Dict = {
   'merge.moved': '이 폴더의 예전 기록은 "{to}" 작업 공간에 합쳐졌습니다 — 그 폴더를 열면 함께 보입니다. 여기서는 새로 시작합니다.',
   'app.locked.title': 'DocBench 앱 열기',
   'app.locked.body': '이 화면은 이 PC 의 앱 열쇠가 있어야 열립니다. 설치할 때 만든 바로가기(시작 메뉴의 DocBench)로 열거나, 터미널에서 아래 명령을 실행하세요. 한 번 열면 이 브라우저가 기억합니다.',
+  'app.kept': '{list} 은 기록을 폴더 안(.docbench — 팀이 함께 쓰는 기록)에 두어 합치지 않고 따로 둡니다.',
 };
 
 const en: Dict = {
@@ -643,6 +644,7 @@ const en: Dict = {
   'merge.moved': 'This folder’s earlier records were merged into the "{to}" workspace — open that folder to see them. Starting fresh here.',
   'app.locked.title': 'Open the DocBench app',
   'app.locked.body': 'This page needs this PC’s app key. Open it from the shortcut created at install (DocBench in the Start menu) or run the command below in a terminal. Once opened, this browser remembers it.',
+  'app.kept': '{list} keep their records inside the folder (.docbench — shared with the team), so they stay separate workspaces.',
 };
 
 const DICTS: Record<string, Dict> = { ko, en };

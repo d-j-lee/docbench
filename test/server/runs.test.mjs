@@ -336,7 +336,7 @@ test('상태 쓰기는 작업마다 차례대로 — 꺼질 때 적은 상태(�
   assert.equal(await read(), 'canceled', '봉한 뒤의 쓰기는 버린다');
 });
 
-test('대시보드에 끼우는 처리기는 Claude 작업 기본 끔 (runs: true 로 켬)', async (t) => {
+test('대시보드에 끼우는 처리기는 Claude 작업 기본 끔 (runs: true 로 켬), 사람은 대시보드가 정한다', async (t) => {
   const dir = await tempWorkspace(null, { assistant: { command: [process.execPath, fakeClaude] } });
   const ws = await new Workspace(dir, { pcConfigFile: pcFileFor(dir) }).init();
   const handler = createDocBenchHandler(ws, { base: '/docbench/api', ui: false });
@@ -348,6 +348,9 @@ test('대시보드에 끼우는 처리기는 Claude 작업 기본 끔 (runs: tru
   assert.equal(sess.features.runs, false);
   assert.ok(!sess.permissions.includes('assistant.run'));
   assert.equal((await fetch(base + '/runs/status')).status, 404);
+  // 사람도 대시보드가 정한다 — 웹에서 이 PC 의 설정(표시 이름)을 고치지 않는다
+  assert.equal(sess.identity, 'host');
+  assert.equal((await fetch(base + '/me', { method: 'PUT', headers: { 'X-DocBench': '1', 'Content-Type': 'application/json' }, body: '{"name":"x"}' })).status, 403);
   await assert.rejects(fs.stat(path.join(dir, '.docbench/runners')).then((st) => { if (st.isDirectory()) return fs.readdir(path.join(dir, '.docbench/runners')).then((n) => { if (!n.length) throw new Error('empty'); }); }));
 });
 
