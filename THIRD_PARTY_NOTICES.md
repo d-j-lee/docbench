@@ -1,6 +1,6 @@
 # 제3자 구성 요소
 
-`dist/` 번들에 아래 라이브러리가 들어 있다. 각 라이선스 전문은 `node_modules/<이름>/LICENSE*` 에 있다.
+`dist/` 번들과 `release/docbench.html` 에 아래 라이브러리가 들어 있다. 각 라이선스 전문은 `node_modules/<이름>/LICENSE*` 에 있다.
 
 | 이름 | 버전 | 라이선스 | 쓰는 곳 |
 |---|---|---|---|

@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { Workspace } from '../../server/workspace.mjs';
-import { tempWorkspace, rm } from './helpers.mjs';
+import { tempWorkspace, rm, pcFileFor } from './helpers.mjs';
+import crypto from 'node:crypto';
 
 test('작업 폴더: 문서 목록·매니페스트·그룹', async (t) => {
   const dir = await tempWorkspace(); t.after(() => rm(dir));
@@ -107,4 +108,68 @@ test('폴더 지도: 문서 아닌 파일도 보이고 문서 표시', async (t)
   assert.ok(csv && !csv.docId);
   assert.ok(inv.items.find((i) => i.id === 'docs/설계-노트.md').flags.includes('doc'));
   assert.ok(!inv.items.some((i) => i.id.startsWith('.docbench')));
+});
+
+test('설정: 실행 명령·이름은 문서 폴더 밖 PC 설정에서만 — 폴더 config.json 의 것은 무시(경고), BOM 도 읽는다', async (t) => {
+  const dir = await tempWorkspace((c) => ({ ...c, user: '공유된이름', assistant: { command: ['evil'] }, notify: { inbox: true, command: ['evil'], message: '공유 안내' } }));
+  t.after(() => rm(dir));
+  const pcFile = pcFileFor(dir);
+  let ws = await new Workspace(dir, { pcConfigFile: pcFile }).init();
+  assert.equal(ws.config.assistant, null, '공유 설정의 assistant 는 쓰지 않는다');
+  assert.equal(ws.config.notify.command, null);
+  assert.notEqual(ws.me.name, '공유된이름', '공유 설정의 user 로 모두가 한 사람이 되지 않는다');
+  assert.equal(ws.config.notify.message, '공유 안내', '명령이 아닌 값은 그대로');
+  assert.equal(ws.config.warnings.length, 3);
+  // PC 설정: 맨 위 기본값 + 폴더별(경로는 '/'·끝 '/' 무시). 메모장·PowerShell 5.1 의 BOM
+  const key = dir.replace(/\\/g, '/') + '/';
+  await fs.writeFile(pcFile, '\ufeff' + JSON.stringify({ user: '김철수', assistant: { command: 'claude' }, workspaces: { [key]: { notify: { command: ['node', 'x.mjs'] } } } }));
+  ws = await new Workspace(dir, { pcConfigFile: pcFile }).init();
+  assert.deepEqual(ws.config.assistant, { command: 'claude' });
+  assert.deepEqual(ws.config.notify.command, ['node', 'x.mjs']);
+  assert.equal(ws.me.name, '김철수');
+  const other = await new Workspace(path.join(dir, 'docs'), { pcConfigFile: pcFile }).init().catch(() => null);
+  if (other) assert.equal(other.config.notify.command, null, '다른 폴더에는 폴더별 값이 안 간다');
+  // 폴더 config.json 의 BOM
+  const raw = JSON.parse(await fs.readFile(path.join(dir, '.docbench/config.json'), 'utf8'));
+  await fs.writeFile(path.join(dir, '.docbench/config.json'), '\ufeff' + JSON.stringify({ ...raw, title: 'BOM 제목' }));
+  ws = await new Workspace(dir, { pcConfigFile: pcFile }).init();
+  assert.equal(ws.config.title, 'BOM 제목');
+});
+
+test('예전 판의 .docbench/.gitignore 에 빠진 줄을 덧붙인다 (사람이 더한 줄은 그대로)', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  await fs.writeFile(path.join(dir, '.docbench/.gitignore'), 'blobs/\nviewstate/\nmy-notes/\n');
+  await new Workspace(dir).init();
+  const gi = await fs.readFile(path.join(dir, '.docbench/.gitignore'), 'utf8');
+  for (const l of ['blobs/', 'my-notes/', 'locks/', 'state.json', 'inbox/']) assert.ok(gi.split('\n').includes(l), l);
+  assert.equal(gi.split('\n').filter((l) => l === 'blobs/').length, 1);
+});
+
+test('이력 잠금이 남아 있으면 문서도 쓰지 않는다 — 문서만 바뀌고 이력이 사라지지 않게', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir).init();
+  const d = await ws.readDoc('README.md');
+  // 다른 프로세스가 이력 잠금을 쥐고 있다가 1초 뒤 놓는다
+  const lockFile = path.join(dir, '.docbench/locks', crypto.createHash('sha1').update('changes').digest('hex').slice(0, 16) + '.lock');
+  await fs.mkdir(path.dirname(lockFile), { recursive: true });
+  await fs.writeFile(lockFile, '99999');
+  const before = await fs.readFile(path.join(dir, 'README.md'));
+  const p = ws.writeDoc('README.md', d.md + '\n추가\n', { baseVersion: d.version, summary: '잠금 뒤' });
+  await new Promise((r) => setTimeout(r, 500));
+  assert.ok((await fs.readFile(path.join(dir, 'README.md'))).equals(before), '잠금을 기다리는 동안 문서는 그대로');
+  await fs.rm(lockFile);
+  await p;
+  const last = (await ws.changes()).at(-1);
+  assert.equal(last.summary, '잠금 뒤');
+  assert.ok((await fs.readFile(path.join(dir, 'README.md'), 'utf8')).includes('추가'));
+});
+
+test('이력: 지운 섹션도 남는다', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir).init();
+  const d = await ws.readDoc('docs/운영-런북.md');
+  const next = d.md.replace(/## 장애 대응[\s\S]*$/, '');
+  await ws.writeDoc(d.id, next, { baseVersion: d.version });
+  const last = (await ws.changes()).at(-1);
+  assert.ok(last.removed?.includes('알림 서비스 운영 런북 › 장애 대응'), JSON.stringify(last));
 });

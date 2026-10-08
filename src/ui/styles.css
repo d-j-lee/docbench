@@ -406,3 +406,24 @@
 /* ---------- 알림 ---------- */
 .docbench .db-toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--db-ink); color: var(--db-surface); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 20; box-shadow: var(--db-shadow); max-width: calc(100% - 32px); }
 .docbench .db-loading { color: var(--db-ink-3); padding: 40px 0; text-align: center; }
+
+/* ---------------------------------------------------------------- 서버 없는 단일 HTML: 폴더 열기 화면 */
+.docbench .db-start-wrap { flex: 1; display: grid; place-items: center; padding: 24px 16px; overflow: auto; }
+.docbench .db-start { width: min(560px, 100%); display: grid; gap: 14px; background: var(--db-surface); border: 1px solid var(--db-line); border-radius: 14px; padding: 26px 26px 20px; box-shadow: 0 1px 2px rgba(0, 0, 0, .04); }
+.docbench .db-start h1 { margin: 0; font: 650 21px/1.35 var(--db-font-display); }
+.docbench .db-start p { margin: 0; color: var(--db-ink-2); font-size: 14px; }
+.docbench .db-start p code { font: 500 12.5px/1 var(--db-font-mono); background: var(--db-sunk); border-radius: 4px; padding: 1px 5px; }
+.docbench .db-start label { display: grid; gap: 4px; font-size: 13px; font-weight: 600; color: var(--db-ink-2); }
+.docbench .db-start label span { font-weight: 400; color: var(--db-ink-3); }
+.docbench .db-start input[type="text"] { border: 1px solid var(--db-line-2); border-radius: 7px; padding: 6px 10px; font-size: 14px; background: var(--db-bg); width: 100%; box-sizing: border-box; }
+.docbench .db-start-acts { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.docbench .db-start-acts .db-btn { padding: 7px 14px; font-size: 14px; }
+.docbench .db-start-acts .db-btn.ghost { color: var(--db-ink-2); text-decoration: underline; text-underline-offset: 3px; padding-inline: 4px; }
+.docbench .db-start-msg { margin: 0; font-size: 13px; color: var(--db-bad); }
+.docbench .db-start-msg:empty { display: none; }
+.docbench .db-start-msg.info { color: var(--db-ink-2); }
+.docbench .db-start small { color: var(--db-ink-3); font-size: 12px; }
+@container docbench (max-width: 460px) {
+  .docbench .db-start { padding: 20px 16px 16px; }
+  .docbench .db-start-acts .db-btn { flex: 1 1 100%; justify-content: center; }
+}

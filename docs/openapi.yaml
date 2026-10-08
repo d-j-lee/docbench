@@ -114,7 +114,8 @@ components:
         fromVersion: { type: string }
         toVersion: { type: string }
         feedbackIds: { type: array, items: { type: string } }
-        sections: { type: array, items: { type: string }, description: 바뀐 섹션 키 }
+        sections: { type: array, items: { type: string }, description: 바뀐·새 섹션 키 }
+        removed: { type: array, items: { type: string }, description: 없어진 섹션 키 }
     Error:
       type: object
       properties:
@@ -228,7 +229,7 @@ paths:
     post:
       summary: "AI 에게 넘기기"
       requestBody: { content: { application/json: { schema: { type: object, properties: { count: { type: integer }, docs: { type: array, items: { type: string } }, feedbackIds: { type: array, items: { type: string } } } } } } }
-      responses: { '200': { description: '{ delivered, message }' } }
+      responses: { '200': { description: '{ delivered, queued?, message? } — delivered = 넘기기 명령을 실제로 시작함, queued = 요청함(.docbench/inbox)에 남김, message 가 있으면 화면이 그대로 보여 준다(없으면 화면 문구)' } }
   /assistant/propose:
     post:
       summary: 섹션 수정 제안 (서버가 AI 호출)

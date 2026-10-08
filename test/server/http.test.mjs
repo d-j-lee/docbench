@@ -4,11 +4,11 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
 import { startServer } from '../../server/index.mjs';
-import { tempWorkspace, rm, until, fakeClaude } from './helpers.mjs';
+import { tempWorkspace, rm, until, fakeClaude, pcFileFor } from './helpers.mjs';
 
-async function boot(t, opts = {}, patch) {
-  const dir = await tempWorkspace(patch);
-  const s = await startServer({ root: dir, port: 0, ...opts });
+async function boot(t, opts = {}, patch, pc) {
+  const dir = await tempWorkspace(patch, pc);
+  const s = await startServer({ root: dir, port: 0, pcConfigFile: pcFileFor(dir), ...opts });
   t.after(async () => { await s.close(); await rm(dir); });
   const base = `http://127.0.0.1:${s.port}`;
   const api = async (method, p, body, headers = {}) => {
@@ -111,7 +111,7 @@ test('알림: 요청함 파일', async (t) => {
 });
 
 test('AI 제안: 헤드리스 claude 호출 (가짜 실행 파일)', async (t) => {
-  const { api } = await boot(t, {}, (c) => ({ ...c, assistant: { command: [process.execPath, fakeClaude], timeoutSec: 20 } }));
+  const { api } = await boot(t, {}, null, { assistant: { command: [process.execPath, fakeClaude], timeoutSec: 20 } });
   assert.ok((await api('GET', '/session')).data.permissions.includes('assistant.propose'));
   const f = (await api('POST', '/feedback', { docId: 'docs/설계-노트.md', target: { kind: 'section', path: ['알림 서비스 설계 노트', '구조', '메모'], heading: '메모' }, body: '근거 보강' })).data;
   const r = await api('POST', '/assistant/propose', { feedbackId: f.id });
@@ -127,7 +127,7 @@ test('AI 제안 실패: 응답 깨짐·머리줄 누락은 500 과 이유', asyn
   for (const mode of ['garbage', 'drop-heading', 'error']) {
     process.env.FAKE_CLAUDE_MODE = mode;
     try {
-      const { api } = await boot(t, {}, (c) => ({ ...c, assistant: { command: [process.execPath, fakeClaude], timeoutSec: 20 } }));
+      const { api } = await boot(t, {}, null, { assistant: { command: [process.execPath, fakeClaude], timeoutSec: 20 } });
       const f = (await api('POST', '/feedback', { docId: 'docs/설계-노트.md', target: { kind: 'section', path: ['알림 서비스 설계 노트', '배경'], heading: '배경' }, body: 'x' })).data;
       const r = await api('POST', '/assistant/propose', { feedbackId: f.id });
       assert.ok(r.status >= 400, mode + ' ' + r.status);
@@ -137,7 +137,7 @@ test('AI 제안 실패: 응답 깨짐·머리줄 누락은 500 과 이유', asyn
 });
 
 test('AI 제안: 6만 자 넘는 섹션은 잘라 보내지 않고 413', async (t) => {
-  const { api, dir } = await boot(t, {}, (c) => ({ ...c, assistant: { command: [process.execPath, fakeClaude], timeoutSec: 20 } }));
+  const { api, dir } = await boot(t, {}, null, { assistant: { command: [process.execPath, fakeClaude], timeoutSec: 20 } });
   await fs.writeFile(path.join(dir, 'docs/큰문서.md'), '# 큰 문서\n\n## 본문\n\n' + '가나다라마바사 '.repeat(9000) + '\n');
   await api('GET', '/manifest');
   const f = (await api('POST', '/feedback', { docId: 'docs/큰문서.md', target: { kind: 'section', path: ['큰 문서', '본문'], heading: '본문' }, body: '줄여 줘' })).data;
@@ -147,9 +147,31 @@ test('AI 제안: 6만 자 넘는 섹션은 잘라 보내지 않고 413', async (
 });
 
 test('넘기기 명령을 못 찾으면 넘겼다고 하지 않고 이유를 말한다', async (t) => {
-  const { api, dir } = await boot(t, {}, (c) => ({ ...c, notify: { inbox: true, command: ['/없는/명령/claude-xyz'] } }));
+  const { api, dir } = await boot(t, {}, null, { notify: { command: ['/없는/명령/claude-xyz'] } });
   const r = await api('POST', '/notify', { count: 1, docs: ['README.md'], feedbackIds: ['a'] });
   assert.equal(r.data.delivered, false);
   assert.match(r.data.message, /시작하지 못했습니다/);
   assert.equal((await fs.readdir(path.join(dir, '.docbench/inbox'))).filter((n) => n.endsWith('.json')).length, 1, '요청함에는 남는다');
+});
+
+test('실시간: CLI 가 쓴 이력 줄은 doc 이벤트, 반쯤 쓴 줄은 완성될 때, 서버 자신의 저장은 한 번만', async (t) => {
+  const { api, dir, base } = await boot(t);
+  const events = [];
+  const ctl = new AbortController();
+  t.after(() => ctl.abort());
+  void fetch(base + '/api/events', { signal: ctl.signal }).then(async (r) => { for await (const c of r.body) events.push(...new TextDecoder().decode(c).split('\n\n').filter((x) => x.startsWith('event: doc'))); }).catch(() => {});
+  await new Promise((r) => setTimeout(r, 300));
+  const file = path.join(dir, '.docbench/changes.jsonl');
+  const line = JSON.stringify({ at: new Date().toISOString(), docId: 'README.md', toVersion: 'aaaaaaaaaaaaaaaa' }) + '\n';
+  await fs.appendFile(file, line.slice(0, 20));
+  await new Promise((r) => setTimeout(r, 500));
+  assert.equal(events.filter((e) => e.includes('README.md')).length, 0, '반쯤 쓴 줄은 아직');
+  await fs.appendFile(file, line.slice(20));
+  await until(() => events.some((e) => e.includes('README.md')), 4000);
+  // 서버 자신의 저장: PUT 뒤 handler 가 한 번 알리고, 이력 감시는 다시 알리지 않는다
+  events.length = 0;
+  const d = (await api('GET', '/doc?id=' + q('docs/설계-노트.md'))).data;
+  assert.equal((await api('PUT', '/doc?id=' + q('docs/설계-노트.md'), { md: d.md + '\n추가\n', baseVersion: d.version })).status, 200);
+  await new Promise((r) => setTimeout(r, 800));
+  assert.equal(events.filter((e) => e.includes('설계-노트')).length, 1, events.join('|'));
 });

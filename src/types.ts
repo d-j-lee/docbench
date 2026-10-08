@@ -119,8 +119,10 @@ export interface ChangeEntry {
   fromVersion?: string;
   toVersion?: string;
   feedbackIds?: string[];
-  /** 바뀐 섹션 키 */
+  /** 바뀐·새 섹션 키 */
   sections?: string[];
+  /** 없어진 섹션 키 */
+  removed?: string[];
 }
 
 export interface DocEvent {
@@ -139,6 +141,8 @@ export interface DocSource {
   changes?(limit?: number): Promise<ChangeEntry[]>;
   inventory?(): Promise<Inventory | null>;
   subscribe?(cb: (ev: DocEvent) => void): Unsubscribe;
+  /** 화면이 지금 보고 있는 문서(없으면 null). 폴링하는 어댑터가 이 문서를 더 자주 확인하는 데 쓴다 */
+  focus?(id: string | null): void;
 }
 
 // ---------------------------------------------------------------- 피드백
@@ -285,7 +289,8 @@ export interface Assistant {
 export interface Notifier {
   /** 버튼 문구. 예: "AI에게 넘기기" */
   label?: string;
-  send(summary: { count: number; docs: string[]; feedbackIds: string[] }): Promise<{ delivered: boolean; message?: string }>;
+  /** delivered = AI 를 실제로 깨웠다 · queued = 요청함에 남겼다(터미널의 AI 가 읽는다) · message = 화면에 그대로 보일 안내 */
+  send(summary: { count: number; docs: string[]; feedbackIds: string[] }): Promise<{ delivered: boolean; queued?: boolean; message?: string }>;
 }
 
 export interface Platform {

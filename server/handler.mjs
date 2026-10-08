@@ -148,13 +148,14 @@ export function createDocBenchHandler(ws, opts = {}) {
         } finally { await logFd.close(); }
       }
     }
-    send(res, 200, { delivered, message: problem || n.message || (delivered ? `${ai}에게 넘겼습니다 (${b.count}건).` : `요청을 남겼습니다. 터미널의 ${ai}에게 /docbench-feedback 을 실행시키세요.`) });
+    // 안내 문구는 화면 사전(send.done·send.queued)이 정한다 — 서버는 문제·설정 문구만 보낸다
+    send(res, 200, { delivered, queued: !!file, message: problem || n.message || undefined });
   }
 
   /** @param {any} req @param {any} res */
   async function propose(req, res) {
     const cfg = ws.config.assistant;
-    if (!cfg) return send(res, 501, { error: 'NO_ASSISTANT', message: '.docbench/config.json 에 assistant 설정이 없습니다' });
+    if (!cfg) return send(res, 501, { error: 'NO_ASSISTANT', message: '이 PC 의 설정(docbench status 가 위치를 알려 준다)에 assistant 가 없습니다 — 문서 폴더의 config.json 에 적은 실행 명령은 쓰지 않습니다' });
     const b = await body(req);
     const f = await ws.getFeedback(String(b.feedbackId));
     const doc = await ws.readDoc(f.docId);

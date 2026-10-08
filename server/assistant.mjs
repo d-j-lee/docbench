@@ -60,6 +60,6 @@ export function proposeWithClaudeCli(cfg, req, signal) {
 
 /** @param {any} e */
 function hint(e) {
-  if (e && e.code === 'ENOENT') return new Error('claude 실행 파일을 찾지 못했습니다. .docbench/config.json 의 assistant.command 에 claude.exe 전체 경로를 적으세요 (npm 설치본이면 ["node", "…/cli.js"] 배열로).');
+  if (e && e.code === 'ENOENT') return new Error('claude 실행 파일을 찾지 못했습니다. 이 PC 의 설정(docbench status 가 위치를 알려 준다)의 assistant.command 에 claude.exe 전체 경로를 적으세요 (npm 설치본 claude.cmd 는 그 안에서 부르는 대상을 배열로).');
   return e instanceof Error ? e : new Error(String(e));
 }

@@ -5,6 +5,7 @@
  * 서버가 꺼져 있어도 파일만으로 동작하고, 서버가 켜져 있으면 화면이 실시간으로 따라온다.
  *
  *   docbench serve [폴더] [--port 4317] [--host 127.0.0.1] [--token T] [--allow-origin URL] [--allow-host 이름]
+ *                                              토큰은 환경 변수 DOCBENCH_TOKEN 으로도(명령줄은 프로세스 목록에 보인다)
  *   docbench init [폴더] [--claude]            작업 폴더 준비 (+ Claude Code 스킬 복사)
  *   docbench status [--json]                   차례별 피드백 수
  *   docbench fb list [--waiting assistant|owner] [--status open|resolved|declined|all] [--doc ID] [--json]
@@ -22,8 +23,12 @@
  * 작업 폴더 찾기: --root 폴더 → 환경 변수 DOCBENCH_ROOT → 현재 폴더에서 위로 .docbench 가 있는 곳.
  * 작성자: --as human:이름 | assistant:이름 (기본 assistant:Claude, 또는 DOCBENCH_ACTOR)
  * 종료 코드: 0 성공 · 1 잘못된 입력 · 2 작업 폴더 없음 · 3 그 사이 바뀜(다시 읽고 고칠 것) · 4 읽기 전용
+ * 설정: 문서 폴더 .docbench/config.json(함께 씀) + 이 PC 의 설정(문서 폴더 밖 — 실행 명령 assistant·notify.command 와 이름 user 는
+ *       여기에만, 폴더별은 "workspaces": { "<폴더 경로>": {…} }). 위치: Windows %LOCALAPPDATA%\docbench\config.json,
+ *       macOS ~/Library/Application Support/docbench, Linux ~/.config/docbench. DOCBENCH_HOME 으로 옮김. status 가 위치를 보여 준다
  */
 import path from 'node:path';
+import os from 'node:os';
 import { promises as fs, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { Workspace } from '../server/workspace.mjs';
@@ -54,11 +59,17 @@ function parse(argv) {
   return a;
 }
 
-/** @param {string} start @returns {string | null} */
+/**
+ * 위로 .docbench 를 찾는다. 홈 폴더는 찾아낸 작업 폴더로 치지 않는다 — 홈 아래 아무 데서나 부른 CLI 가
+ * 홈 전체(개인 문서)를 작업 폴더로 삼지 않게. 홈을 쓰려면 --root 로 분명히 준다.
+ * @param {string} start @returns {string | null}
+ */
 function findRoot(start) {
   let d = path.resolve(start);
+  const home = path.resolve(os.homedir());
+  const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
   for (;;) {
-    if (existsSync(path.join(d, '.docbench'))) return d;
+    if (!same(d, home) && existsSync(path.join(d, '.docbench'))) return d;
     const up = path.dirname(d);
     if (up === d) return null;
     d = up;
@@ -77,6 +88,8 @@ const out = (a, data, human) => {
 };
 /** @returns {never} */
 const die = (msg, code = 1) => { process.stderr.write('docbench: ' + msg + '\n'); process.exit(code); };
+/** 화면·사람용 인코딩 이름 — 내부 이름 'euc-kr' 은 실제로 CP949(확장 음절 포함)다 @param {string} e */
+const encLabel = (e) => (e === 'euc-kr' ? 'cp949(euc-kr)' : e);
 const turn = (f) => (f.status === 'open' ? f.waitingOn : f.status);
 const where = (f) => (f.target.kind === 'section' ? core.sectionKeyOf(f) : f.target.kind === 'item' ? '[지도] ' + (f.target.label || f.target.itemId) : '(문서 전체)');
 
@@ -117,15 +130,23 @@ function guardSection(cur, next, a) {
 async function main() {
   const a = parse(process.argv.slice(2));
   const [cmd, sub, ...rest] = a._;
-  if (!cmd || cmd === 'help' || a.help) { process.stdout.write((await fs.readFile(fileURLToPath(import.meta.url), 'utf8')).split('\n').filter((l) => l.startsWith(' *')).map((l) => l.slice(3)).join('\n') + '\n'); return; }
+  if (!cmd || cmd === 'help' || a.help) {
+    // 파일 머리 주석만 (아래 함수 설명 주석은 빼고)
+    const src = (await fs.readFile(fileURLToPath(import.meta.url), 'utf8')).split('\n');
+    const end = src.findIndex((l) => l.trim() === '*/');
+    process.stdout.write(src.slice(0, end).filter((l) => l.startsWith(' *')).map((l) => l.slice(3)).join('\n') + '\n');
+    return;
+  }
 
   if (cmd === 'serve') {
     const { startServer } = await import('../server/index.mjs');
     const root = path.resolve(sub || a.root || process.env.DOCBENCH_ROOT || '.');
-    const s = await startServer({ root, port: a.port ? Number(a.port) : 4317, host: a.host, token: a.token, allowOrigins: a['allow-origin'] ? String(a['allow-origin']).split(',') : undefined, allowHosts: a['allow-host'] ? String(a['allow-host']).split(',') : undefined });
+    const s = await startServer({ root, port: a.port ? Number(a.port) : 4317, host: a.host, token: a.token || process.env.DOCBENCH_TOKEN || undefined, allowOrigins: a['allow-origin'] ? String(a['allow-origin']).split(',') : undefined, allowHosts: a['allow-host'] ? String(a['allow-host']).split(',') : undefined });
     process.stdout.write(`DocBench: ${s.url}  (작업 폴더 ${root})\n`);
     if (s.ws.git) process.stdout.write('git: 커밋 대비 변경 보기 사용\n');
     if (s.ws.config.assistant) { const c = s.ws.config.assistant.command; process.stdout.write(`AI 제안: ${Array.isArray(c) ? c.join(' ') : c || 'claude'} -p (헤드리스)\n`); }
+    process.stdout.write(`이 PC 의 설정: ${s.ws.pcConfigFile}${existsSync(s.ws.pcConfigFile) ? '' : ' (없음)'}\n`);
+    for (const w of s.ws.config.warnings || []) process.stderr.write('주의: ' + w + '\n');
     const stop = () => { void s.close().then(() => process.exit(0)); };
     process.on('SIGINT', stop); process.on('SIGTERM', stop);
     return;
@@ -136,7 +157,7 @@ async function main() {
     const ws = await new Workspace(root).init();
     const cfg = path.join(ws.dir, 'config.json');
     if (!existsSync(cfg)) {
-      await fs.writeFile(cfg, JSON.stringify({ title: path.basename(root), groups: [], docs: {}, assistantName: 'Claude', assistant: null, notify: { inbox: true } }, null, 2) + '\n');
+      await fs.writeFile(cfg, JSON.stringify({ title: path.basename(root), groups: [], docs: {}, assistantName: 'Claude', notify: { inbox: true } }, null, 2) + '\n');
     }
     let skill = '';
     if (a.claude) {
@@ -160,8 +181,10 @@ async function main() {
     for (const f of rows) { const t = turn(f); (by[f.docId || '(지도)'] ||= { owner: 0, assistant: 0, resolved: 0, declined: 0 })[t]++; }
     const c = core.countTurns(rows);
     const inbox = (await fs.readdir(path.join(ws.dir, 'inbox')).catch(() => [])).filter((n) => n.endsWith('.json')).length;
-    out(a, { root, docs: ws.docs.size, feedback: c, byDoc: by, inbox }, () =>
+    const warnings = ws.config.warnings || [];
+    out(a, { root, docs: ws.docs.size, feedback: c, byDoc: by, inbox, warnings, pcConfigFile: ws.pcConfigFile }, () =>
       (`작업 폴더 ${root} · 문서 ${ws.docs.size}개${inbox ? ` · 넘기기 요청 ${inbox}건` : ''}\nAI 차례 ${c.assistant} · 사람 차례 ${c.owner} · 반영됨 ${c.resolved} · 보류 ${c.declined}\n` +
+      warnings.map((w) => '주의: ' + w + '\n').join('') +
       Object.entries(by).filter(([, v]) => v.assistant || v.owner).map(([d, v]) => `  ${d}: AI ${v.assistant} · 사람 ${v.owner}`).join('\n')).trimEnd());
     return;
   }
@@ -208,7 +231,7 @@ async function main() {
         f.title ? '제목: ' + f.title : '', '내용: ' + f.body,
         f.selector?.exact ? '인용: "' + f.selector.exact + '"' : '',
         ...f.thread.map((m) => `  - ${m.author.kind === 'assistant' ? (m.author.name || 'AI') : (m.author.name || '사람')}: ${m.text}`),
-        doc ? `문서: ${path.join(root, doc.id)} (${doc.encoding}${doc.bom ? '+BOM' : ''}, ${doc.eol.toUpperCase()}, 판 ${doc.version}${doc.readOnly ? ', 읽기 전용: ' + doc.readOnlyReason : ''})` : '',
+        doc ? `문서: ${path.join(root, doc.id)} (${encLabel(doc.encoding)}${doc.bom ? '+BOM' : ''}, ${doc.eol.toUpperCase()}, 판 ${doc.version}${doc.readOnly ? ', 읽기 전용: ' + doc.readOnlyReason : ''})` : '',
         located ? `섹션: ${located.key} (줄 ${located.startLine}-${located.endLine})\n고칠 때: docbench doc write ${doc.id} --section "${located.key}" --base ${doc.version} --file <새 섹션.md> --fb ${f.id}\n----\n${section}----` : f.target.kind === 'section' ? '섹션을 찾지 못했습니다 (제목이 바뀌었을 수 있음 — docbench doc sections 로 확인)' : '',
       ].filter(Boolean).join('\n'));
       return;
@@ -294,7 +317,7 @@ async function main() {
       const fbIds = a.fb ? String(a.fb).split(',').filter(Boolean) : undefined;
       try {
         const r = await ws.writeDoc(d.id, next, { baseVersion: a.base ? String(a.base) : d.version, summary: a.m, feedbackIds: fbIds, convertTo: a['convert-utf8'] ? 'utf-8' : undefined, by: ws.actor });
-        out(a, r, r.unchanged ? '바뀐 것 없음' : `저장: ${d.id} 판 ${r.version}${d.encoding !== 'utf-8' && !a['convert-utf8'] ? ` (${d.encoding} 유지)` : ''}`);
+        out(a, r, r.unchanged ? '바뀐 것 없음' : `저장: ${d.id} 판 ${r.version}${d.encoding !== 'utf-8' && !a['convert-utf8'] ? ` (${encLabel(d.encoding)} 유지)` : ''}`);
       } catch (e) {
         if (e.code === 'CONFLICT') die(`그 사이 문서가 바뀌었습니다 (지금 판 ${e.current.version}). 다시 읽고 고치세요.`, 3);
         if (e.code === 'BUSY') die(e.message, 3);

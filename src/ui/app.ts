@@ -237,6 +237,7 @@ export class App {
       this.saveState();
       if (this.opts.routing !== 'none' && hashView() !== view) history.replaceState(null, '', '#' + view);
       this.els.main.scrollTop = 0;
+      try { this.ad.docs.focus?.(view in this.manifest.docs ? view : null); } catch { /* 선택 기능 */ }
       if (view === 'map') renderMap(this);
       else if (view === 'changes') await renderChanges(this);
       else {
@@ -291,7 +292,7 @@ export class App {
     const docs = [...new Set(rows.map((r) => this.manifest.docs[r.docId]?.title || r.docId))];
     try {
       const res = await this.ad.notifier!.send({ count: rows.length, docs, feedbackIds: rows.map((r) => r.id) });
-      this.toast(res.message || (res.delivered ? this.t('send.done') : this.t('send.copied')));
+      this.toast(res.message || this.t(res.delivered ? 'send.done' : res.queued ? 'send.queued' : 'send.copied'));
       this.emit({ type: 'assistant:requested', feedbackIds: rows.map((r) => r.id) });
     } catch (e) { this.toast(this.t('err.generic', { msg: (e as Error).message })); }
   }

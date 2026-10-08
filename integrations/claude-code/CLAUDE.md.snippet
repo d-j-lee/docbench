@@ -1,8 +1,10 @@
-<!-- 작업 폴더(또는 대시보드 저장소)의 CLAUDE.md 에 붙여 넣는다 -->
+<!-- 작업 폴더(또는 대시보드 저장소)의 CLAUDE.md 에 붙여 넣는다. 문서 폴더가 이 폴더가 아니면 아래 경로 앞에 <문서 폴더>/ 를 붙이고,
+     CLI 를 부르는 법(`node <DocBench 위치>/bin/docbench.mjs --root <문서 폴더> …` 또는 DOCBENCH_ROOT)을 한 줄 더한다 -->
 ## 문서 피드백 (DocBench)
 
-이 폴더의 문서는 DocBench 화면에서 사람이 피드백을 단다. 피드백은 `.docbench/feedback/*.json`, 변경 이력은 `.docbench/changes.jsonl`.
+이 폴더의 문서는 DocBench 화면(대시보드 패널·`docbench serve`·단일 HTML)에서 사람이 피드백을 단다. 피드백은 `.docbench/feedback/*.json`, 변경 이력은 `.docbench/changes.jsonl`.
 
 - 사람이 "피드백 반영해" / "넘긴 거 처리해" 라고 하면 `/docbench-feedback` 스킬 순서를 따른다.
-- 문서를 고칠 때는 가능하면 `docbench doc write --section` 을 쓴다 (원래 인코딩·줄바꿈 유지, 바뀐 섹션이 화면에 표시됨).
+- 문서를 고칠 때는 가능하면 `docbench doc write --section` 을 쓴다 (원래 인코딩·줄바꿈 유지, 바뀐 섹션이 화면에 표시됨). CP949·UTF-16 문서는 Edit 도구로 고치지 않는다.
 - `.docbench/feedback/*.json` 을 손으로 고치지 않는다. `docbench fb reply|propose` 를 쓴다 (판 번호 관리).
+- DocBench 를 붙이거나 갱신할 때는 `/docbench-setup`.

@@ -215,10 +215,11 @@ export class DocView {
   }
 
   async onExternalChange(): Promise<void> {
-    if (this.editor) { this.editor.externalChanged(); return; }
     try {
       const fresh = await this.app.ad.docs.load(this.id);
+      // 내 저장이 돌아온 알림이면(판이 같으면) 아무것도 하지 않는다 — 편집 중에 "방금 바뀜" 거짓 경고를 띄우지 않게
       if (fresh.version === this.content.version) return;
+      if (this.editor) { this.editor.externalChanged(); return; }
       const prev = this.content;
       this.changed = diffSections(prev.md, fresh.md);
       this.changedFrom = prev.version;

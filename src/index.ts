@@ -12,6 +12,10 @@ export * from './types';
 export { createMemoryAdapters } from './adapters/memory';
 export { createRestAdapters, trimBySession, HttpError } from './adapters/rest';
 export { createArtifactAdapters } from './adapters/claude-artifact';
+export { createFolderAdapters, FolderWorkspace, versionOf, type FolderOptions, type FolderAdapters } from './adapters/folder';
+export { fsFromHandle, fsFromFiles, fsFromMemory, FsReadOnlyError, type FsLike, type FsEntry, type FsFile, type FsStat, type MemoryFs } from './adapters/folder-fs';
+export { createBrowserCp949 } from './core/textcodec';
+export { pickFolder, ensurePermission, rememberFolder, recallFolder, forgetFolder, folderAccessSupported } from './adapters/folder-pick';
 export { normalizeFeedback, turnOf, countTurns } from './core/feedback';
 export { sectionSources, getSectionText, replaceSection, diffSections, KEY_SEP } from './core/source';
 export { buildProposePrompt, checkProposal, PROPOSAL_SCHEMA } from './core/prompt';
@@ -41,4 +45,5 @@ export function createDocBench(el: HTMLElement, opts: DocBenchOptions): DocBench
   };
 }
 
-export const version = '0.1.0';
+/** package.json 의 version (빌드가 넣는다) */
+export const version: string = typeof __DOCBENCH_VERSION__ !== 'undefined' ? __DOCBENCH_VERSION__ : 'dev';

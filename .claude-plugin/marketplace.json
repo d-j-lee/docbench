@@ -1,0 +1,14 @@
+{
+  "name": "docbench",
+  "owner": { "name": "d-j-lee", "url": "https://github.com/d-j-lee" },
+  "description": "DocBench — 사람과 AI 가 같은 문서를 보고·피드백하고·고치는 작업대용 Claude Code 스킬",
+  "plugins": [
+    {
+      "name": "docbench",
+      "source": "./integrations/claude-code",
+      "description": "DocBench 를 대시보드·문서 폴더에 붙이는 스킬(docbench-setup)과, 사람이 단 문서 피드백을 처리하는 스킬(docbench-feedback)",
+      "category": "productivity",
+      "tags": ["docs", "markdown", "feedback", "dashboard", "windows"]
+    }
+  ]
+}

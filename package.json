@@ -1,9 +1,9 @@
 {
   "name": "docbench",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "사람과 AI가 같은 문서를 이해·피드백·수정·관리하는 작업대 — 접기 뷰어, 섹션 피드백, 편집 도우미, 로컬 작업 폴더 서버",
   "private": true,
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "docbench": "bin/docbench.mjs"
@@ -27,7 +27,9 @@
     "integrations",
     "docs",
     "README.md",
-    "THIRD_PARTY_NOTICES.md"
+    "THIRD_PARTY_NOTICES.md",
+    "LICENSE",
+    "release"
   ],
   "engines": {
     "node": ">=20.11"
@@ -40,7 +42,8 @@
     "test:unit": "vitest run",
     "test:server": "node scripts/node-test.mjs test/server",
     "test:e2e": "node scripts/node-test.mjs test/e2e",
-    "check": "npm run typecheck && npm run build && npm test && npm run test:e2e",
+    "check": "npm run typecheck && npm run build && npm test && npm run test:e2e && node scripts/check-release.mjs",
+    "release": "npm run build && node scripts/release.mjs",
     "serve:sample": "node bin/docbench.mjs serve examples/sample-workspace --port 4317"
   },
   "optionalDependencies": {
@@ -53,7 +56,7 @@
     "esbuild": "^0.28.2",
     "jsdom": "^30.1.2",
     "marked": "^18.1.0",
-    "playwright": "1.47.2",
+    "playwright": "1.56.1",
     "typescript": "^5.9.3",
     "vitest": "^5.0.3"
   },

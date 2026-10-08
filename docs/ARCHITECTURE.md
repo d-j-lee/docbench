@@ -8,12 +8,23 @@
 └───────────────▲─────────────────────────────────────┘
                 │ DocBenchAdapters (src/types.ts)
 ┌ src/adapters ─┴─────────────────────────────────────┐
-│ memory          rest(→ docs/openapi.yaml)   claude-artifact │
+│ memory   rest(→ docs/openapi.yaml)   claude-artifact   folder(로컬 폴더 직접) │
 └───────────────▲─────────────────────────────────────┘
                 │
 ┌ src/core ─────┴──── DOM 없음 · 서버/CLI 와 공유(dist/core.mjs) ┐
 │ source(섹션 키·범위) selectors(문구 앵커) feedback diff prompt │
+│ textcodec(바이트↔글) workspace(작업 폴더 규약: 설정·glob·매니페스트·이력) │
 └───────────────────────────────────────────────────────┘
+```
+
+**같은 규칙은 한 곳에**: 바이트 보존(`textcodec`)과 `.docbench/` 디스크 모양(`workspace`)은 서버(Node)와 브라우저 폴더 어댑터가
+같은 코드를 쓴다. 각자는 입출력(파일·해시·잠금)과 CP949 코덱만 다르다 — 서버는 `iconv-lite`, 브라우저는 내장 `euc-kr` 디코더로 만든 역표
+(둘이 BMP 전 글자·2바이트 전 쌍에서 같음을 e2e 로 확인).
+
+```
+단일 HTML(release/docbench.html) ─ standalone.ts ─ folder 어댑터 ─ File System Access API ─┐
+대시보드 패널 ─ <doc-bench> ─ rest 어댑터 ─ HTTP ─ server/ (Workspace) ──────────────────────┼─ 같은 작업 폴더(.md + .docbench/)
+터미널의 Claude Code ─ bin/docbench.mjs (Workspace) ───────────────────────────────────────┘
 ```
 
 **어댑터** (src/types.ts) — 화면이 바깥에 기대는 것 전부.
@@ -68,6 +79,7 @@
 화면(Editor)은 최신본에서 내 섹션이 그대로면 내 편집을 다시 얹어 저장하고, 같은 섹션이 바뀌었으면 차이를 보여 주고 "최신본에 내 편집 적용 / 내 편집 버리기" 를 고르게 한다.
 
 **밖에서 고침** — 로컬 서버는 파일을 감시한다. 알던 판과 다르면 이력에 `by: external` 로 남기고(바뀐 섹션 포함) SSE 로 알린다. 열려 있는 화면은 다시 읽고 바뀐 섹션에 표시를 단다. CLI 가 `docbench log` 로 요약을 덧붙이면 그 이력에 합쳐진다.
+CLI 가 `doc write` 로 고친 문서는 새 판을 `state.json` 에 먼저 적으므로 외부 편집이 아니다 — 대신 `changes.jsonl` 에 새로 붙은 줄의 문서를 알려 화면이 다시 읽는다(빠졌던 것을 e2e 로 재현해 고침).
 
 **마지막으로 본 뒤** — 보기 상태에 문서별 `lastSeen`(판)을 둔다. 다시 열 때 그 판 본문(`loadVersion`)과 비교해 바뀐 섹션에 표시하고 "이 변경 이후 차이"를 보여 준다. 로컬 서버는 본 적 있는 판 본문을 `.docbench/blobs/` 에 둔다.
 
@@ -76,10 +88,11 @@
 ## 로컬 서버 (`server/`)
 
 - 의존성 없음(선택: `iconv-lite`). Node 20+.
-- **텍스트 입출력**(`textio.mjs`): BOM(UTF-8·UTF-16) → UTF-8 → 깨진 바이트가 조금 섞인 UTF-8(읽기 전용) → CP949. **다시 인코딩해 원래 바이트가 그대로 나올 때만 저장 가능**, CP949 에 없는 글자가 들어오면 저장을 막는다. 화면에는 LF 로 주고, 저장할 때 바뀌지 않은 줄은 원래 줄바꿈 그대로, 바뀐 줄은 그 자리 줄바꿈으로. 판 = 파일 바이트 sha256 앞 16자.
+- **텍스트 입출력**(`textio.mjs` → 규칙은 `src/core/textcodec.ts`): BOM(UTF-8·UTF-16) → UTF-8 → 깨진 바이트가 조금 섞인 UTF-8(읽기 전용) → CP949. **다시 인코딩해 원래 바이트가 그대로 나올 때만 저장 가능**, CP949 에 없는 글자가 들어오면 저장을 막는다. 화면에는 LF 로 주고, 저장할 때 바뀌지 않은 줄은 원래 줄바꿈 그대로, 바뀐 줄은 그 자리 줄바꿈으로. 판 = 파일 바이트 sha256 앞 16자.
 - **쓰기 줄 세우기**: 같은 문서·피드백 쓰기는 프로세스 안 약속 사슬 + `.docbench/locks/` 잠금 파일(O_EXCL, 15초 지나면 죽은 잠금)로 한 줄로 세운 뒤 판을 다시 비교한다 — 서버와 CLI 가 동시에 써도 하나만 이긴다.
 - **쓰기**: 같은 폴더 임시 파일 → rename. Windows 에서 다른 프로그램이 잡고 있으면(EPERM/EBUSY) 잠깐씩 재시도 후 직접 쓰기.
-- **감시**: `fs.watch` 재귀(Windows·macOS·Linux Node 20+), 안 되면 3초 폴링.
+- **감시**: `fs.watch` 재귀(Windows·macOS·Linux Node 20+), 안 되면 3초 폴링(문서·이력·피드백 폴더).
+- **Windows 빌드**: 스크립트 경로는 `fileURLToPath` 로 — `URL.pathname` 은 `/C:/…` 가 되어 `npm install` 의 빌드가 깨진다.
 - **git**: 있으면 HEAD 판을 기준본으로, `git status` 를 폴더 지도 표시로.
 - `createDocBenchHandler(ws, opts)` 는 `(req, res) => boolean` — Node http, Express, Fastify raw 어디에나 끼운다.
 
@@ -87,10 +100,30 @@
 
 | 경로 | 내용 | 커밋 |
 |---|---|---|
-| `config.json` | 제목·그룹·문서별 설정·AI 연결·알림 | ✔ |
+| `config.json` | 제목·그룹·문서별 설정·알림 안내 (함께 쓰는 설정) | ✔ |
+
+실행 명령(`assistant`·`notify.command`)과 이름(`user`)은 문서 폴더가 아니라 **이 PC 의 설정**(Windows `%LOCALAPPDATA%\docbench\config.json` 등 운영체제의 앱 설정 자리, `workspaces["<폴더>"]` 로 폴더별)에서만 읽는다 — 문서 폴더는 git·동기화로 남과 나누기 때문(D40).
 | `feedback/<id>.json` | 피드백 한 건 = 파일 하나 (충돌 적고 diff 읽기 쉬움) | 팀이 정함 |
 | `changes.jsonl` | 저장 이력, 한 줄 = 한 번 | 팀이 정함 |
 | `blobs/` `state.json` `viewstate/` `inbox/` | 캐시·개인 상태·요청함 | ✘ (`.docbench/.gitignore`) |
+
+## 서버 없는 단일 HTML (`src/standalone.ts` · `src/adapters/folder*.ts`)
+
+`dist/docbench.html`(= 저장소 `release/docbench.html`)은 CSS·스크립트가 다 들어 있는 파일 하나다. 엣지·크롬으로 열고 문서 폴더를 고르면
+**폴더 어댑터**가 File System Access API 로 그 폴더를 직접 읽고 쓴다. 디스크 모양·판(바이트 해시)·이력·잠금 파일 이름까지 서버와 같아서,
+같은 폴더를 CLI·서버가 이어받는다(실제 디스크에서 어댑터 ↔ CLI 왕복을 단위 시험으로 확인).
+
+- **고르기·기억**: `showDirectoryPicker` → 핸들을 IndexedDB 에 두고 다음에 "다시 열기"(권한은 브라우저가 다시 물을 수 있다). 다른 브라우저는 `<input webkitdirectory>` 로 읽기만.
+- **바뀜 확인**: 감시 대신 2.5초마다(탭이 보일 때만, 한 번에 하나) 이력 파일에 새로 붙은 **완성된 줄**의 문서(이 탭이 쓴 판은 빼고), 피드백 폴더 서명, 설정 파일, 화면이 보고 있는 문서(`docs.focus`)를 보고, 네 번에 한 번 전체 문서를 훑는다. 서버의 이력 감시도 같은 규칙(완성된 줄만, 자기 저장 빼고).
+- **줄 세우기**: 브라우저에는 O_EXCL 이 없다. 같은 이름의 잠금 파일이 없으면 내 표식을 쓰고 25ms 뒤 되읽어 그대로인지 확인한다. 그래서 문서·피드백 쓰기는 **양쪽(서버·CLI·브라우저) 모두 쓰기 직전에 판을 한 번 더 비교**한다 — 잠금이 겹치는 아주 좁은 틈에서도 한쪽은 충돌로 멈춘다.
+- **이력 덧붙이기**: 브라우저에는 O_APPEND 도 없어 `changes.jsonl` 을 복사본에 덧붙여 바꿔 끼운다. 그 사이 다른 쪽이 덧붙인 줄이 사라지지 않게 서버·CLI·브라우저 모두 `changes` 잠금 안에서 덧붙인다(독립 검토에서 줄 손실 재현, 고침).
+- **처음 열기**: 처음 보는 문서들의 판은 잠금·쓰기 한 번에 적는다(문서마다 잠그면 300개에 17초 — 실측).
+- **JSON 파일**: 메모장·PowerShell 5.1 이 붙이는 BOM 을 떼고 읽는다(서버도 같게 — `core.parseJsonText`).
+- **쓰기**: `createWritable()` 은 임시(.crswap) 파일에 쓰고 닫을 때 바꿔 끼운다.
+- **없는 것**: AI 제안(헤드리스 `claude -p`), git 기준본, 넘기기 명령 — "넘기기"는 요청함 파일만 남긴다(`queued`).
+- **CSP**: 파일 안에 `connect-src 'none'`·`img-src data: blob:`·referrer 없음 — DocBench 가 문서를 어디로도 보내지 않는 데 더해, 페이지 안에서 요청·그림으로 새는 길도 막는다. 문서 속 바깥 주소 그림은 보이지 않는다. 새 창 이동은 CSP 로 못 막는다(문서 속 스크립트는 DOMPurify 가 지운다).
+- **이름·기억**: 쓰려면 이름이 필요하다(작성자·보기 상태의 주인). `file://` 로 열면 고른 폴더를 기억하지 않는다(다른 로컬 HTML 이 꺼내 쓸 수 있어서).
+- `file://` 은 보안 문맥이라 쓰기가 된다. `http://사내호스트` 는 보안 문맥이 아니어서 읽기만 된다.
 
 ## 화면
 

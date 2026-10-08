@@ -1,15 +1,15 @@
 ---
 name: docbench-feedback
-description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 AI 차례인 것을 처리한다 — 섹션을 고치거나, 수정 제안을 올리거나, 되묻는다. 사용자가 "피드백 반영", "넘긴 거 처리", "/docbench-feedback" 이라고 하거나 .docbench/inbox 에 요청이 쌓였을 때 쓴다.
+description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 AI 차례인 것을 처리한다 — 섹션을 고치거나, 수정 제안을 올리거나, 되묻는다. 사용자가 "피드백 반영", "넘긴 거 처리", "/docbench-feedback" 이라고 하거나 .docbench/inbox 에 요청이 쌓였을 때 쓴다. Process DocBench document feedback waiting on the assistant.
 ---
 
 # DocBench 피드백 처리
 
-사람은 웹 화면에서 문서에 피드백을 달고, 너는 이 터미널에서 `docbench` CLI 로 같은 작업 폴더를 다룬다.
-서버가 켜져 있으면 네가 고친 내용이 화면에 바로 뜨고(바뀐 섹션 표시), 꺼져 있어도 파일만으로 기록이 맞는다.
+사람은 화면(대시보드 패널·`docbench serve`·단일 HTML `docbench.html`)에서 문서에 피드백을 달고, 너는 이 터미널에서 `docbench` CLI 로 같은 작업 폴더를 다룬다.
+화면이 켜져 있으면 네가 고친 내용이 화면에 뜬다(서버는 바로, 단일 HTML 은 몇 초 안에 — 바뀐 섹션 표시). 꺼져 있어도 파일만으로 기록이 맞는다.
 
-`docbench` 가 PATH 에 없으면 `node <docbench 저장소>/bin/docbench.mjs` 로 부른다.
-작업 폴더는 현재 폴더에서 위로 `.docbench` 를 찾는다. 다른 곳에서 부르면 `--root <폴더>` 또는 환경 변수 `DOCBENCH_ROOT` (종료 코드 2 = 못 찾음).
+`docbench` 가 PATH 에 없으면 `node <DocBench 위치>/bin/docbench.mjs` 로 부른다(대시보드에 붙였다면 보통 `vendor/docbench`).
+작업 폴더는 현재 폴더에서 위로 `.docbench` 를 찾는다. 다른 곳에서 부르면 `--root <폴더>` 또는 환경 변수 `DOCBENCH_ROOT` (종료 코드 2 = 못 찾음 — 만들지 않는다).
 
 ## 순서
 
@@ -17,7 +17,7 @@ description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 
    `docbench inbox` 에 "넘기기" 요청이 있으면 거기 적힌 문서·`feedbackIds` 부터.
 2. **한 건씩**: `docbench fb show <id>`
    - 피드백 내용·인용문·대화, 그리고 **지금 그 섹션 원문**과 줄 번호가 나온다.
-   - 문서 인코딩(utf-8 / euc-kr), 줄바꿈(LF / CRLF), BOM 도 나온다.
+   - 문서 인코딩(utf-8 / euc-kr / utf-16le), 줄바꿈(LF / CRLF), BOM 도 나온다.
 3. **판단** — 셋 중 하나:
    - **바로 고친다** (요청이 분명하고 사실을 지어낼 필요가 없을 때)
      섹션 새 글을 임시 파일에 쓰고
@@ -34,9 +34,11 @@ description: DocBench 작업 폴더에서 사람이 남긴 문서 피드백 중 
 
 - **섹션 단위로 고친다.** `--section` 을 쓰면 나머지 글자는 바이트 그대로 남고, 원래 인코딩·줄바꿈·BOM 으로 저장된다.
   새 섹션 글은 **제목 줄부터** 주고, 하위 섹션도 함께 준다(빠지면 멈춘다 — 지우려는 것이면 `--force`, 제목을 바꾸려면 `--rename`). `--base` 는 필수.
-  Edit 도구로 파일을 직접 고쳐도 되지만(외부 편집으로 기록됨), 그때는 `docbench log <docId> -m "<요약>" --fb <id>` 로 요약을 남긴다.
+- **CP949·UTF-16 문서는 Edit·Write 도구로 직접 고치지 않는다** — 도구가 UTF-8 로 다시 써서 글자가 깨질 수 있다. `fb show` 에 euc-kr·utf-16le 가 보이면 반드시 `docbench doc write` 로.
+  UTF-8 문서는 Edit 도구로 고쳐도 되지만(외부 편집으로 기록됨), 그때는 `docbench log <docId> -m "<요약>" --fb <id>` 로 요약을 남긴다.
 - 제목 줄은 바꾸라는 요청이 없으면 그대로. 제목이 바뀌면 그 섹션에 달린 다른 피드백이 떨어져 나간다.
 - 근거 표기(`[실측]` `[문서]` `[추정]` `[미확인]` 등)는 지우거나 올리지 않는다. 확인 못 한 사실은 지어내지 말고 `[미확인]` 으로 두거나 되묻는다.
 - 종료 코드 3 = 그 사이 문서가 바뀜 → `fb show` 로 다시 읽고 고친다. 덮어쓰지 않는다.
-- 종료 코드 4 = 읽기 전용(EUC-KR 인데 iconv-lite 없음 등) → 사람에게 UTF-8 변환 저장(`--convert-utf8`) 여부를 묻는다.
+- 종료 코드 4 = 읽기 전용(CP949 인데 iconv-lite 없음 등) → 사람에게 UTF-8 변환 저장(`--convert-utf8`) 여부를 묻는다.
 - 섹션 키는 `docbench doc sections <docId>` 로 확인한다. 같은 이름 제목이 여럿이면 키 끝에 ` #2` 가 붙는다.
+- `.docbench/feedback/*.json` 을 손으로 고치지 않는다(판 번호). 회신·제안은 `fb reply`·`fb propose` 로.

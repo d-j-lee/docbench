@@ -10,7 +10,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { chromium } from 'playwright';
 import { startServer } from '../../server/index.mjs';
-import { tempWorkspace, rm, until, fakeClaude, repo } from '../server/helpers.mjs';
+import { tempWorkspace, rm, until, fakeClaude, repo, pcFileFor } from '../server/helpers.mjs';
 
 const run = promisify(execFile);
 let dir, srv, browser, url;
@@ -20,8 +20,8 @@ const readFb = async () => Promise.all((await fbFiles()).map(async (f) => JSON.p
 const cli = (...args) => run(process.execPath, [path.join(repo, 'bin/docbench.mjs'), ...args], { cwd: dir });
 
 before(async () => {
-  dir = await tempWorkspace((c) => ({ ...c, assistant: { command: [process.execPath, fakeClaude], timeoutSec: 20 } }));
-  srv = await startServer({ root: dir, port: 0 });
+  dir = await tempWorkspace(null, { assistant: { command: [process.execPath, fakeClaude], timeoutSec: 20 } });
+  srv = await startServer({ root: dir, port: 0, pcConfigFile: pcFileFor(dir) });
   url = `http://127.0.0.1:${srv.port}/`;
   browser = await chromium.launch();
 });
@@ -166,6 +166,35 @@ test('밖에서 고친 문서: 화면이 다시 읽고 바뀐 섹션 표시', as
   await fs.appendFile(path.join(dir, 'README.md'), '\n## 새 절\n\n에디터에서 추가.\n');
   await page.locator('.db-sec[data-key="예제 작업 폴더 › 새 절"]').waitFor({ timeout: 6000 });
   await page.locator('.db-sec[data-key="예제 작업 폴더 › 새 절"][data-changed="new"]').waitFor({ timeout: 3000 });
+});
+
+test('터미널의 Claude 가 CLI 로 고친 문서: 화면이 가만히 있어도 다시 읽는다', async (t) => {
+  const page = await open(t, { hash: 'docs/운영-런북.md' });
+  const cur = JSON.parse((await cli('doc', 'show', 'docs/운영-런북.md', '--json')).stdout);
+  const next = path.join(dir, 'next.md');
+  await fs.writeFile(next, cur.text.replace(/\n*$/, '\n\n## CLI 로 더한 절\n\nClaude 가 추가.\n'));
+  await cli('doc', 'write', 'docs/운영-런북.md', '--file', next, '-m', 'CLI 추가');
+  // CLI 는 새 판을 state.json 에 먼저 적으므로 '외부 편집'이 아니다 — 그래도 화면은 따라와야 한다
+  await page.locator('.db-sec[data-key="알림 서비스 운영 런북 › CLI 로 더한 절"]').waitFor({ timeout: 6000 });
+});
+
+test('<doc-bench> 요소: 대시보드 패널 높이를 채우고 긴 문서는 안에서 스크롤 (시험 이식에서 발견)', async (t) => {
+  const page = await open(t, { hash: 'docs/질의응답.md' });
+  await page.evaluate(() => {
+    window.docbench.destroy();
+    document.body.innerHTML = '<div id="panel" style="height:510px;display:flex;flex-direction:column"><h2 style="margin:0">문서</h2><doc-bench api="/api" doc="docs/질의응답.md" style="flex:1;min-height:0"></doc-bench></div>';
+  });
+  await page.waitForSelector('doc-bench .db-sec');
+  await page.locator('doc-bench .db-seg button').last().click();   // 전부 펼쳐 문서를 길게
+  const m = await page.evaluate(() => {
+    const el = document.querySelector('doc-bench');
+    const main = el.querySelector('.db-main');
+    main.scrollTop = 200;
+    return { display: getComputedStyle(el).display, elH: el.getBoundingClientRect().height, panelBottom: document.getElementById('panel').getBoundingClientRect().bottom, elBottom: el.getBoundingClientRect().bottom, scrollable: main.scrollHeight > main.clientHeight, scrolled: main.scrollTop > 0 };
+  });
+  assert.equal(m.display, 'flex');
+  assert.ok(Math.abs(m.elBottom - m.panelBottom) < 1, '패널 아래까지 채움 ' + JSON.stringify(m));
+  assert.ok(m.scrollable && m.scrolled, '긴 문서는 작업대 안에서 스크롤 ' + JSON.stringify(m));
 });
 
 test('좁은 칸(380px)·어두운 테마: 가로 넘침 없음', async (t) => {

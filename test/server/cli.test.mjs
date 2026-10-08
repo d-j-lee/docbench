@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 import { repo, tempWorkspace, rm } from './helpers.mjs';
 
 const run = promisify(execFile);
@@ -98,4 +99,18 @@ test('CLI: 넘기기 요청함 보기·비우기, 불린 플래그가 뒤 인자
   await fs.writeFile(file, '# 예제 작업 폴더\n\n바뀜\n');
   const r = await run(process.execPath, [cli, 'doc', 'write', '--file', file, '--json', 'README.md'], { cwd: dir });
   assert.ok(JSON.parse(r.stdout).version);
+});
+
+test('CLI: 홈 폴더는 위로 찾아낸 작업 폴더로 치지 않는다 (홈에 .docbench 가 있어도 종료 2)', async (t) => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), 'docbench-fakehome-'));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  await fs.mkdir(path.join(home, '.docbench'), { recursive: true });
+  await fs.writeFile(path.join(home, 'diary.md'), '# 일기\n');
+  const app = path.join(home, 'projects', 'app');
+  await fs.mkdir(app, { recursive: true });
+  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  delete env.DOCBENCH_ROOT;
+  const r = await run(process.execPath, [path.join(repo, 'bin/docbench.mjs'), 'status'], { cwd: app, env }).then(() => 0, (e) => e.code);
+  assert.equal(r, 2);
+  assert.deepEqual(await fs.readdir(path.join(home, '.docbench')), [], '홈의 .docbench 에 아무것도 만들지 않는다');
 });

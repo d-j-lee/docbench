@@ -6,3 +6,5 @@ export * from './feedback';
 export * from './diff';
 export * from './prompt';
 export * from '../types';
+export * from './textcodec';
+export * from './workspace';

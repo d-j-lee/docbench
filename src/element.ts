@@ -20,7 +20,9 @@ export function defineElement(tag = 'doc-bench'): void {
 
     async connectedCallback() {
       if (this.app) return;
-      if (!this.style.display) this.style.display = 'block';
+      // 사용자 정의 요소는 기본이 inline 이라 무언가 정해야 한다 — 작업대 뿌리(.docbench)와 같은 flex 로.
+      // block 으로 두면 .docbench 의 flex 를 덮어 패널 높이를 못 채우고 긴 문서가 안에서 스크롤되지 않았다(시험 이식에서 발견)
+      if (!this.style.display) this.style.display = 'flex';
       let adapters = this.adapters;
       if (!adapters) {
         const rest = createRestAdapters({ base: this.getAttribute('api') || '/api', token: this.getAttribute('token') || undefined });

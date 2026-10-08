@@ -5,7 +5,7 @@
  *   <작업 폴더>/
  *     *.md                    문서 (정본은 언제나 이 파일들)
  *     .docbench/
- *       config.json           그룹·제목·규칙·AI 연결 (선택)
+ *       config.json           그룹·제목·규칙 (선택, 함께 씀 — 실행 명령·이름은 여기서 읽지 않는다)
  *       feedback/<id>.json    피드백 한 건 = 파일 하나 (사람·AI 가 같이 읽고 쓴다)
  *       changes.jsonl         변경 이력 (한 줄 = 한 번 저장)
  *       blobs/<version>.md    본 적 있는 판의 본문 (바뀐 섹션 계산용, 커밋하지 않음)
@@ -20,9 +20,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { decode, encode, hashBytes, atomicWrite, readJson, writeJson, canEncodeLegacy, EncodingReadOnlyError } from './textio.mjs';
 import crypto from 'node:crypto';
-import { matchAny } from './glob.mjs';
 import { gitInfo, gitShowHead, gitStatus } from './git.mjs';
 import { core } from './core.mjs';
+
+// 규약(설정 기본값·glob·매니페스트·이력 모양)은 브라우저 폴더 어댑터와 같은 src/core/workspace.ts
+const CI = process.platform === 'win32';
+/** @param {string} rel @param {string[] | undefined} pats */
+const matchAny = (rel, pats) => core.matchAny(rel, pats, CI);
 
 export class ConflictError extends Error {
   /** @param {any} current */
@@ -31,46 +35,39 @@ export class ConflictError extends Error {
 export class NotFoundError extends Error { constructor(what) { super('not found: ' + what); this.code = 'NOT_FOUND'; } }
 export class BadRequestError extends Error { constructor(msg) { super(msg); this.code = 'BAD_REQUEST'; } }
 
-/** 파일 이름에 쓸 수 있게: 모든 문자 체계의 글자·숫자는 남긴다 (김철수 → 김철수) @param {string} s */
-const safeName = (s) => String(s).normalize('NFC').replace(/[^\p{L}\p{N}_.@-]/gu, '_').slice(0, 80) || 'me';
+const safeName = core.safeName;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 이 PC 의 설정 파일 — 문서 폴더 밖이라 git·OneDrive·공유 폴더로 퍼지지 않는다. 운영체제의 앱 설정 자리:
+ *   Windows %LOCALAPPDATA%\docbench\config.json (로밍되지 않는 이 PC 자리 — 명령에 이 PC 의 경로가 들어간다)
+ *   macOS   ~/Library/Application Support/docbench/config.json · Linux $XDG_CONFIG_HOME(~/.config)/docbench/config.json
+ *   DOCBENCH_HOME 이 있으면 그 아래 config.json
+ * 홈의 .docbench 폴더에 두지 않는다 — CLI 가 위로 .docbench 를 찾다 홈 폴더를 작업 폴더로 오인했다(독립 검토 재현).
+ */
+export function defaultPcConfigFile() {
+  if (process.env.DOCBENCH_HOME) return path.join(process.env.DOCBENCH_HOME, 'config.json');
+  const home = os.homedir();
+  if (process.platform === 'win32') return path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'docbench', 'config.json');
+  if (process.platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'docbench', 'config.json');
+  return path.join(process.env.XDG_CONFIG_HOME || path.join(home, '.config'), 'docbench', 'config.json');
+}
 /** 경로 접두 비교 — 드라이브 루트(D:\)처럼 이미 구분자로 끝나는 뿌리도 맞게 @param {string} child @param {string} root */
 function isInside(child, root) {
   const r = root.endsWith(path.sep) ? root : root + path.sep;
   return process.platform === 'win32' ? child.toLowerCase().startsWith(r.toLowerCase()) : child.startsWith(r);
 }
 
-const DEFAULT_CONFIG = {
-  title: '',
-  subtitle: '',
-  include: ['**/*.md', '**/*.markdown'],
-  exclude: ['node_modules/**', '.git/**', '.docbench/**', '**/.*/**', '.claude/**'],
-  groups: /** @type {any[]} */ ([]),
-  docs: /** @type {Record<string, any>} */ ({}),
-  trust: undefined,
-  milestones: undefined,
-  render: undefined,
-  assistantName: 'Claude',
-  assistant: /** @type {any} */ (null),
-  /** inbox: .docbench/inbox 에 요청 파일 · command: 넘기기 때 실행할 명령(배열) · message: 화면에 보일 안내 */
-  notify: /** @type {{ inbox?: boolean, command?: string[] | null, message?: string | null }} */ ({ inbox: true, command: null, message: null }),
-  readOnly: false,
-  user: '',
-  maxDocs: 2000,
-  maxInventory: 4000,
-  inventory: { flags: true },
-};
-
-const IGNORE_DIRS = new Set(['.git', 'node_modules', '.docbench', '.svn', '.hg', '__pycache__', '.venv', 'dist', 'build', '.idea', '.vscode']);
+const IGNORE_DIRS = core.IGNORE_DIRS;
 
 export class Workspace {
-  /** @param {string} root @param {{ actor?: any }} [opts] */
+  /** @param {string} root @param {{ actor?: any, pcConfigFile?: string }} [opts] pcConfigFile = 이 PC 의 설정 파일(기본: 사용자 폴더) */
   constructor(root, opts = {}) {
     this.root = path.resolve(root);
     this.dir = path.join(this.root, '.docbench');
     this.actor = opts.actor;
-    /** @type {typeof DEFAULT_CONFIG} */
-    this.config = { ...DEFAULT_CONFIG };
+    /** @type {import('../dist/core.mjs').WorkspaceConfig} */
+    this.config = core.mergeConfig({}, path.basename(this.root));
     /** @type {Map<string, { abs: string, size: number, mtimeMs: number, title?: string, titleMtime?: number }>} */
     this.docs = new Map();
     /** @type {{ prefix: string } | null | undefined} */
@@ -80,6 +77,9 @@ export class Workspace {
     this.realRoot = undefined;
     /** @type {Map<string, Promise<unknown>>} */
     this.chains = new Map();
+    /** 이 프로세스가 쓴 (문서, 판) — 이력 감시가 내 저장을 다시 알리지 않게. 그 줄을 한 번 보면 지운다 @type {Set<string>} */
+    this.ownWrites = new Set();
+    this.pcConfigFile = opts.pcConfigFile || defaultPcConfigFile();
   }
 
   // ------------------------------------------------------------ 시작
@@ -88,8 +88,11 @@ export class Workspace {
     if (!st || !st.isDirectory()) throw new Error('작업 폴더가 없습니다: ' + this.root);
     await this.loadConfig();
     for (const d of ['feedback', 'blobs', 'viewstate', 'inbox']) await fs.mkdir(path.join(this.dir, d), { recursive: true });
+    // 예전 판이 만든 .gitignore 에도 빠진 줄을 덧붙인다(사람이 더한 줄은 그대로)
     const gi = path.join(this.dir, '.gitignore');
-    if (!(await fs.stat(gi).catch(() => null))) await fs.writeFile(gi, 'blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\n');
+    const giText = await fs.readFile(gi, 'utf8').catch(() => null);
+    const giNext = giText == null ? core.DOT_GITIGNORE : core.mergeGitignore(giText);
+    if (giNext != null) await fs.writeFile(gi, giNext);
     this.legacyWritable = await canEncodeLegacy();
     this.git = await gitInfo(this.root).catch(() => null);
     await this.scan();
@@ -97,9 +100,10 @@ export class Workspace {
   }
 
   async loadConfig() {
-    const c = await readJson(path.join(this.dir, 'config.json'), {});
-    this.config = { ...DEFAULT_CONFIG, ...c, notify: { ...DEFAULT_CONFIG.notify, ...(c?.notify || {}) } };
-    if (!this.config.title) this.config.title = path.basename(this.root);
+    // 함께 쓰는 config.json + 이 PC 의 설정(문서 폴더 밖) — 실행 명령·이름은 PC 설정에서만(core.mergeConfig)
+    this.realRoot ??= await fs.realpath(this.root).catch(() => this.root);
+    const pc = core.pcSettingsFor(await readJson(this.pcConfigFile, {}), [this.root, this.realRoot], CI);
+    this.config = core.mergeConfig(await readJson(path.join(this.dir, 'config.json'), {}), path.basename(this.root), pc);
   }
 
   get userId() { return safeName(this.config.user || os.userInfo().username || 'me'); }
@@ -133,7 +137,7 @@ export class Workspace {
       for (const e of ents) {
         if (e.isSymbolicLink()) continue;
         const abs = path.join(dir, e.name);
-        if (e.isDirectory()) { if (!IGNORE_DIRS.has(e.name) && !e.name.startsWith('.')) await walk(abs, depth + 1); continue; }
+        if (e.isDirectory()) { if (core.walkable(e.name)) await walk(abs, depth + 1); continue; }
         const rel = this.rel(abs);
         if (!this.isDoc(rel)) continue;
         const st = await fs.stat(abs).catch(() => null);
@@ -177,12 +181,14 @@ export class Workspace {
     let fh = null;
     try {
       await fs.mkdir(path.dirname(lockFile), { recursive: true });
-      for (let i = 0; ; i++) {
+      const started = Date.now();
+      for (;;) {
         try { fh = await fs.open(lockFile, 'wx'); break; } catch (e) {
           if (/** @type {any} */ (e).code !== 'EEXIST') throw e;
           const st = await fs.stat(lockFile).catch(() => null);
-          if (st && Date.now() - st.mtimeMs > 15000) { await fs.rm(lockFile, { force: true }); continue; } // 죽은 잠금
-          if (i > 100) throw Object.assign(new Error('다른 프로세스가 같은 문서를 쓰고 있습니다. 잠시 뒤 다시 시도하세요.'), { code: 'BUSY' });
+          if (st && Date.now() - st.mtimeMs > core.LOCK_STALE_MS) { await fs.rm(lockFile, { force: true }); continue; } // 죽은 잠금
+          // 죽은 잠금이 치워질 때(15초)보다 조금 더 기다린다 — 남은 잠금 하나로 쓰기가 실패하지 않게
+          if (Date.now() - started > core.LOCK_STALE_MS + 3000) throw Object.assign(new Error('다른 프로세스가 같은 문서를 쓰고 있습니다. 잠시 뒤 다시 시도하세요.'), { code: 'BUSY' });
           await sleep(30 + Math.random() * 40);
         }
       }
@@ -230,7 +236,7 @@ export class Workspace {
     id = this.canonId(id);
     if (this.config.readOnly || this.config.docs?.[id]?.readOnly) throw Object.assign(new Error('읽기 전용 문서'), { code: 'READ_ONLY', reason: 'config' });
     if (typeof md !== 'string') throw new BadRequestError('md 가 필요합니다');
-    return this.withLock('doc:' + id.toLowerCase(), () => this.writeDocLocked(id, md, o));
+    return this.withLock(core.lockKey.doc(id), () => this.writeDocLocked(id, md, o));
   }
 
   /** @param {string} id @param {string} md @param {any} o */
@@ -248,12 +254,26 @@ export class Workspace {
     if (version === cur.version) return { version, updatedAt: new Date(cur.st.mtimeMs).toISOString(), unchanged: true };
     await this.storeBlob(cur.version, cur.text);
     await this.storeBlob(version, text);
-    // 감시자가 이 쓰기를 '외부 편집'으로 오해하지 않게 먼저 새 판을 알려 둔다
-    await this.setKnown(id, version);
-    try { await atomicWrite(cur.abs, buf); } catch (e) { await this.setKnown(id, cur.version); throw e; }
     const updatedAt = new Date().toISOString();
     const ds = core.diffSections(cur.text, text);
-    await this.appendChange({ at: updatedAt, docId: id, by: o.by || this.actor || this.me, summary: o.summary || undefined, fromVersion: cur.version, toVersion: version, feedbackIds: o.feedbackIds?.length ? o.feedbackIds : undefined, sections: [...ds.changed, ...ds.added] });
+    // 문서 쓰기와 그 이력 줄은 한 덩어리 — 이력 잠금을 먼저 잡고 쓴다. 잠금을 못 잡으면 문서도 쓰지 않는다
+    // (나중에 잡다 실패하면 문서는 바뀌었는데 이력이 없고 '실패'로 보고됐다 — 독립 검토 재현). 잠금 순서: 문서 → 이력 → 상태
+    await this.withLock(core.lockKey.changes, async () => {
+      // 감시자가 이 쓰기를 '외부 편집'으로 오해하지 않게 먼저 새 판을 알려 둔다
+      await this.setKnown(id, version);
+      try {
+        // 잠금은 브라우저(단일 HTML)와는 최선 노력이다 — 쓰기 직전에 한 번 더 판을 본다. 그 사이 바뀌었으면 덮지 않는다
+        const now = await fs.readFile(cur.abs).catch(() => null);
+        if (!now || hashBytes(now) !== cur.version) {
+          await this.setKnown(id, cur.version);
+          const fresh = await this.readRaw(id);
+          throw new ConflictError({ id, md: fresh.text, version: fresh.version, updatedAt: new Date(fresh.st.mtimeMs).toISOString() });
+        }
+        this.noteOwnWrite(id, version);
+        await atomicWrite(cur.abs, buf);
+      } catch (e) { if (!(e instanceof ConflictError)) await this.setKnown(id, cur.version); throw e; }
+      await fs.appendFile(this.changesFile, core.changeLine({ at: updatedAt, docId: id, by: o.by || this.actor || this.me, summary: o.summary || undefined, fromVersion: cur.version, toVersion: version, feedbackIds: o.feedbackIds?.length ? o.feedbackIds : undefined, sections: [...ds.changed, ...ds.added], removed: ds.removed.length ? ds.removed : undefined }));
+    });
     const st = await fs.stat(cur.abs).catch(() => null);
     if (st) this.docs.set(id, { abs: cur.abs, size: st.size, mtimeMs: st.mtimeMs });
     return { version, updatedAt };
@@ -288,7 +308,7 @@ export class Workspace {
   async known() { return (await readJson(path.join(this.dir, 'state.json'), { docs: {} })) || { docs: {} }; }
   /** @param {string} id @param {string} v */
   async setKnown(id, v) {
-    await this.withLock('state', async () => {
+    await this.withLock(core.lockKey.state, async () => {
       const s = await this.known();
       s.docs[id] = v;
       await writeJson(path.join(this.dir, 'state.json'), s);
@@ -310,7 +330,7 @@ export class Workspace {
     if (await this.hasChangeTo(id, r.version)) return true;
     const old = await this.docVersion(id, prev);
     const ds = old ? core.diffSections(old.md, r.text) : null;
-    await this.appendChange({ at: new Date(r.st.mtimeMs).toISOString(), docId: id, by: { kind: 'external' }, fromVersion: prev, toVersion: r.version, sections: ds ? [...ds.changed, ...ds.added] : undefined });
+    await this.appendChange({ at: new Date(r.st.mtimeMs).toISOString(), docId: id, by: { kind: 'external' }, fromVersion: prev, toVersion: r.version, sections: ds ? [...ds.changed, ...ds.added] : undefined, removed: ds?.removed.length ? ds.removed : undefined });
     return true;
   }
   async reconcileAll() {
@@ -322,35 +342,26 @@ export class Workspace {
   // ------------------------------------------------------------ 변경 이력
   get changesFile() { return path.join(this.dir, 'changes.jsonl'); }
   /** @param {any} entry */
+  /** @param {string} id @param {string} v */
+  noteOwnWrite(id, v) {
+    this.ownWrites.add(id + '\0' + v);
+    if (this.ownWrites.size > 500) this.ownWrites.delete(this.ownWrites.values().next().value);
+  }
+
+  /** @param {any} entry */
   async appendChange(entry) {
-    const clean = JSON.parse(JSON.stringify(entry));
-    await fs.appendFile(this.changesFile, JSON.stringify(clean) + '\n');
+    // 브라우저(단일 HTML)는 덧붙이기를 파일 바꿔 끼우기로 한다 — 같은 잠금 안에서 덧붙여야 줄이 사라지지 않는다
+    await this.withLock(core.lockKey.changes, () => fs.appendFile(this.changesFile, core.changeLine(entry)));
   }
   /** @param {number} [limit] */
   async changes(limit = 300) {
     let text = '';
     try { text = await fs.readFile(this.changesFile, 'utf8'); } catch { return []; }
-    const lines = text.split('\n').filter(Boolean).slice(-Math.max(limit * 2, 400));
-    /** @type {any[]} */
-    const out = [];
-    for (const l of lines) { try { out.push(JSON.parse(l)); } catch { /* 깨진 줄 건너뜀 */ } }
-    // note 줄(요약 덧붙이기)은 같은 판의 변경에 합친다
-    const merged = [];
-    for (const e of out) {
-      if (e.type === 'note') {
-        const tgt = [...merged].reverse().find((m) => m.docId === e.docId && (!e.toVersion || m.toVersion === e.toVersion));
-        if (tgt) { tgt.summary = e.summary || tgt.summary; tgt.feedbackIds = [...new Set([...(tgt.feedbackIds || []), ...(e.feedbackIds || [])])]; if (e.by && tgt.by?.kind === 'external') tgt.by = e.by; continue; }
-        merged.push({ ...e, type: undefined });
-      } else merged.push(e);
-    }
-    return merged.slice(-limit);
+    return core.parseChanges(text, limit);
   }
   /** @param {string} id @param {string} v */
   async hasChangeTo(id, v) {
-    // 가장 최근 기록만 본다 — 예전 판으로 되돌린 외부 편집도 새 기록으로 남게
-    const list = await this.changes(200);
-    const last = list.filter((c) => c.docId === id).at(-1);
-    return !!last && last.toVersion === v;
+    return core.lastChangeIs(await this.changes(200), id, v);
   }
 
   // ------------------------------------------------------------ 매니페스트
@@ -359,7 +370,7 @@ export class Workspace {
     const d = this.docs.get(id);
     if (!d) return path.posix.basename(id);
     if (d.title && d.titleMtime === d.mtimeMs) return d.title;
-    let title = path.posix.basename(id).replace(/\.(md|markdown)$/i, '');
+    let title = core.titleFromText('', id);
     try {
       const fh = await fs.open(d.abs, 'r');
       const { buffer, bytesRead } = await fh.read(Buffer.alloc(8192), 0, 8192, 0);
@@ -371,68 +382,24 @@ export class Workspace {
           try { new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, head.length - k)); head = head.subarray(0, head.length - k); break; } catch { /* 한 바이트 더 */ }
         }
       }
-      const text = decode(head).text;
-      const m = text.match(/^#\s+(.+)$/m);
-      if (m) title = core.headingPlain(m[1]).slice(0, 80);
+      title = core.titleFromText(decode(head).text, id);
     } catch { /* 이름으로 */ }
     d.title = title; d.titleMtime = d.mtimeMs;
     return title;
   }
 
   async manifest() {
-    const c = this.config;
-    const ids = [...this.docs.keys()].sort((a, b) => {
-      const ra = /(^|\/)readme\.md$/i.test(a) ? 0 : 1, rb = /(^|\/)readme\.md$/i.test(b) ? 0 : 1;
-      const da = a.split('/').length, db = b.split('/').length;
-      return da - db || ra - rb || a.localeCompare(b, 'ko');
-    });
-    const groups = [];
-    const taken = new Set();
-    for (const g of c.groups || []) {
-      const docs = ids.filter((id) => !taken.has(id) && matchAny(id, g.match || []));
-      docs.forEach((d) => taken.add(d));
-      groups.push({ id: g.id || g.label, label: g.label, note: g.note, docs, collapsed: g.collapsed });
-    }
-    const rest = ids.filter((id) => !taken.has(id));
-    const byDir = new Map();
-    for (const id of rest) {
-      const top = id.includes('/') ? id.split('/')[0] : '';
-      if (!byDir.has(top)) byDir.set(top, []);
-      byDir.get(top).push(id);
-    }
-    for (const [dir, docs] of [...byDir.entries()].sort((a, b) => (a[0] === '' ? -1 : b[0] === '' ? 1 : a[0].localeCompare(b[0], 'ko')))) {
-      groups.push({ id: 'dir:' + (dir || '.'), label: dir || '문서', docs });
-    }
-    groups.unshift({ id: '_bench', label: '작업대', docs: [], views: ['map', 'changes'] });
-    /** @type {Record<string, any>} */
-    const docs = {};
-    for (const id of ids) {
-      const d = this.docs.get(id);
-      const over = c.docs?.[id] || {};
-      docs[id] = {
-        title: over.title || (await this.titleOf(id)),
-        role: over.role, audience: over.audience, trust: over.trust, depth: over.depth, notice: over.notice,
-        readOnly: c.readOnly || over.readOnly || undefined,
-        source: { path: id, size: d?.size, modified: d ? new Date(d.mtimeMs).toISOString() : undefined },
-      };
-    }
-    return {
-      schema: 2,
-      project: { name: c.title, subtitle: c.subtitle || this.root, links: c.links },
-      milestones: c.milestones,
-      trust: c.trust,
-      groups,
-      docs,
-      render: c.render,
-      assistantName: c.assistantName,
-    };
+    /** @type {Map<string, { title: string, size?: number, mtimeMs?: number }>} */
+    const info = new Map();
+    for (const [id, d] of this.docs) info.set(id, { title: await this.titleOf(id), size: d.size, mtimeMs: d.mtimeMs });
+    return core.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI);
   }
 
   // ------------------------------------------------------------ 피드백
   get fbDir() { return path.join(this.dir, 'feedback'); }
   /** @param {string} id */
   fbFile(id) {
-    if (!/^[\w.-]{1,120}$/.test(id)) throw new BadRequestError('잘못된 피드백 id');
+    if (!core.validFeedbackId(id)) throw new BadRequestError('잘못된 피드백 id');
     return path.join(this.fbDir, id + '.json');
   }
   async listFeedback() {
@@ -465,7 +432,7 @@ export class Workspace {
   /** @param {string} id @param {any} patch @param {number} [version] */
   async updateFeedback(id, patch, version) {
     this.fbFile(id);
-    return this.withLock('fb:' + id, () => this.updateFeedbackLocked(id, patch, version));
+    return this.withLock(core.lockKey.feedback(id), () => this.updateFeedbackLocked(id, patch, version));
   }
   /** @param {string} id @param {any} patch @param {number} [version] */
   async updateFeedbackLocked(id, patch, version) {
@@ -473,6 +440,9 @@ export class Workspace {
     if (version != null && cur.version != null && version !== cur.version) throw new ConflictError(cur);
     const { id: _i, createdAt: _c, version: _v, ...rest } = patch || {};
     const next = core.normalizeFeedback({ ...cur, ...rest, version: (cur.version || 1) + 1, updatedAt: new Date().toISOString() }, id);
+    // 쓰기 직전에 다시 — 브라우저와의 잠금은 최선 노력이라 그 사이 다른 쪽이 고쳤으면 덮지 않는다
+    const again = await this.getFeedback(id);
+    if (again.version !== cur.version) throw new ConflictError(again);
     await writeJson(this.fbFile(id), next);
     return next;
   }
@@ -486,7 +456,7 @@ export class Workspace {
   async saveViewState(s, user = this.userId) { await writeJson(path.join(this.dir, 'viewstate', safeName(user) + '.json'), s); }
   /** @param {any} req */
   async addRequest(req) {
-    const f = path.join(this.dir, 'inbox', `req-${Date.now()}.json`);
+    const f = path.join(this.dir, 'inbox', core.requestFileName());
     await writeJson(f, { at: new Date().toISOString(), ...req });
     return f;
   }
@@ -507,7 +477,7 @@ export class Workspace {
         const abs = path.join(dir, e.name);
         const rel = parent + e.name;
         if (e.isDirectory()) {
-          if (IGNORE_DIRS.has(e.name) || e.name.startsWith('.')) continue;
+          if (!core.walkable(e.name)) continue;
           const st = await fs.stat(abs).catch(() => null);
           items.push({ id: rel + '/', parent, name: e.name, folder: true, modified: st ? new Date(st.mtimeMs).toISOString() : undefined });
           await walk(abs, rel + '/', depth + 1);
@@ -528,7 +498,7 @@ export class Workspace {
       asof: new Date().toISOString(),
       source: this.root + (items.length >= max ? ` (처음 ${max}개)` : ''),
       items,
-      flagLabels: { doc: { label: '문서', tone: 'good' }, modified: { label: '커밋 안 됨', tone: 'warn' }, untracked: { label: '새 파일', tone: 'info' }, added: { label: '추가됨', tone: 'info' } },
+      flagLabels: core.INVENTORY_FLAG_LABELS,
       open: [],
     };
   }
@@ -546,7 +516,7 @@ export class Workspace {
       if (!rel) return;
       rel = rel.split(path.sep).join('/');
       if (rel.startsWith('.docbench/feedback/')) return later('fb', () => emit({ type: 'feedback' }), 150);
-      if (rel === '.docbench/changes.jsonl') return later('changes', () => emit({ type: 'changes' }), 200);
+      if (rel === '.docbench/changes.jsonl') return later('changes', () => void announceChanges(), 200);
       if (rel === '.docbench/config.json') return later('config', async () => { await this.loadConfig(); await this.scan(); emit({ type: 'manifest' }); });
       if (rel.startsWith('.docbench/') || rel.split('/').some((s) => IGNORE_DIRS.has(s))) return;
       if (!this.isDoc(rel)) return;
@@ -557,16 +527,69 @@ export class Workspace {
       });
     };
     const self = this;
+    // 이력에 새로 붙은 줄의 문서를 알린다 — CLI 는 새 판을 state.json 에 먼저 적어 '외부 편집'이 아니므로
+    // 이것이 없으면 터미널의 Claude 가 고친 문서를 화면이 다시 읽지 않는다(e2e 로 재현)
+    // 위치는 완성된 줄(마지막 줄바꿈)까지만 옮긴다 — 반쯤 쓴 줄은 다음에. 파일이 줄면(되돌림) 거기서부터 다시.
+    // 한 번에 하나만 돈다(겹치면 위치가 두 번 옮겨져 줄을 건너뛰었다 — 독립 검토 재현). 돌고 있으면 끝난 뒤 한 번 더
+    let changesOffset = -1;
+    let announcing = null;
+    let announceAgain = false;
+    const announceChanges = async () => {
+      if (announcing) { announceAgain = true; return announcing; }
+      announcing = (async () => {
+        do { announceAgain = false; await announceOnce(); } while (announceAgain);
+      })().finally(() => { announcing = null; });
+      return announcing;
+    };
+    const announceOnce = async () => {
+      const st = await fs.stat(this.changesFile).catch(() => null);
+      const size = st?.size ?? 0;
+      if (changesOffset < 0 || size < changesOffset) { changesOffset = size; emit({ type: 'changes' }); return; }
+      if (size > changesOffset) {
+        const fh = await fs.open(this.changesFile, 'r').catch(() => null);
+        if (fh) {
+          try {
+            const { buffer, bytesRead } = await fh.read(Buffer.alloc(size - changesOffset), 0, size - changesOffset, changesOffset);
+            const { entries, consumed } = core.completeChangeLines(buffer.subarray(0, bytesRead));
+            changesOffset += consumed;
+            const ids = new Set();
+            // 이 프로세스가 쓴 (문서, 판)은 이미 알렸다(PUT 응답 뒤 handler 가 doc 이벤트를 낸다). 한 번 보면 지운다 —
+            // 나중에 남이 같은 바이트로 되돌린 것은 다시 알려야 하므로
+            for (const e of entries) {
+              if (!e?.docId) continue;
+              const k = e.docId + '\0' + e.toVersion;
+              if (e.toVersion && this.ownWrites.has(k)) { this.ownWrites.delete(k); continue; }
+              ids.add(e.docId);
+            }
+            for (const id of ids) emit({ type: 'doc', id });
+          } finally { await fh.close(); }
+        }
+      }
+      emit({ type: 'changes' });
+    };
+    void fs.stat(this.changesFile).then((st) => { if (changesOffset < 0) changesOffset = st.size; }, () => { if (changesOffset < 0) changesOffset = 0; });
+    // 폴링 때(감시가 안 되는 드라이브·알림 넘침) 피드백 폴더도 본다 — 이름·크기·시각 묶음이 바뀌면 알림
+    let fbSig = '';
+    const pollAll = async () => {
+      await self.pollOnce(emit);
+      const st = await fs.stat(this.changesFile).catch(() => null);
+      if ((st?.size ?? 0) !== changesOffset) await announceChanges();
+      const names = (await fs.readdir(this.fbDir).catch(() => [])).filter((n) => n.endsWith('.json')).sort();
+      const sts = await Promise.all(names.map((n) => fs.stat(path.join(this.fbDir, n)).catch(() => null)));
+      const sig = names.map((n, i) => `${n}@${sts[i]?.size}:${sts[i]?.mtimeMs}`).join('|') || 'none';
+      if (fbSig && sig !== fbSig) emit({ type: 'feedback' });
+      fbSig = sig;
+    };
     let watcher = null;
     let poll = null;
     try {
       // 파일 이름 없이 오는 알림(Windows 버퍼 넘침 등)은 전체를 한 번 훑는다
-      watcher = fsWatch(this.root, { recursive: true }, (_ev, file) => (file ? onPath(String(file)) : later('poll', () => void self.pollOnce(emit), 300)));
+      watcher = fsWatch(this.root, { recursive: true }, (_ev, file) => (file ? onPath(String(file)) : later('poll', () => void pollAll(), 300)));
       watcher.on('error', () => { watcher?.close(); watcher = null; startPoll(); });
     } catch { startPoll(); }
-    function startPoll() { if (!poll) poll = setInterval(() => void self.pollOnce(emit), 3000); }
+    function startPoll() { if (!poll) poll = setInterval(() => void pollAll(), 3000); }
     // 안전망: 네트워크 드라이브처럼 알림이 안 오는 곳을 위해 30초마다 한 번 훑는다
-    const safety = setInterval(() => { if (!poll) void self.pollOnce(emit); }, 30000);
+    const safety = setInterval(() => { if (!poll) void pollAll(); }, 30000);
     return () => { watcher?.close(); if (poll) clearInterval(poll); clearInterval(safety); timers.forEach(clearTimeout); };
   }
   /** @param {(ev: {type: string, id?: string}) => void} emit */
