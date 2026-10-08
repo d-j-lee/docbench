@@ -1,0 +1,110 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { Workspace } from '../../server/workspace.mjs';
+import { tempWorkspace, rm } from './helpers.mjs';
+
+test('작업 폴더: 문서 목록·매니페스트·그룹', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir).init();
+  assert.equal(ws.docs.size, 6);
+  const m = await ws.manifest();
+  assert.equal(m.schema, 2);
+  assert.deepEqual(m.groups.map((g) => g.id), ['_bench', 'intro', 'core', 'qa', 'notes']);
+  assert.equal(m.docs['docs/설계-노트.md'].trust, 'draft');
+  assert.equal(m.docs['notes/옛-회의록.md'].title, '옛 회의록 (2019)');
+});
+
+test('경로 밖·대상 아닌 파일은 거부', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir).init();
+  for (const bad of ['../x.md', '/etc/passwd', 'C:/x.md', 'docs/../../x.md', 'data/지표.csv', '.docbench/config.json', 'a\0b.md']) {
+    await assert.rejects(ws.readDoc(bad), { code: 'BAD_REQUEST' }, bad);
+  }
+});
+
+test('심볼릭 링크로 작업 폴더 밖을 가리키면 거부', { skip: process.platform === 'win32' }, async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const outside = await fs.mkdtemp(path.join((await import('node:os')).tmpdir(), 'outside-'));
+  t.after(() => rm(outside));
+  await fs.writeFile(path.join(outside, 'secret.md'), '# 비밀\n');
+  await fs.symlink(path.join(outside, 'secret.md'), path.join(dir, 'docs/link.md'));
+  const ws = await new Workspace(dir).init();
+  await assert.rejects(ws.readDoc('docs/link.md'), { code: 'BAD_REQUEST' });
+});
+
+test('저장: 판이 다르면 충돌, 같으면 저장하고 이력·바뀐 섹션 기록', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir, { actor: { kind: 'assistant', name: 'Claude' } }).init();
+  const d = await ws.readDoc('docs/운영-런북.md');
+  await assert.rejects(ws.writeDoc(d.id, d.md + 'x', { baseVersion: '0000000000000000' }), (e) => e.code === 'CONFLICT' && e.current.version === d.version);
+  const next = d.md.replace('TODO: 멱등 키 확인 절차 정리', '멱등 키는 요청 id 로 확인한다.');
+  const r = await ws.writeDoc(d.id, next, { baseVersion: d.version, summary: '중복 발송 절차', feedbackIds: ['fb-1'] });
+  assert.notEqual(r.version, d.version);
+  const ch = await ws.changes();
+  assert.equal(ch.length, 1);
+  assert.deepEqual(ch[0].sections, ['알림 서비스 운영 런북 › 장애 대응 › 중복 발송']);
+  assert.equal(ch[0].by.kind, 'assistant');
+  assert.equal((await ws.docVersion(d.id, d.version)).md, d.md, '이전 판 본문 보관');
+  assert.deepEqual(await ws.writeDoc(d.id, next, { baseVersion: r.version }).then((x) => !!x.unchanged), true);
+});
+
+test('BOM·CRLF·EUC-KR 문서는 저장 후에도 모양 유지', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir).init();
+  for (const id of ['notes/윈도우-메모.md', 'notes/옛-회의록.md']) {
+    const before = await fs.readFile(path.join(dir, id));
+    const d = await ws.readDoc(id);
+    await ws.writeDoc(id, d.md + '\n추가\n', { baseVersion: d.version });
+    const after = await fs.readFile(path.join(dir, id));
+    assert.equal(after.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), before.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])), id + ' BOM');
+    const s = after.toString('latin1');
+    assert.equal(s.split('\r\n').length - 1, s.split('\n').length - 1, id + ' 모든 줄이 CRLF');
+    const again = await ws.readDoc(id);
+    assert.equal(again.encoding, d.encoding);
+    assert.ok(again.md.endsWith('추가\n'));
+  }
+});
+
+test('외부 편집 감지: 에디터가 직접 고치면 external 로 기록', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir).init();
+  await ws.reconcileAll();
+  const f = path.join(dir, 'docs/질의응답.md');
+  await fs.appendFile(f, '\n## 추가 질문\n\n답.\n');
+  assert.equal(await ws.reconcile('docs/질의응답.md'), true);
+  assert.equal(await ws.reconcile('docs/질의응답.md'), false, '두 번 기록하지 않음');
+  const ch = await ws.changes();
+  assert.equal(ch.at(-1).by.kind, 'external');
+  assert.deepEqual(ch.at(-1).sections, ['알림 서비스 질의응답 › 추가 질문']);
+  await ws.appendChange({ type: 'note', at: new Date().toISOString(), docId: 'docs/질의응답.md', toVersion: ch.at(-1).toVersion, by: { kind: 'assistant', name: 'Claude' }, summary: '질문 추가' });
+  const merged = (await ws.changes()).at(-1);
+  assert.equal(merged.summary, '질문 추가');
+  assert.equal(merged.by.kind, 'assistant', '요약을 단 쪽이 작성자로');
+});
+
+test('피드백: 만들기·고치기(판 충돌)·지우기, 파일 하나 = 한 건', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir, { actor: { kind: 'human', name: 'dj' } }).init();
+  const f = await ws.createFeedback({ docId: 'docs/설계-노트.md', target: { kind: 'section', path: ['알림 서비스 설계 노트', '위험', '메모'], heading: '메모' }, body: '수치' });
+  assert.equal(f.waitingOn, 'assistant'); assert.equal(f.version, 1);
+  assert.ok((await fs.readdir(path.join(dir, '.docbench/feedback'))).includes(f.id + '.json'));
+  const g = await ws.updateFeedback(f.id, { status: 'resolved' }, 1);
+  assert.equal(g.version, 2);
+  await assert.rejects(ws.updateFeedback(f.id, { status: 'open' }, 1), { code: 'CONFLICT' });
+  await assert.rejects(ws.createFeedback({ docId: '../x.md', body: '' }), { code: 'BAD_REQUEST' });
+  await assert.rejects(ws.getFeedback('../../etc'), { code: 'BAD_REQUEST' });
+  await ws.deleteFeedback(f.id);
+  assert.equal((await ws.listFeedback()).length, 0);
+});
+
+test('폴더 지도: 문서 아닌 파일도 보이고 문서 표시', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const ws = await new Workspace(dir).init();
+  const inv = await ws.inventory();
+  const csv = inv.items.find((i) => i.id === 'data/지표.csv');
+  assert.ok(csv && !csv.docId);
+  assert.ok(inv.items.find((i) => i.id === 'docs/설계-노트.md').flags.includes('doc'));
+  assert.ok(!inv.items.some((i) => i.id.startsWith('.docbench')));
+});

@@ -1,0 +1,11 @@
+node_modules/
+# 빌드 결과는 npm install(prepare) 이 만든다
+dist/
+*.tmp
+.DS_Store
+__pycache__/
+test-results/
+coverage/
+# 예제 작업 폴더에서 서버가 만드는 상태는 커밋하지 않는다 (config.json만 남긴다)
+examples/sample-workspace/.docbench/*
+!examples/sample-workspace/.docbench/config.json

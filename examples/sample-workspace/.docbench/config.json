@@ -1,0 +1,81 @@
+{
+  "title": "알림 서비스 문서",
+  "subtitle": "DocBench 예제 작업 폴더",
+  "groups": [
+    {
+      "id": "intro",
+      "label": "안내",
+      "match": [
+        "README.md"
+      ]
+    },
+    {
+      "id": "core",
+      "label": "핵심 문서",
+      "match": [
+        "docs/설계-노트.md",
+        "docs/운영-런북.md"
+      ]
+    },
+    {
+      "id": "qa",
+      "label": "설명회 준비",
+      "match": [
+        "docs/질의응답.md"
+      ],
+      "note": "질문만 보이게 열립니다 (답은 접힘)"
+    },
+    {
+      "id": "notes",
+      "label": "메모",
+      "match": [
+        "notes/**"
+      ],
+      "collapsed": true
+    }
+  ],
+  "trust": {
+    "canon": {
+      "label": "정본",
+      "desc": "결정이 반영된 문서",
+      "tone": "good"
+    },
+    "draft": {
+      "label": "초안",
+      "desc": "검토 중",
+      "tone": "warn"
+    },
+    "ref": {
+      "label": "참고",
+      "desc": "옛 기록 — 고치지 않음",
+      "tone": "neutral"
+    }
+  },
+  "docs": {
+    "docs/설계-노트.md": {
+      "trust": "draft",
+      "role": "설계",
+      "audience": "플랫폼팀"
+    },
+    "docs/운영-런북.md": {
+      "trust": "canon",
+      "role": "운영"
+    },
+    "docs/질의응답.md": {
+      "trust": "draft",
+      "depth": 3
+    },
+    "notes/옛-회의록.md": {
+      "trust": "ref",
+      "notice": {
+        "text": "2019년 기록입니다. 지금 결정과 다를 수 있습니다.",
+        "tone": "warn"
+      }
+    }
+  },
+  "assistantName": "Claude",
+  "assistant": null,
+  "notify": {
+    "inbox": true
+  }
+}

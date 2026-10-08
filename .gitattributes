@@ -1,0 +1,15 @@
+* text=auto eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+*.ts text eol=lf
+*.json text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.sh text eol=lf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+# 인코딩·줄바꿈 보존 테스트용 원본은 바이트 그대로 둔다
+test/fixtures/** -text
+# 예제의 BOM·CRLF·EUC-KR 문서도 바이트 그대로
+examples/sample-workspace/notes/** -text

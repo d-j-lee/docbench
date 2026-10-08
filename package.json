@@ -1,0 +1,64 @@
+{
+  "name": "docbench",
+  "version": "0.1.0",
+  "description": "사람과 AI가 같은 문서를 이해·피드백·수정·관리하는 작업대 — 접기 뷰어, 섹션 피드백, 편집 도우미, 로컬 작업 폴더 서버",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "docbench": "bin/docbench.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/docbench.js"
+    },
+    "./core": {
+      "types": "./dist/types/core/index.d.ts",
+      "import": "./dist/core.mjs"
+    },
+    "./server": "./server/index.mjs",
+    "./style.css": "./dist/docbench.css"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "server",
+    "integrations",
+    "docs",
+    "README.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "prepare": "node scripts/build.mjs",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.server.json --noEmit",
+    "test": "npm run test:unit && npm run test:server",
+    "test:unit": "vitest run",
+    "test:server": "node scripts/node-test.mjs test/server",
+    "test:e2e": "node scripts/node-test.mjs test/e2e",
+    "check": "npm run typecheck && npm run build && npm test && npm run test:e2e",
+    "serve:sample": "node bin/docbench.mjs serve examples/sample-workspace --port 4317"
+  },
+  "optionalDependencies": {
+    "iconv-lite": "^0.7.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "diff": "^9.0.0",
+    "dompurify": "^3.4.16",
+    "esbuild": "^0.28.2",
+    "jsdom": "^30.1.2",
+    "marked": "^18.1.0",
+    "playwright": "1.47.2",
+    "typescript": "^5.9.3",
+    "vitest": "^5.0.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/d-j-lee/docbench.git"
+  }
+}

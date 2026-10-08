@@ -1,0 +1,241 @@
+openapi: 3.1.0
+info:
+  title: DocBench REST
+  version: 0.1.0
+  description: |
+    화면(createRestAdapters)과 저장소 서버 사이의 계약. 로컬 작업 폴더 서버(server/handler.mjs)가 구현하며,
+    사내 백엔드가 같은 계약을 구현하면 화면을 그대로 붙일 수 있다.
+
+    공통 규칙
+    - 본문 줄바꿈은 항상 LF. 원래 줄바꿈·인코딩 복원은 서버 책임.
+    - GET 이 아닌 요청은 `X-DocBench: 1` 헤더 필수(CSRF). 토큰을 쓰면 `Authorization: Bearer <token>`.
+    - 판(version)은 서버가 정하는 불투명 문자열. 같으면 같은 본문.
+servers:
+  - url: http://127.0.0.1:4317/api
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer }
+  parameters:
+    DocId:
+      name: id
+      in: query
+      required: true
+      description: 작업 폴더 기준 상대 경로 (예 docs/설계-노트.md)
+      schema: { type: string }
+  schemas:
+    Person:
+      type: object
+      properties:
+        kind: { enum: [human, assistant, external] }
+        id: { type: string }
+        name: { type: string }
+      required: [kind]
+    Manifest:
+      type: object
+      description: src/types.ts Manifest (schema 2)
+      properties:
+        schema: { const: 2 }
+        project: { type: object, properties: { name: { type: string }, subtitle: { type: string }, links: { type: array } } }
+        milestones: { type: array }
+        trust: { type: object, additionalProperties: true }
+        groups:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              label: { type: string }
+              note: { type: string }
+              docs: { type: array, items: { type: string } }
+              views: { type: array, items: { enum: [map, changes] } }
+              collapsed: { type: boolean }
+        docs: { type: object, additionalProperties: { $ref: '#/components/schemas/DocMeta' } }
+        render: { type: object }
+        assistantName: { type: string }
+      required: [schema, project, groups, docs]
+    DocMeta:
+      type: object
+      properties:
+        title: { type: string }
+        role: { type: string }
+        audience: { type: string }
+        trust: { type: string }
+        depth: { type: integer }
+        notice: { type: object, properties: { text: { type: string }, tone: { type: string } } }
+        source: { type: object }
+        readOnly: { type: boolean }
+      required: [title]
+    DocContent:
+      type: object
+      properties:
+        id: { type: string }
+        md: { type: string, description: LF 텍스트 }
+        version: { type: string }
+        updatedAt: { type: string, format: date-time }
+        encoding: { enum: [utf-8, euc-kr, utf-16le, utf-16be] }
+        mixedEol: { type: boolean, description: CRLF 와 LF 가 섞인 파일 }
+        eol: { enum: [lf, crlf] }
+        bom: { type: boolean }
+        readOnly: { type: boolean }
+        readOnlyReason: { enum: [encoding, invalid-utf8, config], description: 'encoding = 바이트 그대로 다시 쓸 수 없는 인코딩, invalid-utf8 = 깨진 바이트가 섞인 UTF-8' }
+      required: [id, md, version]
+    Feedback:
+      type: object
+      description: src/types.ts Feedback. 예전 모양도 받아 normalizeFeedback 으로 맞춘다.
+      properties:
+        id: { type: string }
+        version: { type: integer }
+        docId: { type: string }
+        target:
+          oneOf:
+            - { type: object, properties: { kind: { const: doc } } }
+            - { type: object, properties: { kind: { const: section }, path: { type: array, items: { type: string } }, heading: { type: string }, occurrence: { type: integer, minimum: 2 } } }
+            - { type: object, properties: { kind: { const: item }, itemId: { type: string }, label: { type: string } } }
+        selector: { type: object, properties: { exact: { type: string }, prefix: { type: string }, suffix: { type: string } } }
+        title: { type: string }
+        body: { type: string }
+        kind: { type: string }
+        severity: { enum: [high, medium, low] }
+        status: { enum: [open, resolved, declined] }
+        waitingOn: { enum: [owner, assistant] }
+        author: { $ref: '#/components/schemas/Person' }
+        thread: { type: array, items: { type: object, properties: { author: { $ref: '#/components/schemas/Person' }, text: { type: string }, at: { type: string } } } }
+        proposal: { type: object, properties: { path: { type: array, items: { type: string } }, before: { type: string }, after: { type: string }, rationale: { type: string }, author: { $ref: '#/components/schemas/Person' }, at: { type: string }, state: { enum: [pending, applied, rejected] } } }
+        wasCollapsed: { type: boolean }
+        createdAt: { type: string }
+        updatedAt: { type: string }
+    Change:
+      type: object
+      properties:
+        at: { type: string }
+        docId: { type: string }
+        by: { $ref: '#/components/schemas/Person' }
+        summary: { type: string }
+        fromVersion: { type: string }
+        toVersion: { type: string }
+        feedbackIds: { type: array, items: { type: string } }
+        sections: { type: array, items: { type: string }, description: 바뀐 섹션 키 }
+    Error:
+      type: object
+      properties:
+        error: { enum: [CONFLICT, BUSY, NOT_FOUND, BAD_REQUEST, READ_ONLY, TOO_LARGE, CSRF, UNAUTHORIZED, HOST_NOT_ALLOWED, NO_ASSISTANT, SECTION_MOVED, INTERNAL] }
+        message: { type: string }
+        reason: { type: string }
+        current: { description: 409 일 때 서버의 현재 값 (DocContent 또는 Feedback) }
+security:
+  - {}
+  - bearer: []
+paths:
+  /session:
+    get:
+      summary: 나·권한·켜진 기능
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  me: { $ref: '#/components/schemas/Person' }
+                  permissions: { type: array, items: { enum: [doc.edit, feedback.create, feedback.update, feedback.delete, assistant.propose, assistant.notify] } }
+                  assistant: { type: [object, 'null'], properties: { name: { type: string } } }
+                  notify: { type: [object, 'null'], properties: { label: { type: string } } }
+                  features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean } } }
+  /manifest:
+    get:
+      summary: 문서 목록·그룹·표시 규칙
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Manifest' } } } } }
+  /doc:
+    get:
+      summary: 문서 읽기
+      parameters: [{ $ref: '#/components/parameters/DocId' }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/DocContent' } } } }
+        '400': { description: 작업 폴더 밖·대상 아님 }
+        '404': { description: 없음 }
+    put:
+      summary: 문서 저장 (판 비교)
+      parameters: [{ $ref: '#/components/parameters/DocId' }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                md: { type: string }
+                baseVersion: { type: string, description: 편집을 시작한 판. 다르면 409 }
+                summary: { type: string }
+                feedbackIds: { type: array, items: { type: string } }
+                convertTo: { const: utf-8, description: 레거시 인코딩 파일을 UTF-8 로 바꿔 저장 (사람 동의 후) }
+              required: [md]
+      responses:
+        '200': { description: 저장됨, content: { application/json: { schema: { type: object, properties: { version: { type: string }, updatedAt: { type: string }, unchanged: { type: boolean } } } } } }
+        '409': { description: 'CONFLICT 그 사이 바뀜 — current 에 지금 본문 / BUSY 다른 프로세스가 같은 문서를 쓰는 중', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: '읽기 전용 (reason encoding | unrepresentable | invalid-utf8 | config). convertTo utf-8 로 다시 보내면 UTF-8 로 저장', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /doc/version:
+    get:
+      summary: 특정 판 본문 (본 적 있는 판만)
+      parameters: [{ $ref: '#/components/parameters/DocId' }, { name: v, in: query, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK }, '404': { description: 없음 } }
+  /doc/base:
+    get:
+      summary: 기준본 (로컬 서버는 git HEAD)
+      parameters: [{ $ref: '#/components/parameters/DocId' }]
+      responses: { '200': { description: '{ md, label }' }, '404': { description: 없음 } }
+  /changes:
+    get:
+      summary: 변경 이력 (최근순 아님 — 시간순, 끝이 최신)
+      parameters: [{ name: limit, in: query, schema: { type: integer, default: 300 } }]
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Change' } } } } } } } }
+  /inventory:
+    get:
+      summary: 폴더 지도
+      responses: { '200': { description: 'src/types.ts Inventory' } }
+  /feedback:
+    get:
+      summary: 피드백 전체
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Feedback' } } } } } } } }
+    post:
+      summary: 피드백 만들기
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Feedback' } } } }
+      responses: { '201': { description: 만듦, content: { application/json: { schema: { $ref: '#/components/schemas/Feedback' } } } } }
+  /feedback/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string, pattern: '^[\w.-]{1,120}$' } }]
+    patch:
+      summary: 피드백 고치기 (판 비교)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { patch: { type: object }, version: { type: integer } }, required: [patch] } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Feedback' } } } }
+        '409': { description: 판 다름 — current }
+    delete:
+      summary: 지우기
+      responses: { '204': { description: 지움 } }
+  /viewstate:
+    get: { summary: 내 보기 상태 (접기·깊이·마지막으로 본 판), responses: { '200': { description: 'ViewState 또는 null' } } }
+    put: { summary: 저장, responses: { '204': { description: OK } } }
+  /events:
+    get:
+      summary: 변경 알림 (Server-Sent Events)
+      description: |
+        event 이름 doc | manifest | feedback | changes | request, data 는 { type, id? } JSON.
+        25초마다 주석 줄로 연결 유지. EventSource 는 헤더를 못 달므로 토큰은 ?token=.
+      responses: { '200': { description: text/event-stream } }
+  /notify:
+    post:
+      summary: "AI 에게 넘기기"
+      requestBody: { content: { application/json: { schema: { type: object, properties: { count: { type: integer }, docs: { type: array, items: { type: string } }, feedbackIds: { type: array, items: { type: string } } } } } } }
+      responses: { '200': { description: '{ delivered, message }' } }
+  /assistant/propose:
+    post:
+      summary: 섹션 수정 제안 (서버가 AI 호출)
+      requestBody: { content: { application/json: { schema: { type: object, properties: { feedbackId: { type: string }, sectionPath: { type: array, items: { type: string } } }, required: [feedbackId] } } } }
+      responses:
+        '200': { description: '{ after, rationale? }' }
+        '400': { description: 섹션 피드백이 아님 }
+        '409': { description: 섹션을 찾지 못함 (SECTION_MOVED) }
+        '413': { description: 섹션이 6만 자를 넘음 (TOO_LARGE) — 하위 섹션에 피드백을 달 것 }
+        '501': { description: AI 연결 없음 (NO_ASSISTANT) }

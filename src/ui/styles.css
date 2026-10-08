@@ -1,0 +1,408 @@
+/* DocBench — 작업대 스타일.
+   레이아웃: 3단 작업대 — 문서 레일 · 읽기 칼럼(~74ch) · 피드백 패널.
+   반응형 기준은 화면이 아니라 .docbench 컨테이너 폭이다(대시보드 패널에 넣어도 맞춰진다).
+   호스트는 --db-* 토큰만 덮어써서 사내 디자인 시스템 색·글꼴에 맞춘다:
+     doc-bench { --db-go: #0050b3; --db-font-body: "사내 글꼴", sans-serif; }
+   토큰은 :where() 로 선언해 호스트의 어떤 선택자로도 덮어쓸 수 있다.
+   그 밖의 규칙은 빌드가 .docbench 를 세 번 겹쳐(scripts/build.mjs) 호스트 전역 CSS 보다 우선하게 한다. */
+
+:where(.docbench) {
+  --db-bg: #f4f6f3; --db-surface: #ffffff; --db-sunk: #eaeee9; --db-line: #d9dfd9; --db-line-2: #c3ccc5;
+  --db-ink: #17201b; --db-ink-2: #46514b; --db-ink-3: #6f7a74;
+  --db-go: #0b7a57; --db-go-ink: #ffffff; --db-go-soft: #dcefe6;
+  --db-wait: #95600c; --db-wait-soft: #fbeed3;
+  --db-bad: #b13a33; --db-bad-soft: #f7e2df;
+  --db-info: #2d5b88; --db-info-soft: #e1eaf4;
+  --db-mark: #ffe58a; --db-mark-ink: #3a2e00;
+  --db-chg: #6a4fb3; --db-chg-soft: #ece6fa;
+  --db-shadow: 0 1px 2px rgba(23,32,27,.06), 0 8px 24px rgba(23,32,27,.10);
+  --db-font-body: "Pretendard", "IBM Plex Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", system-ui, sans-serif;
+  --db-font-display: var(--db-font-body);
+  --db-font-mono: "IBM Plex Mono", "D2Coding", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --db-rail: 260px; --db-panel: 360px; --db-bar: 50px; --db-radius: 8px;
+  color-scheme: light;
+}
+:where(.docbench[data-theme="dark"]),
+:where(:root[data-theme="dark"] .docbench[data-theme="auto"]) {
+  --db-bg: #0f1412; --db-surface: #151b18; --db-sunk: #1c2420; --db-line: #28322d; --db-line-2: #38453e;
+  --db-ink: #e3eae5; --db-ink-2: #afbab3; --db-ink-3: #85918a;
+  --db-go: #3fc597; --db-go-ink: #06140e; --db-go-soft: #163428;
+  --db-wait: #e3ab45; --db-wait-soft: #33270e;
+  --db-bad: #ef7b73; --db-bad-soft: #3a1e1c;
+  --db-info: #80b2e4; --db-info-soft: #17283a;
+  --db-mark: #6b5a12; --db-mark-ink: #fff4c7;
+  --db-chg: #b8a2f0; --db-chg-soft: #2a2140;
+  --db-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.5);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :where(:root:not([data-theme="light"]) .docbench[data-theme="auto"]) {
+    --db-bg: #0f1412; --db-surface: #151b18; --db-sunk: #1c2420; --db-line: #28322d; --db-line-2: #38453e;
+    --db-ink: #e3eae5; --db-ink-2: #afbab3; --db-ink-3: #85918a;
+    --db-go: #3fc597; --db-go-ink: #06140e; --db-go-soft: #163428;
+    --db-wait: #e3ab45; --db-wait-soft: #33270e;
+    --db-bad: #ef7b73; --db-bad-soft: #3a1e1c;
+    --db-info: #80b2e4; --db-info-soft: #17283a;
+    --db-mark: #6b5a12; --db-mark-ink: #fff4c7;
+    --db-chg: #b8a2f0; --db-chg-soft: #2a2140;
+    --db-shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 28px rgba(0,0,0,.5);
+    color-scheme: dark;
+  }
+}
+
+/* ---------- 호스트 CSS 차단막 ----------
+   대시보드 전역 규칙(header{…}, .card h2{…}, button{…})이 작업대 안으로 새지 않게 안쪽 요소를 브라우저 기본값으로
+   되돌린 뒤 아래 규칙만 얹는다. svg·img 는 제외(속성으로 준 크기·색까지 되돌아간다). */
+.docbench :where(header, nav, main, aside, section, article, footer, div, span, p, h1, h2, h3, h4, h5, h6, ul, ol, li, dl, dt, dd, blockquote, pre, code, kbd, table, thead, tbody, tfoot, tr, th, td, caption, button, input, textarea, select, label, dialog, mark, a, b, i, strong, em, del, ins, s, small, sup, sub, hr, details, summary, figure, figcaption) { all: revert; }
+
+/* ---------- 바탕 ---------- */
+.docbench { container: docbench / inline-size; position: relative; overflow: hidden; display: flex; flex-direction: column; height: 100%; min-height: 420px; background: var(--db-bg); color: var(--db-ink); font: 400 15px/1.7 var(--db-font-body); -webkit-font-smoothing: antialiased; word-break: keep-all; overflow-wrap: anywhere; text-align: left; outline: none; letter-spacing: normal; word-spacing: normal; text-transform: none; text-indent: 0; text-shadow: none; font-style: normal; white-space: normal; }
+.docbench *, .docbench *::before, .docbench *::after { box-sizing: border-box; }
+.docbench button, .docbench input, .docbench textarea, .docbench select { font: inherit; color: inherit; letter-spacing: normal; }
+.docbench button { cursor: pointer; }
+.docbench :focus-visible { outline: 2px solid var(--db-go); outline-offset: 2px; border-radius: 4px; }
+.docbench a { color: var(--db-info); }
+.docbench [hidden] { display: none !important; }
+@media (prefers-reduced-motion: reduce) { .docbench * { transition: none !important; animation: none !important; scroll-behavior: auto !important; } }
+
+.docbench .db-btn { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--db-line-2); background: var(--db-surface); border-radius: 7px; padding: 4px 11px; font-size: 13px; font-weight: 500; line-height: 1.35; white-space: nowrap; color: var(--db-ink); }
+.docbench .db-btn:hover { border-color: var(--db-ink-3); }
+.docbench .db-btn:disabled { opacity: .5; cursor: default; }
+.docbench .db-btn.primary { background: var(--db-go); border-color: var(--db-go); color: var(--db-go-ink); }
+.docbench .db-btn.ghost { border-color: transparent; background: transparent; }
+.docbench .db-btn.danger { color: var(--db-bad); }
+.docbench .db-btn.sm { padding: 2px 8px; font-size: 12px; border-radius: 6px; }
+.docbench .db-btn svg { width: 13px; height: 13px; }
+.docbench .db-chip { border: 1px solid var(--db-line-2); background: var(--db-surface); border-radius: 999px; padding: 1px 10px; font-size: 12.5px; color: var(--db-ink-2); line-height: 1.6; }
+.docbench .db-chip[aria-pressed="true"] { background: var(--db-ink); border-color: var(--db-ink); color: var(--db-surface); }
+.docbench .db-seg { display: inline-flex; border: 1px solid var(--db-line-2); border-radius: 7px; overflow: hidden; }
+.docbench .db-seg button { border: 0; border-right: 1px solid var(--db-line); background: var(--db-surface); padding: 3px 10px; font-size: 12.5px; color: var(--db-ink-2); }
+.docbench .db-seg button:last-child { border-right: 0; }
+.docbench .db-seg button[aria-pressed="true"] { background: var(--db-ink); color: var(--db-surface); font-weight: 600; }
+.docbench .db-lbl { font-size: 11.5px; color: var(--db-ink-3); }
+.docbench .db-hint { font-size: 12px; color: var(--db-ink-3); }
+.docbench .db-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* ---------- 상단 바 ---------- */
+.docbench .db-bar { flex: none; height: var(--db-bar); display: flex; align-items: center; gap: 10px; padding-inline: 14px; background: var(--db-surface); border-bottom: 1px solid var(--db-line); z-index: 5; }
+.docbench .db-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.docbench .db-logo { width: 20px; height: 20px; flex: none; display: grid; gap: 3px; align-content: center; }
+.docbench .db-logo i { display: block; height: 3px; border-radius: 2px; background: var(--db-ink); }
+.docbench .db-logo i:nth-child(2) { width: 70%; background: var(--db-go); }
+.docbench .db-logo i:nth-child(3) { width: 45%; }
+.docbench .db-brand b { font: 700 15.5px/1.2 var(--db-font-display); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.docbench .db-brand small { color: var(--db-ink-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.docbench .db-grow { flex: 1; }
+.docbench .db-clocks { display: flex; gap: 6px; }
+.docbench .db-clock { display: inline-flex; align-items: center; gap: 6px; background: var(--db-ink); color: var(--db-surface); border-radius: 6px; padding: 2px 8px 2px 7px; font-size: 11.5px; line-height: 1.25; white-space: nowrap; }
+.docbench .db-clock .n { font: 500 13.5px/1.2 var(--db-font-mono); font-variant-numeric: tabular-nums; color: var(--db-go-soft); }
+.docbench .db-clock.plan { background: var(--db-sunk); color: var(--db-ink-2); }
+.docbench .db-clock.plan .n { color: var(--db-ink); }
+.docbench .db-turns { display: flex; gap: 6px; }
+.docbench .db-pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 10px; font-size: 12.5px; font-weight: 600; border: 0; background: var(--db-sunk); color: var(--db-ink-2); white-space: nowrap; }
+.docbench .db-pill .n { font-family: var(--db-font-mono); font-variant-numeric: tabular-nums; }
+.docbench .db-pill.owner { background: var(--db-wait-soft); color: var(--db-wait); }
+.docbench .db-pill.assistant { background: var(--db-go-soft); color: var(--db-go); }
+.docbench .db-toggle { display: none; }
+
+/* ---------- 3단 골격 ---------- */
+.docbench .db-shell { position: relative; flex: 1; min-height: 0; display: grid; grid-template-columns: var(--db-rail) minmax(0, 1fr) var(--db-panel); }
+.docbench .db-rail, .docbench .db-main, .docbench .db-panel { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.docbench .db-rail { background: var(--db-surface); border-right: 1px solid var(--db-line); padding: 12px 10px 40px; }
+.docbench .db-panel { background: var(--db-surface); border-left: 1px solid var(--db-line); display: flex; flex-direction: column; overflow: hidden; }
+.docbench .db-main { position: relative; padding: 0 16px 120px; scroll-padding-top: 64px; }
+.docbench .db-page { max-width: calc(74ch + 28px); margin: 0 auto; padding-left: 28px; }
+.docbench .db-scrim { display: none; }
+
+@container docbench (max-width: 1099px) {
+  .docbench .db-shell { grid-template-columns: var(--db-rail) minmax(0, 1fr); }
+  .docbench .db-panel { position: absolute; inset: 0 0 0 auto; width: min(var(--db-panel), 100%); z-index: 8; box-shadow: var(--db-shadow); transform: translateX(105%); transition: transform .18s; }
+  .docbench.panel-open .db-panel { transform: none; }
+  .docbench .db-toggle.panel { display: inline-flex; }
+  .docbench.panel-open .db-scrim { display: block; position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.22); }
+}
+@container docbench (max-width: 760px) {
+  .docbench .db-shell { grid-template-columns: minmax(0, 1fr); }
+  .docbench .db-rail { position: absolute; inset: 0 auto 0 0; width: min(300px, 88%); z-index: 8; box-shadow: var(--db-shadow); transform: translateX(-105%); transition: transform .18s; }
+  .docbench.rail-open .db-rail { transform: none; }
+  .docbench.rail-open .db-scrim { display: block; position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.22); }
+  .docbench .db-toggle.nav { display: inline-flex; }
+  .docbench .db-brand small, .docbench .db-clock.plan, .docbench .db-clock .lbl, .docbench .db-pill .lbl, .docbench .db-bar .db-send { display: none; }
+  .docbench .db-bar { gap: 6px; padding-inline: 10px; }
+  .docbench .db-page { padding-left: 4px; }
+  .docbench .db-main { padding-inline: 16px; }
+}
+@container docbench (max-width: 460px) {
+  .docbench .db-brand b { display: none; }
+}
+
+/* ---------- 문서 레일 ---------- */
+.docbench .db-grp { margin-bottom: 12px; }
+.docbench .db-grp-h { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: none; padding: 4px 8px; font-size: 11.5px; font-weight: 600; letter-spacing: .05em; color: var(--db-ink-3); text-align: left; }
+.docbench .db-grp-h .car { font-size: 9px; transition: transform .15s; }
+.docbench .db-grp.closed .db-grp-h .car { transform: rotate(-90deg); }
+.docbench .db-grp.closed .db-grp-list { display: none; }
+.docbench .db-grp-note { font-size: 11.5px; color: var(--db-ink-3); padding: 0 8px 4px; line-height: 1.45; }
+.docbench .db-nav { display: flex; align-items: center; gap: 8px; width: 100%; border: 0; background: none; border-radius: 7px; padding: 5px 8px; text-align: left; font-size: 13.5px; color: var(--db-ink-2); line-height: 1.35; }
+.docbench .db-nav:hover { background: var(--db-sunk); color: var(--db-ink); }
+.docbench .db-nav[aria-current="page"] { background: var(--db-go-soft); color: var(--db-ink); font-weight: 600; }
+.docbench .db-nav .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.docbench .db-dots { display: flex; gap: 3px; align-items: center; flex: none; }
+.docbench .db-dot { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; font: 500 10.5px/18px var(--db-font-mono); text-align: center; font-variant-numeric: tabular-nums; }
+.docbench .db-dot.assistant { background: var(--db-go); color: var(--db-go-ink); }
+.docbench .db-dot.owner { background: var(--db-wait-soft); color: var(--db-wait); }
+/* 빈칸 수는 피드백 차례와 헷갈리지 않게 테두리만 */
+.docbench .db-dot.todo { background: transparent; color: var(--db-ink-3); box-shadow: inset 0 0 0 1px var(--db-line-2); }
+.docbench .db-dot.chg { background: var(--db-chg-soft); color: var(--db-chg); }
+.docbench .db-outline { margin: 2px 0 8px 10px; padding-left: 8px; border-left: 1px solid var(--db-line); display: flex; flex-direction: column; }
+.docbench .db-ol { display: flex; align-items: center; gap: 6px; border: 0; background: none; text-align: left; padding: 3px 6px; border-radius: 6px; font-size: 12.5px; line-height: 1.35; color: var(--db-ink-3); }
+.docbench .db-ol:hover { background: var(--db-sunk); color: var(--db-ink); }
+.docbench .db-ol.h3 { padding-left: 18px; font-size: 12px; }
+.docbench .db-ol.cur { color: var(--db-ink); font-weight: 600; background: var(--db-sunk); }
+.docbench .db-ol .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docbench .db-ol .chg { width: 6px; height: 6px; border-radius: 50%; background: var(--db-chg); flex: none; }
+.docbench .db-rail-foot { margin-top: 18px; padding: 10px 8px 0; border-top: 1px solid var(--db-line); font-size: 11.5px; color: var(--db-ink-3); line-height: 1.55; display: flex; flex-direction: column; gap: 3px; }
+.docbench .db-status { display: flex; align-items: center; gap: 6px; }
+.docbench .db-status i { width: 7px; height: 7px; border-radius: 50%; background: var(--db-ink-3); }
+.docbench .db-status.live i { background: var(--db-go); }
+.docbench .db-status.warn i { background: var(--db-wait); }
+
+/* ---------- 문서 머리·도구줄 ---------- */
+.docbench .db-dochead { padding: 22px 0 12px; }
+.docbench .db-eyebrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 12px; color: var(--db-ink-3); margin-bottom: 4px; }
+.docbench .db-trust { font-size: 11.5px; font-weight: 600; border-radius: 4px; padding: 0 7px; }
+.docbench .tone-good { background: var(--db-go-soft); color: var(--db-go); }
+.docbench .tone-info { background: var(--db-info-soft); color: var(--db-info); }
+.docbench .tone-neutral { background: var(--db-sunk); color: var(--db-ink-2); }
+.docbench .tone-warn { background: var(--db-wait-soft); color: var(--db-wait); }
+.docbench .tone-bad { background: var(--db-bad-soft); color: var(--db-bad); }
+.docbench .tone-accent, .docbench .tone-todo { background: var(--db-mark); color: var(--db-mark-ink); }
+.docbench .db-doctitle { font: 700 25px/1.3 var(--db-font-display); letter-spacing: -.015em; margin: 2px 0 4px; text-wrap: balance; }
+.docbench .db-docrole { color: var(--db-ink-2); font-size: 14px; margin: 0 0 8px; }
+.docbench .db-meta { display: flex; flex-wrap: wrap; gap: 3px 14px; font-size: 12px; color: var(--db-ink-3); }
+.docbench .db-meta code { font: 11.5px var(--db-font-mono); color: var(--db-ink-2); background: none; padding: 0; word-break: break-all; }
+.docbench .db-meta .ok { color: var(--db-go); }
+.docbench .db-notice { margin: 12px 0 0; padding: 9px 12px; border-radius: 8px; font-size: 13.5px; line-height: 1.55; }
+.docbench .db-toolbar { position: sticky; top: 0; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 8px 0; margin-bottom: 4px; background: color-mix(in srgb, var(--db-bg) 94%, transparent); backdrop-filter: blur(6px); border-bottom: 1px solid var(--db-line); }
+.docbench .db-chips { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
+.docbench .db-chips .db-chip[aria-pressed="false"] { opacity: .5; text-decoration: line-through; text-decoration-color: var(--db-ink-3); background: var(--db-surface); color: var(--db-ink-2); border-color: var(--db-line-2); }
+.docbench .db-chips .db-chip[aria-pressed="true"] { background: var(--db-surface); color: var(--db-ink); border-color: var(--db-ink-3); }
+.docbench .db-chips .db-chip.all { border-style: dashed; }
+.docbench .db-find { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--db-line-2); border-radius: 7px; padding: 2px 8px; background: var(--db-surface); }
+.docbench .db-find input { border: 0; outline: 0; background: none; width: 11ch; font-size: 13px; padding: 1px 0; }
+.docbench .db-find .cnt { font: 11.5px var(--db-font-mono); color: var(--db-ink-3); }
+.docbench .db-stats { display: flex; gap: 10px; font-size: 12px; color: var(--db-ink-3); margin-left: auto; }
+.docbench .db-stats b { color: var(--db-ink); font: 500 12px var(--db-font-mono); }
+.docbench .db-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin: 10px 0; padding: 8px 12px; border-radius: 8px; background: var(--db-chg-soft); color: var(--db-ink); font-size: 13.5px; }
+.docbench .db-banner b { color: var(--db-chg); }
+.docbench .db-orphans { margin: 10px 0; padding: 8px 12px; border: 1px dashed var(--db-line-2); border-radius: 8px; font-size: 13px; color: var(--db-ink-2); }
+
+/* ---------- 본문 ---------- */
+.docbench .db-md { font-size: 15px; padding-top: 6px; }
+.docbench .db-md p, .docbench .db-md ul, .docbench .db-md ol, .docbench .db-md blockquote, .docbench .db-md pre, .docbench .db-md .db-tw { margin: 0 0 .85em; }
+.docbench .db-md h1, .docbench .db-md h2, .docbench .db-md h3, .docbench .db-md h4, .docbench .db-md h5, .docbench .db-md h6 { font-family: var(--db-font-display); margin: 0; line-height: 1.38; letter-spacing: -.01em; text-wrap: balance; flex: 1; min-width: 0; color: var(--db-ink); }
+.docbench .db-md h1 { font-size: 21px; font-weight: 700; }
+.docbench .db-md h2 { font-size: 19px; font-weight: 700; }
+.docbench .db-md h3 { font-size: 16.5px; font-weight: 600; }
+.docbench .db-md h4 { font-size: 15.5px; font-weight: 600; }
+.docbench .db-md h5, .docbench .db-md h6 { font-size: 14.5px; font-weight: 600; }
+.docbench .db-md ul, .docbench .db-md ol { padding-left: 1.35em; }
+.docbench .db-md li { margin: .2em 0; }
+.docbench .db-md li > ul, .docbench .db-md li > ol { margin: .2em 0; }
+.docbench .db-md blockquote { border-left: 3px solid var(--db-line-2); padding: 1px 0 1px 12px; color: var(--db-ink-2); font-size: 14px; }
+.docbench .db-md hr { border: 0; border-top: 1px solid var(--db-line); margin: 1.4em 0; }
+.docbench .db-md code { font-family: var(--db-font-mono); font-size: .86em; background: var(--db-sunk); border-radius: 4px; padding: .08em .35em; }
+.docbench .db-md pre { background: var(--db-sunk); border-radius: 8px; padding: 12px 14px; overflow: auto; font-size: 13px; line-height: 1.55; }
+.docbench .db-md pre code { background: none; padding: 0; font-size: inherit; }
+.docbench .db-md strong { font-weight: 650; }
+.docbench .db-md del { color: var(--db-ink-3); }
+.docbench .db-md img { max-width: 100%; }
+.docbench .db-tw { overflow-x: auto; border: 1px solid var(--db-line); border-radius: 8px; }
+.docbench .db-md table { border-collapse: collapse; width: 100%; font-size: 13.5px; line-height: 1.55; }
+.docbench .db-md th, .docbench .db-md td { border-bottom: 1px solid var(--db-line); padding: 6px 10px; text-align: left; vertical-align: top; min-width: 2.5em; }
+.docbench .db-md td { min-width: 4.5em; }
+.docbench .db-md td:first-child { min-width: 2em; font-variant-numeric: tabular-nums; }
+.docbench .db-md th { background: var(--db-sunk); font-weight: 600; font-size: 12.5px; color: var(--db-ink-2); white-space: nowrap; }
+.docbench .db-md tr:last-child td { border-bottom: 0; }
+/* 할 일 목록: 글머리 점 대신 확인란만 */
+.docbench .db-md li:has(> input[type="checkbox"]:first-child), .docbench .db-md li:has(> p:first-child > input[type="checkbox"]:first-child) { list-style: none; margin-left: -1.25em; }
+.docbench .db-md li > input[type="checkbox"], .docbench .db-md li > p > input[type="checkbox"] { margin: 0 .45em 0 0; vertical-align: -1px; }
+.docbench .db-md :is(th, td)[align="right"] { text-align: right; }
+.docbench .db-md :is(th, td)[align="center"] { text-align: center; }
+.docbench .db-tag, .docbench .db-md code.db-tag { font-family: var(--db-font-body); font-size: 11.5px; font-weight: 600; border-radius: 4px; padding: .05em .4em; white-space: nowrap; }
+/* 인라인 코드 기본 배경(.db-md code)보다 칩 색이 이기게 */
+.docbench .db-tag.tone-good { background: var(--db-go-soft); color: var(--db-go); }
+.docbench .db-tag.tone-info { background: var(--db-info-soft); color: var(--db-info); }
+.docbench .db-tag.tone-neutral { background: var(--db-sunk); color: var(--db-ink-2); }
+.docbench .db-tag.tone-warn { background: var(--db-wait-soft); color: var(--db-wait); }
+.docbench .db-tag.tone-bad { background: var(--db-bad-soft); color: var(--db-bad); }
+.docbench .db-tag.tone-accent, .docbench .db-tag.tone-todo { background: var(--db-mark); color: var(--db-mark-ink); }
+.docbench mark.db-todo { background: var(--db-mark); color: var(--db-mark-ink); border-radius: 3px; padding: 0 .15em; font-weight: 500; }
+.docbench mark.db-fbq { background: transparent; color: inherit; border-bottom: 2px solid var(--db-go); cursor: pointer; padding: 0; }
+.docbench mark.db-fbq.owner { border-bottom-color: var(--db-wait); }
+.docbench mark.db-fbq.closed { border-bottom-style: dotted; border-bottom-color: var(--db-ink-3); }
+.docbench mark.db-hit { background: var(--db-info-soft); color: inherit; outline: 1px solid var(--db-info); border-radius: 2px; padding: 0; }
+.docbench mark.db-hit.cur { background: var(--db-info); color: var(--db-surface); }
+.docbench li.db-off { display: none; }
+
+/* 섹션 */
+.docbench .db-sec { position: relative; }
+.docbench .db-sec-head { display: flex; align-items: flex-start; gap: 6px; padding: 10px 0 6px; scroll-margin-top: 64px; }
+.docbench .db-sec[data-level="1"] > .db-sec-head { padding-top: 4px; }
+.docbench .db-sec[data-level="2"] { margin-top: 8px; }
+.docbench .db-sec[data-level="2"] > .db-sec-head { border-top: 1px solid var(--db-line); padding-top: 14px; }
+.docbench .db-sec.cur > .db-sec-head::before { content: ""; position: absolute; left: -16px; width: 3px; height: 1.4em; margin-top: 2px; border-radius: 2px; background: var(--db-go); }
+.docbench .db-caret { flex: none; width: 24px; height: 24px; margin: 2px 0 0 -28px; border: 0; background: none; border-radius: 5px; color: var(--db-ink-3); display: inline-flex; align-items: center; justify-content: center; transition: transform .15s; }
+.docbench .db-caret:hover { background: var(--db-sunk); color: var(--db-ink); }
+.docbench .db-caret svg { width: 12px; height: 12px; }
+.docbench .db-sec[data-collapsed="false"] > .db-sec-head > .db-caret { transform: rotate(90deg); }
+.docbench .db-sec[data-collapsed="true"] > .db-sec-body { display: none; }
+.docbench .db-sec.editing > .db-sec-body { display: none; }
+.docbench .db-sec-side { display: flex; align-items: center; gap: 5px; flex: none; padding-top: 3px; }
+.docbench .db-sec-sum { display: none; font-size: 11.5px; color: var(--db-ink-3); white-space: nowrap; }
+.docbench .db-sec[data-collapsed="true"] > .db-sec-head .db-sec-sum { display: inline; }
+.docbench .db-sec-badges { display: inline-flex; gap: 4px; }
+.docbench .db-sec-acts { display: inline-flex; gap: 4px; opacity: 0; transition: opacity .12s; }
+.docbench .db-sec-head:hover .db-sec-acts, .docbench .db-sec-head:focus-within .db-sec-acts, .docbench .db-sec.cur > .db-sec-head .db-sec-acts { opacity: 1; }
+@media (hover: none) { .docbench .db-sec-acts { opacity: 1; } }
+.docbench .db-act { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed var(--db-line-2); background: var(--db-surface); border-radius: 6px; padding: 0 7px; font-size: 11.5px; line-height: 20px; color: var(--db-ink-3); }
+.docbench .db-act:hover { border-style: solid; color: var(--db-ink); }
+.docbench .db-act svg { width: 11px; height: 11px; }
+.docbench .db-badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 0 7px; font: 500 11px/18px var(--db-font-mono); font-variant-numeric: tabular-nums; border: 0; }
+.docbench .db-badge.assistant { background: var(--db-go); color: var(--db-go-ink); }
+.docbench .db-badge.owner { background: var(--db-wait-soft); color: var(--db-wait); }
+.docbench .db-badge.closed { background: var(--db-sunk); color: var(--db-ink-3); }
+.docbench .db-badge.chg { background: var(--db-chg-soft); color: var(--db-chg); font-family: var(--db-font-body); font-weight: 600; }
+.docbench .db-flash { animation: db-flash 1.4s ease-out; }
+@keyframes db-flash { 0% { background: var(--db-mark); } 100% { background: transparent; } }
+@container docbench (max-width: 760px) { .docbench .db-caret { margin-left: -4px; } .docbench .db-sec.cur > .db-sec-head::before { left: -10px; } }
+
+/* 선택 피드백 버튼 */
+.docbench .db-selbtn { position: absolute; z-index: 6; box-shadow: var(--db-shadow); }
+
+/* ---------- 편집기 ---------- */
+.docbench .db-editor { margin: 4px 0 18px; border: 1px solid var(--db-line-2); border-radius: 10px; background: var(--db-surface); box-shadow: var(--db-shadow); overflow: hidden; }
+.docbench .db-ed-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--db-line); background: var(--db-sunk); }
+.docbench .db-ed-top .db-lbl { margin-left: auto; }
+.docbench .db-ed-area { display: block; width: 100%; min-height: 180px; max-height: 70vh; border: 0; outline: 0; resize: vertical; padding: 12px 14px; font: 13.5px/1.6 var(--db-font-mono); background: var(--db-surface); tab-size: 2; }
+.docbench .db-ed-preview { padding: 6px 16px 10px; max-height: 70vh; overflow: auto; }
+.docbench .db-ed-msg { padding: 8px 12px; font-size: 13px; border-top: 1px solid var(--db-line); }
+.docbench .db-ed-msg.warn { background: var(--db-wait-soft); color: var(--db-ink); }
+.docbench .db-ed-msg.bad { background: var(--db-bad-soft); color: var(--db-ink); }
+.docbench .db-ed-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border-top: 1px solid var(--db-line); }
+.docbench .db-ed-foot input { flex: 1; min-width: 12ch; border: 1px solid var(--db-line-2); border-radius: 6px; padding: 3px 8px; font-size: 13px; background: var(--db-bg); }
+
+/* ---------- 차이 ---------- */
+.docbench .db-diff { border: 1px solid var(--db-line); border-radius: 8px; background: var(--db-surface); overflow: hidden; margin: 6px 0 14px; }
+.docbench .db-diff-h { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--db-line); font-size: 12.5px; }
+.docbench .db-diff-h .add { color: var(--db-go); font-weight: 600; }
+.docbench .db-diff-h .del { color: var(--db-bad); font-weight: 600; }
+/* 문서 차이는 글(한글) 위주라 본문 글꼴로: 고정폭 글꼴의 한글 대체 글리프는 자간이 벌어진다 */
+.docbench .db-diff-b { max-height: 60vh; overflow: auto; font: 12.5px/1.65 var(--db-font-body); font-variant-numeric: tabular-nums; }
+.docbench .db-dl { white-space: pre-wrap; padding: 0 10px 0 22px; text-indent: -12px; word-break: break-word; }
+.docbench .db-dl.add { background: var(--db-go-soft); }
+.docbench .db-dl.del { background: var(--db-bad-soft); }
+.docbench .db-dl.ctx { color: var(--db-ink-3); }
+.docbench .db-dl.skip { color: var(--db-ink-3); font-style: italic; background: var(--db-sunk); padding-block: 2px; text-indent: 0; }
+.docbench .db-dl ins { text-decoration: none; background: color-mix(in srgb, var(--db-go) 30%, transparent); border-radius: 2px; }
+.docbench .db-dl del { text-decoration: line-through; background: color-mix(in srgb, var(--db-bad) 25%, transparent); border-radius: 2px; }
+
+/* ---------- 피드백 패널 ---------- */
+.docbench .db-ph { flex: none; padding: 10px 12px 8px; border-bottom: 1px solid var(--db-line); display: flex; flex-direction: column; gap: 7px; }
+.docbench .db-ph-top { display: flex; align-items: center; gap: 8px; }
+.docbench .db-ph-top h2 { font: 700 15.5px/1.3 var(--db-font-display); margin: 0; flex: 1; }
+.docbench .db-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+.docbench .db-tabs button { border: 1px solid var(--db-line); background: var(--db-surface); border-radius: 999px; padding: 1px 9px; font-size: 12px; color: var(--db-ink-2); display: inline-flex; gap: 5px; align-items: center; }
+.docbench .db-tabs button .n { font: 11px var(--db-font-mono); opacity: .8; }
+.docbench .db-tabs button[aria-pressed="true"] { background: var(--db-ink); border-color: var(--db-ink); color: var(--db-surface); }
+.docbench .db-plist { flex: 1; overflow: auto; padding: 10px 10px 60px; display: flex; flex-direction: column; gap: 9px; }
+.docbench .db-pgroup { position: sticky; top: -10px; z-index: 1; margin: 4px -10px 0; padding: 6px 12px; background: color-mix(in srgb, var(--db-surface) 94%, transparent); backdrop-filter: blur(4px); font-size: 12px; font-weight: 600; color: var(--db-ink-2); border-bottom: 1px solid var(--db-line); }
+.docbench .db-empty { color: var(--db-ink-3); font-size: 13px; padding: 24px 8px; text-align: center; line-height: 1.6; }
+.docbench .db-card { border: 1px solid var(--db-line); border-radius: 10px; background: var(--db-surface); padding: 9px 11px; display: flex; flex-direction: column; gap: 5px; font-size: 13.5px; line-height: 1.55; border-left-width: 3px; }
+.docbench .db-card.t-assistant { border-left-color: var(--db-go); }
+.docbench .db-card.t-owner { border-left-color: var(--db-wait); }
+.docbench .db-card.t-resolved, .docbench .db-card.t-declined { opacity: .8; }
+.docbench .db-card.focus { box-shadow: 0 0 0 2px var(--db-go); }
+.docbench .db-c-top { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 11.5px; color: var(--db-ink-3); }
+.docbench .db-sev { border-radius: 4px; padding: 0 6px; font-weight: 600; }
+.docbench .db-sev.high { background: var(--db-bad-soft); color: var(--db-bad); }
+.docbench .db-sev.medium { background: var(--db-wait-soft); color: var(--db-wait); }
+.docbench .db-sev.low { background: var(--db-sunk); color: var(--db-ink-2); }
+.docbench .db-turnlbl { margin-left: auto; font-weight: 600; }
+.docbench .db-turnlbl.assistant { color: var(--db-go); }
+.docbench .db-turnlbl.owner { color: var(--db-wait); }
+.docbench .db-c-title { font-weight: 650; font-size: 14px; }
+.docbench .db-c-loc { border: 0; background: none; padding: 0; text-align: left; font-size: 12px; color: var(--db-info); line-height: 1.45; }
+.docbench .db-c-loc:hover { text-decoration: underline; }
+.docbench .db-c-quote { border-left: 2px solid var(--db-line-2); padding-left: 8px; color: var(--db-ink-2); font-size: 12.5px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.docbench .db-c-body { white-space: pre-wrap; }
+.docbench .db-c-body.clamp { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.docbench .db-more { border: 0; background: none; padding: 0; font-size: 12px; color: var(--db-ink-3); align-self: flex-start; }
+.docbench .db-thread { display: flex; flex-direction: column; gap: 4px; }
+.docbench .db-msg { font-size: 12.5px; padding: 5px 8px; border-radius: 7px; background: var(--db-sunk); white-space: pre-wrap; }
+.docbench .db-msg.assistant { background: var(--db-go-soft); }
+.docbench .db-msg .who { display: block; font-weight: 600; font-size: 11px; color: var(--db-ink-3); }
+.docbench .db-prop { border: 1px solid var(--db-chg-soft); border-radius: 8px; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; background: color-mix(in srgb, var(--db-chg-soft) 45%, var(--db-surface)); }
+.docbench .db-prop-h { display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--db-chg); }
+.docbench .db-prop .db-diff { margin: 0; }
+.docbench .db-prop .db-diff-b { max-height: 40vh; }
+.docbench .db-c-act { display: flex; flex-wrap: wrap; gap: 5px; }
+.docbench .db-reply { display: flex; flex-direction: column; gap: 6px; }
+.docbench .db-reply textarea { width: 100%; min-height: 64px; border: 1px solid var(--db-line-2); border-radius: 7px; padding: 6px 8px; font-size: 13px; background: var(--db-bg); resize: vertical; }
+.docbench .db-busy { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--db-ink-3); }
+.docbench .db-busy::before { content: ""; width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--db-line-2); border-top-color: var(--db-go); animation: db-spin .8s linear infinite; }
+@keyframes db-spin { to { transform: rotate(360deg); } }
+
+/* ---------- 대화상자 ---------- */
+.docbench dialog.db-dialog { border: 0; padding: 0; border-radius: 14px; background: var(--db-surface); color: var(--db-ink); box-shadow: var(--db-shadow); width: min(560px, calc(100% - 32px)); max-height: calc(100% - 32px); }
+.docbench dialog.db-dialog::backdrop { background: rgba(0,0,0,.32); }
+.docbench .db-sheet { padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+.docbench .db-sheet h3 { font: 700 17px/1.3 var(--db-font-display); margin: 0; }
+.docbench .db-target { font-size: 12.5px; color: var(--db-ink-2); background: var(--db-sunk); border-radius: 8px; padding: 8px 10px; line-height: 1.5; }
+.docbench .db-target .path { display: block; color: var(--db-ink-3); font-size: 11.5px; }
+.docbench .db-target q { display: block; margin-top: 4px; quotes: none; color: var(--db-ink); }
+.docbench .db-sheet textarea { width: 100%; min-height: 110px; border: 1px solid var(--db-line-2); border-radius: 8px; padding: 8px 10px; background: var(--db-bg); font-size: 14px; resize: vertical; }
+.docbench .db-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.docbench .db-sheet-act { display: flex; justify-content: flex-end; gap: 8px; }
+.docbench .db-keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13.5px; }
+.docbench kbd { font: 12px var(--db-font-mono); border: 1px solid var(--db-line-2); border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; background: var(--db-bg); }
+
+/* ---------- 폴더 지도 ---------- */
+.docbench .db-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; margin: 12px 0; }
+.docbench .db-stat { border: 1px solid var(--db-line); border-radius: 10px; background: var(--db-surface); padding: 8px 11px; }
+.docbench .db-stat .v { font: 500 20px/1.3 var(--db-font-mono); font-variant-numeric: tabular-nums; }
+.docbench .db-stat .k { font-size: 12px; color: var(--db-ink-3); }
+.docbench .db-notes { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 16px; }
+.docbench .db-note { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--db-line); border-radius: 9px; padding: 8px 10px; background: var(--db-surface); font-size: 13.5px; }
+.docbench .db-note .lv { flex: none; font-size: 11px; font-weight: 600; border-radius: 4px; padding: 1px 6px; margin-top: 2px; }
+.docbench .db-note .nt { flex: 1; min-width: 0; }
+.docbench .db-note .nt p { margin: 2px 0 0; color: var(--db-ink-2); font-size: 12.5px; }
+.docbench .db-filters { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0 10px; }
+.docbench .db-tree { border: 1px solid var(--db-line); border-radius: 10px; background: var(--db-surface); overflow: hidden; }
+.docbench .db-trow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; padding: 4px 10px 4px calc(10px + var(--d, 0) * 16px); border-bottom: 1px solid var(--db-line); font-size: 13px; line-height: 1.45; align-items: center; }
+.docbench .db-trow:last-child { border-bottom: 0; }
+.docbench .db-trow:hover { background: var(--db-sunk); }
+.docbench .db-trow.hl { background: var(--db-mark); color: var(--db-mark-ink); }
+.docbench .db-tname { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.docbench .db-tname .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docbench .db-tname button.nm { border: 0; background: none; padding: 0; text-align: left; }
+.docbench .db-tcar { flex: none; width: 18px; height: 18px; border: 0; background: none; color: var(--db-ink-3); display: inline-flex; align-items: center; justify-content: center; border-radius: 4px; transition: transform .15s; }
+.docbench .db-tcar svg { width: 10px; height: 10px; }
+.docbench .db-trow[data-open="true"] .db-tcar { transform: rotate(90deg); }
+.docbench .db-tcar.ph { visibility: hidden; }
+.docbench .db-kind { flex: none; font: 500 9.5px/1.6 var(--db-font-mono); letter-spacing: .03em; border-radius: 3px; padding: 0 4px; background: var(--db-sunk); color: var(--db-ink-2); text-transform: uppercase; min-width: 30px; text-align: center; }
+.docbench .db-kind.dir { background: transparent; color: var(--db-ink-3); border: 1px solid var(--db-line-2); }
+.docbench .db-flag { font-size: 10.5px; border-radius: 3px; padding: 0 4px; font-weight: 600; flex: none; }
+.docbench .db-tmeta { display: flex; gap: 10px; align-items: center; font: 11.5px var(--db-font-mono); color: var(--db-ink-3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.docbench .db-tmeta a { text-decoration: none; }
+.docbench .db-tnote { grid-column: 1 / -1; font-size: 11.5px; color: var(--db-ink-3); padding-left: 46px; }
+@container docbench (max-width: 760px) { .docbench .db-tmeta .d { display: none; } .docbench .db-tnote { padding-left: 26px; } }
+
+/* ---------- 변경 이력 ---------- */
+.docbench .db-log { display: flex; flex-direction: column; gap: 8px; }
+.docbench .db-logi { border: 1px solid var(--db-line); border-radius: 10px; background: var(--db-surface); padding: 9px 12px; font-size: 13.5px; display: flex; flex-direction: column; gap: 3px; }
+.docbench .db-logi .when { font: 11.5px var(--db-font-mono); color: var(--db-ink-3); }
+
+/* ---------- 알림 ---------- */
+.docbench .db-toast { position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%); background: var(--db-ink); color: var(--db-surface); padding: 8px 14px; border-radius: 8px; font-size: 13px; z-index: 20; box-shadow: var(--db-shadow); max-width: calc(100% - 32px); }
+.docbench .db-loading { color: var(--db-ink-3); padding: 40px 0; text-align: center; }

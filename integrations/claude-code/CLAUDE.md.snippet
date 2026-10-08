@@ -1,0 +1,8 @@
+<!-- 작업 폴더(또는 대시보드 저장소)의 CLAUDE.md 에 붙여 넣는다 -->
+## 문서 피드백 (DocBench)
+
+이 폴더의 문서는 DocBench 화면에서 사람이 피드백을 단다. 피드백은 `.docbench/feedback/*.json`, 변경 이력은 `.docbench/changes.jsonl`.
+
+- 사람이 "피드백 반영해" / "넘긴 거 처리해" 라고 하면 `/docbench-feedback` 스킬 순서를 따른다.
+- 문서를 고칠 때는 가능하면 `docbench doc write --section` 을 쓴다 (원래 인코딩·줄바꿈 유지, 바뀐 섹션이 화면에 표시됨).
+- `.docbench/feedback/*.json` 을 손으로 고치지 않는다. `docbench fb reply|propose` 를 쓴다 (판 번호 관리).

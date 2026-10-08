@@ -1,0 +1,607 @@
+/**
+ * 문서 한 장 — 머리·도구줄·본문, 접기·이름표·찾기, 피드백 앵커, 바뀐 섹션, 목차.
+ */
+import type { DocContent, Feedback } from '../types';
+import { diffSections, KEY_SEP, type SectionDiff } from '../core/source';
+import { locate, makeSelector } from '../core/selectors';
+import { norm } from '../core/markdown';
+import { turnOf, countTurns } from '../core/feedback';
+import { lineDiff } from '../core/diff';
+import { renderMarkdown, decorate, sectionize, textIndex, wrapRange, type Section } from './render';
+import { h, $$, icon, fmtBytes, fmtTime, debounce } from './dom';
+import { Editor, renderDiff } from './editor';
+import type { App } from './app';
+
+export class DocView {
+  readonly app: App;
+  readonly id: string;
+  content!: DocContent;
+  secs: Section[] = [];
+  article!: HTMLElement;
+  editor: Editor | null = null;
+  current: Section | null = null;
+  private changed: SectionDiff | null = null;
+  private changedFrom: string | null = null;
+  private hits: HTMLElement[] = [];
+  private hitI = -1;
+  private textCache = new Map<string, string>();
+  private outlineBtns = new Map<string, HTMLElement>();
+  private cleanup: (() => void)[] = [];
+  private els: { head?: HTMLElement; toolbar?: HTMLElement; banner?: HTMLElement; diffSlot?: HTMLElement; orphans?: HTMLElement; stats?: HTMLElement; seg?: HTMLElement; chips?: HTMLElement; find?: HTMLInputElement; findCnt?: HTMLElement } = {};
+  private destroyed = false;
+
+  constructor(app: App, id: string) {
+    this.app = app;
+    this.id = id;
+  }
+
+  get meta() { return this.app.manifest.docs[this.id]; }
+  get t() { return this.app.t; }
+  isEditing(): boolean { return !!this.editor?.dirty(); }
+
+  destroy(): void {
+    this.destroyed = true;
+    this.editor?.close(true);
+    for (const c of this.cleanup.splice(0)) c();
+  }
+
+  // ------------------------------------------------------------ 불러오기·그리기
+  async load(compareFrom?: string): Promise<void> {
+    const page = this.app.els.page;
+    page.replaceChildren(h('p', { class: 'db-loading', text: this.t('doc.loading') }));
+    try {
+      this.content = await this.app.ad.docs.load(this.id);
+    } catch (e) {
+      page.replaceChildren(h('p', { class: 'db-notice tone-bad', text: this.t('doc.loadFail', { msg: (e as Error).message }) }));
+      return;
+    }
+    if (this.destroyed) return;
+    this.renderAll();
+    const st = this.app.docState(this.id);
+    const since = compareFrom || (st.lastSeen && st.lastSeen !== this.content.version ? st.lastSeen : null);
+    if (since) await this.showChangedSince(since, !!compareFrom);
+    st.lastSeen = this.content.version;
+    this.app.changedDocs.delete(this.id);
+    this.app.saveState();
+    this.bindScroll();
+    this.bindSelection();
+  }
+
+  private renderAll(): void {
+    const page = this.app.els.page;
+    page.replaceChildren();
+    this.els = {};
+    page.append(this.renderHead(), this.renderToolbar());
+    this.els.banner = h('div', { class: 'db-banner', hidden: true });
+    this.els.diffSlot = h('div', { class: 'db-diffslot' });
+    this.els.orphans = h('div', { class: 'db-orphans', hidden: true });
+    page.append(this.els.banner, this.els.diffSlot, this.els.orphans);
+    this.renderBody();
+    page.append(this.article);
+  }
+
+  private renderHead(): HTMLElement {
+    const m = this.meta;
+    const app = this.app;
+    const grp = app.manifest.groups.find((g) => g.docs.includes(this.id));
+    const tr = m.trust ? app.manifest.trust?.[m.trust] : undefined;
+    const head = h('header', { class: 'db-dochead' },
+      h('div', { class: 'db-eyebrow' },
+        grp ? h('span', { text: grp.label }) : null,
+        tr ? h('span', { class: 'db-trust tone-' + (tr.tone || 'neutral'), title: tr.desc || '', text: tr.label }) : null,
+        m.audience ? h('span', { text: '· ' + m.audience }) : null),
+      h('h1', { class: 'db-doctitle', text: m.title }),
+      m.role ? h('p', { class: 'db-docrole', text: m.role }) : null);
+    const src = m.source;
+    const c = this.content;
+    const meta = h('div', { class: 'db-meta' });
+    if (src?.path) meta.append(h('code', { text: src.path }));
+    if (src?.size != null) meta.append(h('span', { text: fmtBytes(src.size) }));
+    const mod = c.updatedAt || src?.modified;
+    if (mod) meta.append(h('span', { text: fmtTime(mod) + (c.updatedBy?.name ? ' · ' + c.updatedBy.name : '') }));
+    const enc = c.encoding || src?.encoding;
+    if (enc && enc !== 'utf-8') meta.append(h('span', { text: enc.toUpperCase() }));
+    if (src?.eol === 'crlf') meta.append(h('span', { text: 'CRLF' }));
+    if (src?.label) meta.append(h('span', { class: 'ok', text: src.label }));
+    if (src?.url) meta.append(h('a', { href: src.url, target: '_blank', rel: 'noopener noreferrer', text: this.t('doc.open') }));
+    if (c.readOnly) meta.append(h('span', { class: 'db-trust tone-warn', text: this.t('doc.readonly') }));
+    if (meta.childNodes.length) head.append(meta);
+    if (m.notice) head.append(h('p', { class: 'db-notice tone-' + (m.notice.tone || 'warn'), text: m.notice.text }));
+    if (c.readOnly && (c.readOnlyReason === 'encoding' || c.readOnlyReason === 'invalid-utf8')) head.append(h('p', { class: 'db-notice tone-warn', text: this.t('doc.readonly.' + c.readOnlyReason, { enc: (enc || '').toUpperCase() }) }));
+    this.els.head = head;
+    return head;
+  }
+
+  private renderToolbar(): HTMLElement {
+    const tb = h('div', { class: 'db-toolbar' });
+    this.els.toolbar = tb;
+    this.els.seg = h('div', { class: 'db-seg', role: 'group', 'aria-label': this.t('doc.depth') });
+    this.els.chips = h('div', { class: 'db-chips' });
+    const fi = h('input', { type: 'search', placeholder: this.t('doc.find'), 'aria-label': this.t('doc.find') }) as HTMLInputElement;
+    const cnt = h('span', { class: 'cnt' });
+    this.els.find = fi; this.els.findCnt = cnt;
+    const run = debounce(() => this.runFind(fi.value), 220);
+    fi.addEventListener('input', run);
+    fi.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); this.nextHit(e.shiftKey ? -1 : 1); } if (e.key === 'Escape') { fi.value = ''; this.clearFind(); fi.blur(); } });
+    tb.append(h('span', { class: 'db-lbl', text: this.t('doc.depth') }), this.els.seg, this.els.chips, h('label', { class: 'db-find' }, fi, cnt));
+    if (this.app.ad.docs.loadBase) {
+      tb.append(h('button', { class: 'db-btn sm', type: 'button', onclick: (e: Event) => void this.toggleBase(e.currentTarget as HTMLButtonElement) }, this.t('doc.base', { label: '…' })));
+      void this.app.ad.docs.loadBase(this.id).then((b) => {
+        const btn = tb.querySelector<HTMLButtonElement>('.db-btn.sm');
+        if (!btn) return;
+        if (!b) btn.remove(); else btn.textContent = this.t('doc.base', { label: b.label });
+      }).catch(() => tb.querySelector('.db-btn.sm')?.remove());
+    }
+    if (this.canEdit()) tb.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => this.openEditor(null), html: icon('edit') }, this.t('doc.editAll')));
+    this.els.stats = h('span', { class: 'db-stats' });
+    tb.append(this.els.stats);
+    return tb;
+  }
+
+  /** 인코딩 때문에 읽기 전용인 문서는 편집을 열어 두고, 저장 때 UTF-8 변환 동의를 받는다 */
+  canEdit(): boolean { return this.app.can('doc.edit') && !this.meta.readOnly && !(this.content?.readOnly && !['encoding', 'invalid-utf8'].includes(this.content.readOnlyReason || '')); }
+
+  private renderBody(): void {
+    const art = renderMarkdown(this.content.md);
+    art.className = 'db-md';
+    decorate(art, this.app.rules);
+    this.secs = sectionize(art);
+    this.article = art as unknown as HTMLElement;
+    this.textCache.clear();
+    for (const s of this.secs) {
+      s.head.querySelector('.db-caret')!.addEventListener('click', () => this.toggle(s));
+      s.heading.addEventListener('dblclick', () => this.toggle(s));
+      const acts = s.head.querySelector('.db-sec-acts')!;
+      if (this.app.can('feedback.create')) acts.append(h('button', { class: 'db-act', type: 'button', title: this.t('doc.feedback'), onclick: (e: Event) => { e.stopPropagation(); this.app.dialogs.compose({ docId: this.id, sec: s }); }, html: icon('chat') }, this.t('doc.feedback')));
+      if (this.canEdit()) acts.append(h('button', { class: 'db-act', type: 'button', title: this.t('doc.edit'), onclick: (e: Event) => { e.stopPropagation(); this.openEditor(s); }, html: icon('edit') }, this.t('doc.edit')));
+    }
+    // 깊이 버튼
+    const st = this.app.docState(this.id);
+    if (st.depth == null) st.depth = this.meta.depth ?? (this.secs.length > 24 ? 3 : 9);
+    const seg = this.els.seg!;
+    seg.replaceChildren();
+    for (const o of this.depthOptions()) seg.append(h('button', { type: 'button', 'data-d': o.d, 'aria-pressed': String(st.depth === o.d), onclick: () => this.setDepth(o.d) }, o.t));
+    seg.hidden = seg.childNodes.length <= 1;
+    (seg.previousElementSibling as HTMLElement).hidden = seg.hidden;
+    // 이름표
+    const counts: Record<string, number> = {};
+    for (const li of $$('li[data-label]', art)) counts[li.dataset.label!] = (counts[li.dataset.label!] || 0) + 1;
+    const labels = Object.entries(counts).filter(([, c]) => c >= this.app.rules.labelMinRepeat).map(([l]) => l);
+    const chips = this.els.chips!;
+    chips.replaceChildren();
+    if (labels.length) {
+      chips.append(h('span', { class: 'db-lbl', text: this.t('doc.labels') }),
+        h('button', { class: 'db-chip all', type: 'button', 'aria-pressed': 'true', onclick: () => { st.hiddenLabels = []; this.app.saveState(); this.applyLabels(); } }, this.t('doc.labels.all')));
+      for (const l of labels) chips.append(h('button', { class: 'db-chip', type: 'button', 'data-l': l, title: this.t('doc.labels.hint'), onclick: () => {
+        const hid = new Set(st.hiddenLabels || []);
+        if (hid.size === 0) labels.forEach((x) => x !== l && hid.add(x));
+        else if (hid.has(l)) hid.delete(l); else hid.add(l);
+        if (hid.size >= labels.length) hid.clear();
+        st.hiddenLabels = [...hid]; this.app.saveState(); this.applyLabels();
+      } }, l));
+    }
+    this.applyFolds();
+    this.applyLabels();
+    this.anchorFeedback();
+    this.renderStats();
+  }
+
+  private renderStats(): void {
+    const s = this.els.stats!;
+    s.replaceChildren(h('span', {}, this.t('doc.sections') + ' ', h('b', { text: this.secs.length })));
+    // 빈칸 수는 레일·섹션과 같은 기준: 본문 글자만 센다 (인라인 코드로 쓴 `[작업 후 기입]` 은 표기 설명이지 빈칸이 아니다)
+    const todo = this.article.querySelectorAll('mark.db-todo').length;
+    if (todo) s.append(h('span', {}, this.t('doc.todos') + ' ', h('b', { text: todo })));
+  }
+
+  /** 저장·외부 변경 뒤 다시 그린다. 접힘·스크롤·현재 섹션을 지킨다 */
+  rerender(content: DocContent, focusIndex?: number): void {
+    const prev = this.content;
+    const main = this.app.els.main;
+    const keepTop = main.scrollTop;
+    const curIdx = focusIndex ?? this.current?.index;
+    this.content = content;
+    const old = this.article;
+    this.renderBody();
+    old.replaceWith(this.article);
+    if (prev && prev.md !== content.md && !this.changed) {
+      this.changed = diffSections(prev.md, content.md);
+      this.changedFrom = prev.version;
+    }
+    this.markChanged();
+    main.scrollTop = keepTop;
+    if (curIdx != null && this.secs[curIdx]) this.reveal(this.secs[curIdx].key, focusIndex == null);
+    this.app.renderRail();
+  }
+
+  async onExternalChange(): Promise<void> {
+    if (this.editor) { this.editor.externalChanged(); return; }
+    try {
+      const fresh = await this.app.ad.docs.load(this.id);
+      if (fresh.version === this.content.version) return;
+      const prev = this.content;
+      this.changed = diffSections(prev.md, fresh.md);
+      this.changedFrom = prev.version;
+      this.rerender(fresh);
+      this.app.docState(this.id).lastSeen = fresh.version;
+      this.app.saveState();
+      this.showBanner();
+      this.app.toast(this.t('doc.reloaded'));
+    } catch { /* 다음 이벤트 때 다시 */ }
+  }
+
+  // ------------------------------------------------------------ 바뀐 섹션
+  async showChangedSince(version: string, openDiff: boolean): Promise<void> {
+    if (!this.app.ad.docs.loadVersion || version === this.content.version) return;
+    let old: DocContent | null = null;
+    try { old = await this.app.ad.docs.loadVersion(this.id, version); } catch { old = null; }
+    if (!old || this.destroyed) return;
+    this.changed = diffSections(old.md, this.content.md);
+    this.changedFrom = version;
+    this.markChanged();
+    this.showBanner(openDiff ? old.md : undefined);
+  }
+
+  private markChanged(): void {
+    if (!this.changed) return;
+    const set = new Set([...this.changed.changed, ...this.changed.added]);
+    for (const s of this.secs) s.el.dataset.changed = set.has(s.key) ? (this.changed.added.includes(s.key) ? 'new' : 'changed') : '';
+    this.updateBadges();
+  }
+
+  private showBanner(oldMd?: string): void {
+    const b = this.els.banner!;
+    const c = this.changed;
+    if (!c) return;
+    const n = c.changed.length + c.added.length + (c.preamble ? 1 : 0);
+    if (!n && !c.removed.length) { b.hidden = true; return; }
+    b.replaceChildren(
+      h('span', {}, h('b', { text: '●' }), ' ', this.t('doc.changedSince', { n }), c.removed.length ? ' ' + this.t('doc.changedSince.removed', { n: c.removed.length }) : ''),
+      h('button', { class: 'db-btn sm', type: 'button', onclick: () => void this.toggleSinceDiff() }, this.t('doc.changedSince.diff')),
+      h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => { b.hidden = true; this.changed = null; for (const s of this.secs) s.el.dataset.changed = ''; this.updateBadges(); this.els.diffSlot!.replaceChildren(); this.app.renderRail(); } }, this.t('doc.changedSince.ok')),
+    );
+    b.hidden = false;
+    if (oldMd != null) this.els.diffSlot!.replaceChildren(renderDiff(lineDiff(oldMd, this.content.md), this.t));
+    const first = this.secs.find((s) => s.el.dataset.changed);
+    if (first) this.openTo(first);
+  }
+
+  private async toggleSinceDiff(): Promise<void> {
+    const slot = this.els.diffSlot!;
+    if (slot.childNodes.length) { slot.replaceChildren(); return; }
+    if (!this.changedFrom || !this.app.ad.docs.loadVersion) return;
+    const old = await this.app.ad.docs.loadVersion(this.id, this.changedFrom).catch(() => null);
+    if (old) slot.replaceChildren(renderDiff(lineDiff(old.md, this.content.md), this.t));
+  }
+
+  private async toggleBase(btn: HTMLButtonElement): Promise<void> {
+    const slot = this.els.diffSlot!;
+    if (slot.dataset.base === '1') { slot.replaceChildren(); slot.dataset.base = ''; btn.setAttribute('aria-pressed', 'false'); return; }
+    const b = await this.app.ad.docs.loadBase!(this.id).catch(() => null);
+    if (!b) return;
+    slot.replaceChildren(renderDiff(lineDiff(b.md, this.content.md), this.t, b.label));
+    slot.dataset.base = '1';
+    btn.setAttribute('aria-pressed', 'true');
+  }
+
+  // ------------------------------------------------------------ 접기
+  private depthOptions(): { d: number; t: string }[] {
+    const lv = [...new Set(this.secs.filter((s) => s.level >= 2).map((s) => s.level))].sort((a, b) => a - b).slice(0, 3);
+    const out = lv.map((d, i) => ({ d, t: i === 0 ? this.t('doc.depth.toc') : this.t('doc.depth.n', { n: i + 1 }) }));
+    if (out.length) out.push({ d: 9, t: this.t('doc.depth.all') });
+    return out;
+  }
+  setDepth(d: number): void {
+    const st = this.app.docState(this.id);
+    st.depth = d; st.folds = {};
+    this.app.saveState();
+    this.applyFolds();
+    for (const b of Array.from(this.els.seg!.children)) b.setAttribute('aria-pressed', String(Number((b as HTMLElement).dataset.d) === d));
+  }
+  setDepthIndex(i: number): void { const o = this.depthOptions()[i]; if (o) this.setDepth(o.d); }
+
+  private hasBody(s: Section): boolean { return Array.from(s.body.childNodes).some((n) => n.nodeType === 1 || (n.nodeType === 3 && (n as Text).data.trim())); }
+  isCollapsed(s: Section): boolean {
+    if (s.level === 1) return false;
+    const st = this.app.docState(this.id);
+    if (st.folds && s.key in st.folds) return !!st.folds[s.key];
+    return s.level >= (st.depth ?? 9) && this.hasBody(s);
+  }
+  applyFolds(): void { for (const s of this.secs) this.setCollapsed(s, this.isCollapsed(s)); this.updateBadges(); }
+  private setCollapsed(s: Section, c: boolean): void {
+    s.el.dataset.collapsed = String(c);
+    s.head.querySelector('.db-caret')!.setAttribute('aria-expanded', String(!c));
+    if (c) {
+      const subs = s.body.querySelectorAll('.db-sec').length;
+      const todo = s.body.querySelectorAll('mark.db-todo').length;
+      const parts = [this.t('doc.collapsed')];
+      if (subs) parts.push(this.t('doc.sub', { n: subs }));
+      if (todo) parts.push(this.t('doc.todos') + ' ' + todo);
+      s.head.querySelector('.db-sec-sum')!.textContent = parts.join(' · ');
+    }
+  }
+  toggle(s: Section): void {
+    if (s.level === 1) return;
+    const c = !this.isCollapsed(s);
+    (this.app.docState(this.id).folds ||= {})[s.key] = c;
+    this.app.saveState();
+    this.setCollapsed(s, c);
+    this.updateBadges();
+  }
+  openTo(s: Section): void {
+    const st = this.app.docState(this.id);
+    st.folds ||= {};
+    for (const a of this.secs) if (a !== s && a.el.contains(s.el) && this.isCollapsed(a)) { st.folds[a.key] = false; this.setCollapsed(a, false); }
+    if (this.isCollapsed(s)) { st.folds[s.key] = false; this.setCollapsed(s, false); }
+    this.app.saveState();
+    this.updateBadges();
+  }
+
+  findSec(key: string): Section | null {
+    return this.secs.find((s) => s.key === key)
+      || this.secs.find((s) => s.path.join(KEY_SEP) === key.replace(/ #\d+$/, ''))
+      || this.secs.find((s) => s.title === key.split(KEY_SEP).pop())
+      || null;
+  }
+
+  reveal(key: string, smooth = true): void {
+    const s = this.findSec(key);
+    if (!s) return;
+    this.openTo(s);
+    this.setCurrent(s);
+    s.head.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' });
+    s.head.classList.add('db-flash');
+    setTimeout(() => s.head.classList.remove('db-flash'), 1400);
+  }
+
+  // ------------------------------------------------------------ 이름표
+  applyLabels(): void {
+    const hid = new Set(this.app.docState(this.id).hiddenLabels || []);
+    for (const li of $$('li[data-label]', this.article)) li.classList.toggle('db-off', hid.has(li.dataset.label!));
+    for (const c of $$('.db-chip', this.els.chips!)) c.setAttribute('aria-pressed', c.classList.contains('all') ? String(hid.size === 0) : String(!hid.has(c.dataset.l!)));
+  }
+
+  // ------------------------------------------------------------ 찾기
+  focusFind(): void { this.els.find?.focus(); this.els.find?.select(); }
+  private clearFind(): void {
+    for (const m of $$('mark.db-hit', this.article)) m.replaceWith(...Array.from(m.childNodes));
+    this.article.normalize();
+    this.hits = []; this.hitI = -1;
+    if (this.els.findCnt) this.els.findCnt.textContent = '';
+  }
+  private runFind(q: string): void {
+    this.clearFind();
+    q = q.trim();
+    if (q.length < 2) return;
+    const re = new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+    const w = document.createTreeWalker(this.article, NodeFilter.SHOW_TEXT, { acceptNode: (n) => ((n.parentElement as Element).closest('button,.db-sec-side,.db-editor') ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT) });
+    const ns: Text[] = [];
+    while (w.nextNode()) ns.push(w.currentNode as Text);
+    for (const n of ns) {
+      re.lastIndex = 0;
+      if (!re.test(n.data)) continue;
+      re.lastIndex = 0;
+      const frag = document.createDocumentFragment();
+      let last = 0; let m: RegExpExecArray | null;
+      while ((m = re.exec(n.data))) {
+        frag.append(n.data.slice(last, m.index));
+        const mk = h('mark', { class: 'db-hit', text: m[0] });
+        this.hits.push(mk); frag.append(mk);
+        last = m.index + m[0].length;
+      }
+      frag.append(n.data.slice(last));
+      n.replaceWith(frag);
+    }
+    this.textCache.clear();
+    this.els.findCnt!.textContent = this.hits.length ? String(this.hits.length) : this.t('doc.find.none');
+    if (this.hits.length) this.nextHit(1);
+  }
+  private nextHit(dir: number): void {
+    if (!this.hits.length) return;
+    if (this.hitI >= 0) this.hits[this.hitI].classList.remove('cur');
+    this.hitI = (this.hitI + dir + this.hits.length) % this.hits.length;
+    const m = this.hits[this.hitI];
+    m.classList.add('cur');
+    const s = this.secs.filter((x) => x.el.contains(m)).pop();
+    if (s) this.openTo(s);
+    m.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    this.els.findCnt!.textContent = `${this.hitI + 1}/${this.hits.length}`;
+  }
+
+  // ------------------------------------------------------------ 피드백 앵커
+  private secText(s: Section): string {
+    if (!this.textCache.has(s.key)) this.textCache.set(s.key, textIndex(s.el).s);
+    return this.textCache.get(s.key)!;
+  }
+  sectionOf(f: Feedback): Section | null {
+    if (f.target.kind !== 'section') return null;
+    const tg = f.target;
+    const key = tg.path.join(KEY_SEP);
+    const exact = f.selector ? norm(f.selector.exact) : '';
+    let cands = this.secs.filter((s) => s.path.join(KEY_SEP) === key);
+    if (!cands.length) cands = this.secs.filter((s) => s.title === norm(tg.heading));
+    // 같은 이름 제목이 여럿이면: 적어 둔 순번 → 인용문이 들어 있는 곳 → 첫째
+    const nth = tg.occurrence && tg.occurrence > 1 ? cands[tg.occurrence - 1] : cands.length > 1 ? cands[0] : undefined;
+    if (cands.length > 1 && nth && (!exact || this.secText(nth).includes(exact))) return nth;
+    if (cands.length > 1 && exact) { const c2 = cands.filter((s) => this.secText(s).includes(exact)); if (c2.length) cands = c2; }
+    if (cands.length) return cands[0];
+    if (exact) { const inner = this.secs.filter((s) => this.secText(s).includes(exact)); if (inner.length) return inner[inner.length - 1]; }
+    return null;
+  }
+  private secOfFb = new Map<string, string>();
+  anchorFeedback(): void {
+    if (!this.article) return;
+    for (const m of $$('mark.db-fbq', this.article)) m.replaceWith(...Array.from(m.childNodes));
+    this.article.normalize();
+    this.textCache.clear();
+    this.secOfFb.clear();
+    const rows = this.app.fb.filter((f) => f.docId === this.id && f.target.kind === 'section');
+    let orphans = 0;
+    for (const f of rows) {
+      const s = this.sectionOf(f);
+      if (!s) { orphans++; continue; }
+      this.secOfFb.set(f.id, s.key);
+      if (!f.selector) continue;
+      const idx = textIndex(s.el);
+      const at = locate(idx.s, f.selector);
+      if (!at) continue;
+      const t = turnOf(f);
+      const cls = 'db-fbq' + (t === 'owner' ? ' owner' : t === 'assistant' ? '' : ' closed');
+      for (const mk of wrapRange(idx.map, at.start, at.end, () => h('mark', { class: cls, 'data-fb': f.id }))) {
+        mk.addEventListener('click', () => this.app.panel.focus(f.id));
+      }
+    }
+    this.textCache.clear();
+    const o = this.els.orphans!;
+    o.hidden = !orphans;
+    o.textContent = orphans ? this.t('doc.orphans', { n: orphans }) : '';
+    this.updateBadges();
+  }
+  sectionKeyOf(fid: string): string | undefined { return this.secOfFb.get(fid); }
+
+  updateBadges(): void {
+    if (!this.secs.length) return;
+    const rows = this.app.fb.filter((f) => f.docId === this.id && this.secOfFb.has(f.id));
+    for (const s of this.secs) {
+      const collapsed = s.el.dataset.collapsed === 'true';
+      const mine = rows.filter((f) => { const k = this.secOfFb.get(f.id)!; return k === s.key || (collapsed && k.startsWith(s.key + KEY_SEP)); });
+      const c = countTurns(mine);
+      const box = s.head.querySelector('.db-sec-badges')!;
+      box.replaceChildren();
+      const ch = s.el.dataset.changed;
+      if (ch) box.append(h('span', { class: 'db-badge chg', text: ch === 'new' ? this.t('doc.newBadge') : this.t('doc.changedBadge') }));
+      else if (collapsed && s.body.querySelector('.db-sec[data-changed="changed"], .db-sec[data-changed="new"]')) box.append(h('span', { class: 'db-badge chg', text: '•' }));
+      const open = (n: number, cls: string, title: string) => n && box.append(h('button', { class: 'db-badge ' + cls, type: 'button', title, onclick: () => this.app.panel.focus(mine.find((f) => turnOf(f) === (cls === 'closed' ? turnOf(f) : cls))?.id || mine[0].id), text: n }));
+      open(c.assistant, 'assistant', this.t('turn.assistant'));
+      open(c.owner, 'owner', this.t('turn.owner'));
+      if (!c.assistant && !c.owner) open(c.resolved + c.declined, 'closed', this.t('fb.f.closed'));
+    }
+  }
+
+  // ------------------------------------------------------------ 목차(레일)
+  outline(): HTMLElement | null {
+    if (!this.secs.length) return null;
+    const lvls = [...new Set(this.secs.map((s) => s.level).filter((l) => l >= 2))].sort((a, b) => a - b);
+    if (!lvls.length) return null;
+    const top = lvls[0], sub = lvls[1];
+    const curTop = this.current ? this.secs.filter((s) => s.level === top && s.el.contains(this.current!.el)).pop() : null;
+    const box = h('div', { class: 'db-outline' });
+    this.outlineBtns.clear();
+    const fbBy = new Map<string, number>();
+    for (const f of this.app.fb) if (f.docId === this.id && f.status === 'open') { const k = this.secOfFb.get(f.id); if (k) fbBy.set(k, (fbBy.get(k) || 0) + 1); }
+    const item = (s: Section, cls: string) => {
+      let n = 0;
+      for (const [k, v] of fbBy) if (k === s.key || k.startsWith(s.key + KEY_SEP)) n += v;
+      const b = h('button', { class: 'db-ol ' + cls + (this.current === s ? ' cur' : ''), type: 'button', title: s.title, onclick: () => this.reveal(s.key) },
+        h('span', { class: 't', text: s.title }),
+        s.el.dataset.changed || s.el.querySelector('[data-changed="changed"],[data-changed="new"]') ? h('i', { class: 'chg' }) : null,
+        n ? h('span', { class: 'db-dot owner', text: n }) : null);
+      this.outlineBtns.set(s.key, b);
+      box.append(b);
+    };
+    for (const s of this.secs) {
+      if (s.level === top) item(s, 'h2');
+      else if (sub && s.level === sub && curTop && curTop.el.contains(s.el)) item(s, 'h3');
+    }
+    return box;
+  }
+
+  // ------------------------------------------------------------ 현재 섹션·스크롤
+  private setCurrent(s: Section | null): void {
+    if (this.current === s) return;
+    const prevTop = this.topOf(this.current);
+    this.current?.el.classList.remove('cur');
+    this.current = s;
+    s?.el.classList.add('cur');
+    if (this.topOf(s) !== prevTop) this.app.renderRail();
+    else {
+      for (const [k, b] of this.outlineBtns) b.classList.toggle('cur', k === s?.key);
+    }
+  }
+  private topOf(s: Section | null): Section | null {
+    if (!s) return null;
+    const lv = Math.min(...this.secs.map((x) => x.level).filter((l) => l >= 2));
+    return this.secs.filter((x) => x.level === lv && x.el.contains(s.el)).pop() || null;
+  }
+  private visibleSecs(): Section[] {
+    return this.secs.filter((s) => s.level > 1 && !this.secs.some((a) => a !== s && a.el.contains(s.el) && a.el.dataset.collapsed === 'true'));
+  }
+  private bindScroll(): void {
+    const main = this.app.els.main;
+    let raf = 0;
+    const onScroll = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        const top = main.getBoundingClientRect().top + 72;
+        let cur: Section | null = null;
+        for (const s of this.visibleSecs()) { if (s.head.getBoundingClientRect().top <= top) cur = s; else break; }
+        this.setCurrent(cur);
+      });
+    };
+    main.addEventListener('scroll', onScroll, { passive: true });
+    this.cleanup.push(() => main.removeEventListener('scroll', onScroll));
+  }
+  step(dir: number): void {
+    const vs = this.visibleSecs();
+    if (!vs.length) return;
+    const i = this.current ? vs.indexOf(this.current) : -1;
+    const next = vs[Math.max(0, Math.min(vs.length - 1, i + dir))];
+    this.setCurrent(next);
+    next.head.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+  toggleCurrent(): boolean { if (!this.current) return false; this.toggle(this.current); return true; }
+  editCurrent(): void { if (this.canEdit()) this.openEditor(this.current); }
+  commentCurrent(): void { this.app.dialogs.compose(this.current ? { docId: this.id, sec: this.current } : { docId: this.id }); }
+
+  // ------------------------------------------------------------ 문구 선택 → 피드백
+  private bindSelection(): void {
+    const btn = this.app.els.selbtn;
+    const main = this.app.els.main;
+    let ctx: { sec: Section | null; selector: { exact: string; prefix?: string; suffix?: string } } | null = null;
+    const onSel = () => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed || !sel.rangeCount || !this.app.can('feedback.create')) { btn.hidden = true; return; }
+      const rg = sel.getRangeAt(0);
+      if (!this.article.contains(rg.commonAncestorContainer) || (rg.commonAncestorContainer as Element).closest?.('.db-editor')) { btn.hidden = true; return; }
+      const exact = norm(sel.toString());
+      if (exact.length < 2 || exact.length > 500) { btn.hidden = true; return; }
+      const node = rg.startContainer.nodeType === 1 ? (rg.startContainer as Element) : rg.startContainer.parentElement!;
+      const secEl = node.closest('.db-sec');
+      const sec = this.secs.find((s) => s.el === secEl) || null;
+      let selector = { exact } as { exact: string; prefix?: string; suffix?: string };
+      if (sec) {
+        const idx = textIndex(sec.el);
+        let at = idx.map.findIndex(([n, off]) => n === rg.startContainer && off >= rg.startOffset);
+        if (at < 0 || idx.s.slice(at, at + exact.length) !== exact) at = idx.s.indexOf(exact);
+        if (at >= 0) selector = makeSelector(idx.s, at, at + exact.length);
+      }
+      ctx = { sec, selector };
+      const r = rg.getBoundingClientRect();
+      const mr = main.getBoundingClientRect();
+      btn.hidden = false;
+      const bw = btn.offsetWidth;
+      btn.style.left = Math.max(8, Math.min(r.left - mr.left + r.width / 2 - bw / 2, mr.width - bw - 8)) + 'px';
+      btn.style.top = (r.bottom - mr.top + main.scrollTop + 8) + 'px';
+    };
+    const later = () => setTimeout(onSel, 10);
+    this.article.addEventListener('mouseup', later);
+    this.article.addEventListener('keyup', (e) => { if (e.shiftKey) later(); });
+    const onChange = debounce(onSel, 300);
+    document.addEventListener('selectionchange', onChange);
+    const onDown = (e: Event) => e.preventDefault();
+    const onClick = () => { if (!ctx) return; btn.hidden = true; this.app.dialogs.compose({ docId: this.id, sec: ctx.sec, selector: ctx.selector }); };
+    btn.addEventListener('mousedown', onDown);
+    btn.addEventListener('click', onClick);
+    this.cleanup.push(() => { document.removeEventListener('selectionchange', onChange); btn.removeEventListener('mousedown', onDown); btn.removeEventListener('click', onClick); btn.hidden = true; });
+  }
+
+  // ------------------------------------------------------------ 편집
+  openEditor(s: Section | null, init?: ConstructorParameters<typeof Editor>[2]): Editor | null {
+    if (!this.canEdit()) return null;
+    if (this.editor) { this.editor.focus(); return this.editor; }
+    this.editor = new Editor(this, s, init);
+    return this.editor;
+  }
+  editorClosed(): void { this.editor = null; }
+}

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>대시보드 끼우기 예</title>
+<link rel="stylesheet" href="/vendor/docbench.css">
+<style>
+  :root { --bg: #eef1ee; --panel: #fff; --ink: #17201b; --line: #d9dfd9; --term: #101512; --term-ink: #c9d6cf; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0b0f0d; --panel: #121815; --ink: #e4ebe7; --line: #26302b; } }
+  :root[data-theme="dark"] { --bg: #0b0f0d; --panel: #121815; --ink: #e4ebe7; --line: #26302b; }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, "Malgun Gothic", sans-serif; display: grid; grid-template-rows: 44px 1fr; }
+  header { display: flex; align-items: center; gap: 12px; padding: 0 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header b { font-size: 15px; }
+  header .sp { flex: 1; }
+  header button { font: inherit; border: 1px solid var(--line); background: transparent; color: inherit; border-radius: 6px; padding: 3px 10px; cursor: pointer; }
+  main { display: grid; grid-template-columns: minmax(280px, 34%) 1fr; gap: 10px; padding: 10px; min-height: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+  .card h2 { margin: 0; padding: 8px 12px; font-size: 12px; font-weight: 600; letter-spacing: .02em; border-bottom: 1px solid var(--line); }
+  #term { flex: 1; margin: 0; padding: 12px; background: var(--term); color: var(--term-ink); font: 12px/1.6 ui-monospace, Consolas, "D2Coding", monospace; overflow: auto; white-space: pre-wrap; }
+  doc-bench { flex: 1; min-height: 0; height: 100%; }
+  @media (max-width: 820px) { main { grid-template-columns: 1fr; grid-template-rows: 180px 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <b>운영 대시보드</b><span>· 예제</span><span class="sp"></span>
+  <button id="theme" type="button">테마 바꾸기</button>
+</header>
+<main>
+  <section class="card"><h2>터미널 (흉내) — 작업대 이벤트가 여기에 찍힌다</h2><pre id="term">$ claude
+› /docbench-feedback 를 실행하면 AI 차례 피드백을 처리합니다.
+</pre></section>
+  <section class="card"><h2>문서</h2><doc-bench api="/docbench/api" theme="auto"></doc-bench></section>
+</main>
+<script type="module">
+  import { defineElement } from '/vendor/docbench.js';
+  defineElement();
+  const bench = document.querySelector('doc-bench');
+  const term = document.getElementById('term');
+  const log = (s) => { term.textContent += s + '\n'; term.scrollTop = term.scrollHeight; };
+  for (const t of ['doc:saved', 'feedback:created', 'feedback:updated', 'assistant:requested', 'navigate']) {
+    bench.addEventListener('docbench:' + t, (e) => log(`[docbench] ${t} ${JSON.stringify(e.detail.docId || e.detail.view || e.detail.feedback?.id || '')}`));
+  }
+  const themes = ['auto', 'light', 'dark'];
+  document.getElementById('theme').onclick = () => {
+    const next = themes[(themes.indexOf(document.documentElement.dataset.theme || 'auto') + 1) % 3];
+    document.documentElement.dataset.theme = next;
+    bench.setAttribute('theme', next);
+    log('[dashboard] theme ' + next);
+  };
+</script>
+</body>
+</html>
