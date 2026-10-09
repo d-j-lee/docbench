@@ -120,13 +120,21 @@ test('대시보드 탭: host.js 로 끼우면 어두운 테마·할 일 수·이
   await page.evaluate(() => window.bench.navigate('docs/설계-노트.md'));
   await frame.locator('.db-doctitle', { hasText: '설계' }).waitFor();
   assert.ok((await page.evaluate(() => window.__events)).some((e) => e.type === 'navigate' && e.view === 'docs/설계-노트.md'));
+  // 카드에서 넘기면 카드마다 보내지 않는다 — 차례만 바꾸고, 위쪽 넘기기로 모아 보낸다고 알린다(D72)
+  const g = (await call('POST', `/api/w/${id}/feedback`, { docId: 'docs/설계-노트.md', target: { kind: 'doc' }, body: '용어를 맞춰 줘', waitingOn: 'owner' })).data;
+  const card = frame.locator(`.db-card[data-id="${g.id}"]`);
+  await until(async () => (await card.count()) > 0, 6000);
+  if (!(await card.isVisible())) await frame.locator('.db-toggle.panel').click();
+  await card.locator('button', { hasText: '반영해' }).click();
+  await frame.locator('.db-toast', { hasText: '모아서 보냅니다' }).waitFor();
+  assert.ok(!(await page.evaluate(() => window.__handoff)), '카드 하나로 대시보드 터미널을 부르지 않는다');
   // 넘기기 → 대시보드가 맡는다(자기 터미널로) — 이벤트에는 피드백 본문이 실리지 않는다
   await frame.locator('.db-send').click();
   const h = await until(() => page.evaluate(() => window.__handoff), 6000);
   assert.ok(h.feedbackIds.includes(f.id));
   assert.match(h.prompt, /docbench-feedback/);
   await frame.locator('.db-toast', { hasText: '대시보드 터미널로 보냈습니다' }).waitFor();
-  assert.ok(!JSON.stringify(await page.evaluate(() => window.__events)).includes('요약을 더해 줘'), '이벤트에 본문 없음');
+  assert.ok(!/요약을 더해 줘|용어를 맞춰 줘/.test(JSON.stringify(await page.evaluate(() => window.__events))), '이벤트에 본문 없음');
   assert.deepEqual(errors, []);
 
   // 허용 안 한 출처: 앱 화면 자체는 끼울 수 없다(frame-ancestors 'none'), embed 는 목록에 있는 출처만

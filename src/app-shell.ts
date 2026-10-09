@@ -8,7 +8,7 @@
  *    허용한 출처(app.allowOrigins)의 메시지만 받는다 — 서버가 그 목록을 화면에 넣고, frame-ancestors 로 다른 출처는 끼우지도 못한다.
  */
 import { createDocBench, createRestAdapters, trimBySession, createMemoryAdapters, version, type DocBenchHandle } from './index';
-import { welcomeContent } from './welcome';
+import { welcomeContent, demoRuns } from './welcome';
 import { buildManifest, mergeConfig, titleFromText } from './core/workspace';
 import { makeT } from './ui/i18n';
 import { h, icon } from './ui/dom';
@@ -145,6 +145,7 @@ async function welcome(root: HTMLElement): Promise<void> {
   manifest.project.storage = t('welcome.storage');
   manifest.groups = manifest.groups.filter((g) => g.id !== '_bench');
   const mem = createMemoryAdapters({ manifest, docs: w.docs, feedback: w.feedback, me: { kind: 'human', ...info.me } });
+  mem.runs = demoRuns(mem, locale, ['fb.act.toAssistant', 'fb.act.reopen', 'fb.act.decline', 'fb.act.resolve', 'fb.proposal.reject'].map((k) => t(k)));
   document.title = `${t('welcome.title')} · DocBench`;
   await mount(root, mem, { workspace: menu(root), initialDoc: Object.keys(w.docs)[0] });
   if (!info.workspaces.length) bench?.toast(t('app.empty'), { action: t('app.add'), onAction: () => void addFolder(root).catch((e) => fail(root, e)) });

@@ -22,7 +22,7 @@ import { dataFolderCandidates, HOME_MARKER, DATA_MARKER, jsonFile, newDataMarker
 import { mergeRecords } from './core/records';
 import { liveRunners } from './core/runs';
 import { pickFolder, ensurePermission, rememberFolder, recallFolder, forgetFolder, folderAccessSupported } from './adapters/folder-pick';
-import { welcomeContent } from './welcome';
+import { welcomeContent, demoRuns } from './welcome';
 import { makeT } from './ui/i18n';
 import type { DocBenchAdapters, WorkspaceMenu } from './types';
 
@@ -159,6 +159,8 @@ async function welcome(root: HTMLElement): Promise<void> {
     can: () => true,
     setName: async (name) => { acct = saveAccount({ id: acct.id, ...(name.trim() ? { name: name.trim().slice(0, 60) } : {}) }); return { kind: 'human', id: acct.id, ...(acct.name ? { name: acct.name } : {}) }; },
   };
+  // 연습 공간에도 Claude 작업 창 — 흉내 Claude 가 한 바퀴를 보여 준다(넘겼는데 아무 일도 없던 것, 주인 폰 실사용)
+  mem.runs = demoRuns(mem, locale, ['fb.act.toAssistant', 'fb.act.reopen', 'fb.act.decline', 'fb.act.resolve', 'fb.proposal.reject'].map((k) => t(k)));
   await mount(root, mem, menuFor(root, 'welcome'), t('welcome.title'), Object.keys(w.docs)[0]);
   if (!canWrite()) bench?.toast(t(folderAccessSupported() ? 'start.insecure' : 'start.unsupported'), { sticky: true });
 }

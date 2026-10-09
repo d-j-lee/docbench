@@ -462,6 +462,13 @@ const ko: Dict = {
   'app.locked.title': 'DocBench 앱 열기',
   'app.locked.body': '이 화면은 이 PC 의 앱 열쇠가 있어야 열립니다. 설치할 때 만든 바로가기(시작 메뉴의 DocBench)로 열거나, 터미널에서 아래 명령을 실행하세요. 한 번 열면 이 브라우저가 기억합니다.',
   'app.kept': '{list} 은 기록을 폴더 안(.docbench — 팀이 함께 쓰는 기록)에 두어 합치지 않고 따로 둡니다.',
+  'run.state.demo': '연습용 Claude(흉내) — 실제로 보내지 않음',
+  'run.log.demo': '연습 공간이라 실제 Claude 가 아니라 흉내가 답합니다. 진짜 Claude 작업은 PC 의 엣지·크롬에서 내 폴더를 열고 연결하면 됩니다.',
+  'run.compose.demo': '지금은 연습 공간이라 흉내 Claude 가 몇 초 뒤 답합니다(문서·피드백은 이 창에만 있고 저장되지 않습니다).',
+  'send.none': 'Claude 차례로 표시했습니다. 이 화면에는 Claude 연결이 없어 저절로 처리되지 않습니다 — 터미널의 Claude Code 에서 /docbench:docbench-feedback 을 실행하면 이어서 처리합니다.',
+  'run.queue': 'Claude 차례인 피드백이 {n}건 있습니다.',
+  'run.queue.go': '넘기기',
+  'send.marked': '{ai} 차례로 표시했습니다. 위쪽 “{ai}에게 넘기기”를 누르면 모아서 보냅니다.',
 };
 
 const en: Dict = {
@@ -645,6 +652,13 @@ const en: Dict = {
   'app.locked.title': 'Open the DocBench app',
   'app.locked.body': 'This page needs this PC’s app key. Open it from the shortcut created at install (DocBench in the Start menu) or run the command below in a terminal. Once opened, this browser remembers it.',
   'app.kept': '{list} keep their records inside the folder (.docbench — shared with the team), so they stay separate workspaces.',
+  'run.state.demo': 'Practice Claude (simulated) — nothing is sent',
+  'run.log.demo': 'This is the practice space, so a simulation answers instead of the real Claude. For real Claude jobs, open your folder in Edge or Chrome on a PC and connect.',
+  'run.compose.demo': 'This is the practice space: a simulated Claude answers in a few seconds (documents and feedback live only in this window and are not saved).',
+  'send.none': 'Marked as Claude\'s turn. Nothing on this page connects to Claude, so it will not be picked up by itself — run /docbench:docbench-feedback in Claude Code in your terminal to process it.',
+  'run.queue': '{n} feedback item(s) waiting for Claude.',
+  'run.queue.go': 'Hand over',
+  'send.marked': 'Marked as {ai}’s turn. Press “Hand to {ai}” at the top to send them together.',
 };
 
 const DICTS: Record<string, Dict> = { ko, en };

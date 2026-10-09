@@ -231,6 +231,7 @@ export class App {
   }
 
   private onFeedback(_first: boolean): void {
+    this.dock?.renderQueue();
     this.renderBar();
     this.renderRail();
     this.doc?.anchorFeedback();
@@ -386,19 +387,23 @@ export class App {
     const todoSig = `${c.owner}:${c.assistant}`;
     if (todoSig !== this.lastTodo) { this.lastTodo = todoSig; this.emit({ type: 'todo', owner: c.owner, assistant: c.assistant }); }
     bar.append(h('div', { class: 'db-turns' },
-      h('button', { class: 'db-pill owner', type: 'button', title: this.t('turn.owner'), onclick: () => this.panel.open('all', 'owner') }, h('span', { class: 'lbl', text: this.t('turn.owner') }), h('span', { class: 'n', text: c.owner })),
-      h('button', { class: 'db-pill assistant', type: 'button', title: this.t('turn.assistant'), onclick: () => this.panel.open('all', 'assistant') }, h('span', { class: 'lbl', text: this.t('turn.assistant') }), h('span', { class: 'n', text: c.assistant })),
+      // 좁은 화면에서는 글 대신 그림(사람·Claude)이 남는다 — 숫자만 덩그러니 남지 않게
+      h('button', { class: 'db-pill owner', type: 'button', title: this.t('turn.owner'), 'aria-label': `${this.t('turn.owner')} ${c.owner}`, onclick: () => this.panel.open('all', 'owner') }, h('span', { class: 'ic', html: icon('user') }), h('span', { class: 'lbl', text: this.t('turn.owner') }), h('span', { class: 'n', text: c.owner })),
+      h('button', { class: 'db-pill assistant', type: 'button', title: this.t('turn.assistant'), 'aria-label': `${this.t('turn.assistant')} ${c.assistant}`, onclick: () => this.panel.open('all', 'assistant') }, h('span', { class: 'ic', html: icon('spark') }), h('span', { class: 'lbl', text: this.t('turn.assistant') }), h('span', { class: 'n', text: c.assistant })),
     ));
     if ((this.can('assistant.notify') || this.dock) && c.assistant > 0) {
-      bar.append(h('button', { class: 'db-btn primary db-send', type: 'button', title: this.t(this.dock ? 'send.hint.run' : 'send.hint.inbox'), onclick: () => void this.handToAssistant(), text: this.t('send.label', { n: c.assistant }) }));
+      bar.append(h('button', { class: 'db-btn primary db-send' + (this.dock && !this.opts.host?.handoff ? ' dockable' : ''), type: 'button', title: this.t(this.dock ? 'send.hint.run' : 'send.hint.inbox'), 'aria-label': this.t('send.label', { n: c.assistant }), onclick: () => void this.handToAssistant() },
+        h('span', { class: 'ic', html: icon('spark') }), h('span', { class: 't', text: this.t('send.label', { n: c.assistant }) })));
     }
     if (this.dock) {
       const a = this.dock.activeRun();
       const av = this.dock.availability;
       const st = a ? a.state : av && !av.available ? 'off' : 'idle';
-      bar.append(h('button', { class: 'db-btn db-claude ' + st, type: 'button', 'aria-pressed': String(this.dock.isOpen), title: av?.message || this.t('run.bar.hint'), onclick: () => this.dock!.toggle() },
+      const lb = this.t(st === 'off' ? 'run.bar.offFull' : 'run.bar.' + st);
+      // 좁은 화면에서는 글을 접고 그림·도는 표시만 — 그래서 이름은 aria-label 로도 둔다
+      bar.append(h('button', { class: 'db-btn db-claude ' + st, type: 'button', 'aria-pressed': String(this.dock.isOpen), 'aria-label': lb, title: av?.message || this.t('run.bar.hint'), onclick: () => this.dock!.toggle() },
         st === 'running' ? h('span', { class: 'db-spin' }) : h('span', { class: 'ic', html: icon('spark') }),
-        h('span', { text: this.t(st === 'off' ? 'run.bar.offFull' : 'run.bar.' + st) }),
+        h('span', { class: 'lb', text: lb }), h('span', { class: 'sh', text: 'Claude' }),
         a ? h('span', { class: 'clk', text: '' }) : null));
     }
     bar.append(this.meButton());
@@ -456,6 +461,27 @@ export class App {
     requestAnimationFrame(() => this.els.rail.querySelector<HTMLElement>(`[title="${CSS.escape(dir + '/')}"]`)?.scrollIntoView({ block: 'center' }));
   }
 
+  /**
+   * 카드에서 Claude 차례로 넘긴 뒤 — 넘겼는데 아무 일도 없는 일이 없게(D72): 대시보드가 맡으면 그쪽으로,
+   * Claude 작업 창이 있으면 그 항목을 담아 연다(연결이 없으면 그 자리에서 연결 안내, 연습 공간은 흉내 Claude),
+   * 둘 다 없으면 다음에 무엇을 하면 되는지 알린다.
+   */
+  async askAssistant(ids: string[]): Promise<void> {
+    if (this.opts.host?.handoff || !this.dock) {
+      // 카드마다 보내지 않는다 — 대시보드 터미널·요청함(notify.command·대화창 보내기)이 카드 하나마다 돌지 않게. 위쪽 넘기기로 모아 보낸다
+      const canSend = !!this.opts.host?.handoff || !!this.ad.notifier;
+      this.toast(this.t(canSend ? 'send.marked' : 'send.none'), { sticky: !canSend });
+      return;
+    }
+    this.hidePanelOverlay();
+    this.dock.handoff(ids, true);
+  }
+
+  /** 피드백 창이 본문 위에 겹쳐 뜨는 너비(태블릿·휴대폰)면 접는다 — 겹친 창과 덮개가 Claude 창을 가린다 */
+  private hidePanelOverlay(): void {
+    if (this.root.classList.contains('panel-open') && getComputedStyle(this.els.panel).position === 'absolute') this.root.classList.remove('panel-open');
+  }
+
   async handToAssistant(): Promise<void> {
     const rows = this.scopedFb().filter((f) => turnOf(f) === 'assistant' && !this.dock?.activeFor(f.id));
     if (!rows.length) { this.toast(this.t('send.empty')); return; }
@@ -469,8 +495,10 @@ export class App {
       } catch (e) { this.toast(this.t('err.generic', { msg: (e as Error).message })); return; }
     }
     // Claude 작업을 띄울 수 있으면 창에서 모델·노력을 보고 시작한다
-    if (this.dock) { this.dock.handoff(rows.map((f) => f.id)); return; }
+    if (this.dock) { this.hidePanelOverlay(); this.dock.handoff(rows.map((f) => f.id)); return; }
     const docs = [...new Set(rows.map((r) => this.manifest.docs[r.docId]?.title || r.docId))];
+    // 맡길 곳이 아무것도 없다(Claude 작업도 요청함도 없는 화면) — 차례만 바뀌었다는 것과 다음 할 일을 알린다
+    if (!this.ad.notifier) { this.toast(this.t('send.none'), { sticky: true }); return; }
     try {
       const res = await this.ad.notifier!.send({ count: rows.length, docs, feedbackIds: rows.map((r) => r.id) });
       this.toast(res.message || this.t(res.delivered ? 'send.done' : res.queued ? 'send.queued' : 'send.copied'), { sticky: !res.delivered });

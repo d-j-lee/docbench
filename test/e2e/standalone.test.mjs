@@ -36,8 +36,8 @@ before(async () => {
 });
 after(async () => { await browser?.close(); server?.close(); });
 
-async function newPage(t, url) {
-  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 }, locale: 'ko-KR', permissions: ['clipboard-read', 'clipboard-write'] });
+async function newPage(t, url, opts = {}) {
+  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 }, locale: 'ko-KR', permissions: ['clipboard-read', 'clipboard-write'], ...opts });
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
@@ -124,6 +124,64 @@ test('file:// 로 열면 시작하기 작업대가 바로 — 이름·폴더를 
   await page.locator('.db-me', { hasText: '디제이' }).waitFor();
   assert.deepEqual(JSON.parse(await page.evaluate(() => localStorage.getItem('docbench:account'))), { id: acct.id, name: '디제이' });
   assert.equal(await page.evaluate(() => document.querySelector('meta[http-equiv="Content-Security-Policy"]').content.includes("img-src data: blob:")), true, '바깥 그림 주소로 새는 길을 막는다');
+  assert.deepEqual(errors, []);
+});
+
+test('휴대폰 너비: 위 띠가 한 줄에 들어가고, 넘기면 그 자리에서 Claude 창 — 연습 공간의 흉내 Claude 가 되묻고 → 답글을 받아 → 고친다', async (t) => {
+  // 주인 폰 실사용(0.5.0): 카드에서 Claude 차례로 넘겼는데 아무 반응이 없었다 — 창이 열리지 않았고 연습 공간에는 Claude 가 없었다
+  const { page, errors } = await newPage(t, pathToFileURL(html).href + '?lang=ko', { viewport: { width: 360, height: 780 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });
+  await page.waitForSelector('.db-sec');
+  const fits = () => page.evaluate(() => { const b = document.querySelector('.db-bar'); const p = document.querySelector('.db-toggle.panel').getBoundingClientRect(); return b.scrollWidth <= b.clientWidth && p.right <= innerWidth; });
+  assert.equal(await fits(), true, '목록·피드백 단추까지 화면 안에');
+  await page.locator('.db-toggle.nav').click();
+  await page.locator('.db-rail .db-nav', { hasText: '연습' }).first().click();
+  await page.locator('.db-sec', { hasText: '시범 운영' }).first().waitFor();
+  await page.locator('.db-toggle.panel').click();
+  const card = page.locator('.db-card[data-id="welcome-1"]');
+  // 1) 내용 없이 넘긴다 → 창이 바로 열리고(패널은 닫힘) 흉내 Claude 라고 밝힌다
+  await card.locator('button', { hasText: '반영해' }).click();
+  await page.locator('.db-dock .compose').waitFor();
+  assert.equal(await page.locator('.docbench.panel-open').count(), 0, '좁은 화면에서는 패널을 닫고 창을 보인다');
+  assert.match(await page.locator('.db-dock-state').innerText(), /흉내/);
+  // 넘기기를 접어도 창이 기다리는 피드백을 보여 준다(휴대폰 띠에는 넘기기 단추가 없다)
+  await page.locator('.db-dock .compose .db-btn.ghost').click();
+  const queue = page.locator('.db-dock .db-dock-card', { hasText: 'Claude 차례인 피드백이 1건' });
+  await queue.locator('.db-btn.primary').click();
+  await page.locator('.db-dock .compose').waitFor();
+  await page.locator('.db-dock .compose .db-btn.primary').click();
+  await page.locator('.db-run[data-state="done"]').waitFor();
+  const log = await page.locator('.db-runlog').innerText();
+  assert.match(log.split('\n').find((l) => l.trim() && !/^\d\d:/.test(l)) || '', /시작/, '로그 첫 줄은 시작(자리표시가 먹지 않는다)');
+  assert.doesNotMatch(log, /\{\w+\}/, '채워지지 않은 자리표시가 없다');
+  assert.match(log, /질문/);
+  // 2) 답글로 값을 주고 Claude 차례로 → 다시 창 → 그 섹션이 고쳐지고 바뀐 글이 표시된다
+  await page.locator('.db-toggle.panel').click();
+  await card.locator('button', { hasText: '답글' }).click();
+  await card.locator('.db-reply textarea').fill('11월 3~14일, 김민지');
+  await card.locator('.db-reply button', { hasText: 'Claude 차례로' }).click();
+  await page.locator('.db-dock .compose').waitFor();
+  await page.locator('.db-dock .compose .db-btn.primary').click();
+  await until(async () => (await page.locator('.db-run[data-state="done"]').count()) >= 2, 8000);
+  await until(async () => (await page.locator('ins.db-chg-ins').allInnerTexts()).join('|').includes('김민지'), 8000);
+  // 지운 글(<del>)은 표시일 뿐 문서 글자가 아니다 — 빼고 본다
+  const sched = await page.locator('.db-sec', { hasText: '시범 운영' }).last().evaluate((e) => { const c = e.cloneNode(true); c.querySelectorAll('del').forEach((d) => d.remove()); return c.textContent; });
+  assert.match(sched, /11월 3~14일/);
+  assert.match(sched, /김민지/);
+  assert.doesNotMatch(sched, /\[TODO\]/, '빈칸이 모두 채워짐');
+  assert.equal(await fits(), true);
+  assert.deepEqual(errors, []);
+});
+
+test('태블릿 너비: 겹쳐 뜬 피드백 창에서 넘겨도 Claude 창이 덮개에 가리지 않는다', async (t) => {
+  const { page, errors } = await newPage(t, pathToFileURL(html).href + '?lang=ko', { viewport: { width: 820, height: 1100 }, hasTouch: true });
+  await page.waitForSelector('.db-sec');
+  await page.locator('.db-rail .db-nav', { hasText: '연습' }).first().click();
+  if (!(await page.locator('.docbench.panel-open').count())) await page.locator('.db-toggle.panel').click();
+  await page.locator('.db-card[data-id="welcome-1"] button', { hasText: '반영해' }).click();
+  const start = page.locator('.db-dock .compose .db-btn.primary');
+  await start.waitFor();
+  const hit = await start.evaluate((b) => { const r = b.getBoundingClientRect(); return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.closest('.db-btn') === b; });
+  assert.equal(hit, true, '시작 단추를 누를 수 있다');
   assert.deepEqual(errors, []);
 });
 

@@ -31,7 +31,7 @@ export class RunDock {
   private tickT: ReturnType<typeof setInterval> | null = null;
   private lastStatus = 0;
   private busy = false;
-  private els: { log?: HTMLElement; logHead?: HTMLElement; list?: HTMLElement } = {};
+  private els: { log?: HTMLElement; logHead?: HTMLElement; list?: HTMLElement; queue?: HTMLElement } = {};
   private destroyed = false;
 
   constructor(app: App) {
@@ -102,6 +102,7 @@ export class RunDock {
     this.runs = list;
     if (!this.sel || !list.some((r) => r.id === this.sel)) this.sel = (list.find((r) => ACTIVE.has(r.state)) || list[0])?.id || null;
     if (this.sel) await this.pullLog(this.sel);
+    this.renderQueue();
     this.renderList();
     this.renderLog();
     if (changedActive || first) { this.app.renderBar(); this.app.panel?.render(); this.app.renderRail(); this.app.doc?.renderBusy(); }
@@ -165,9 +166,14 @@ export class RunDock {
   }
   toggle(): void { this.setOpen(!this.isOpen); }
 
-  /** 넘기기 준비 — 창을 열고 넘길 목록·설정을 보여 준다(바로 시작하지 않는다). 연결이 없으면 그 자리에서 연결 안내 */
-  handoff(ids: string[]): void {
-    this.pending = { kind: 'handoff', ids };
+  /**
+   * 넘기기 준비 — 창을 열고 넘길 목록·설정을 보여 준다(바로 시작하지 않는다). 연결이 없으면 그 자리에서 연결 안내.
+   * add = 카드에서 하나씩 넘길 때: 열려 있는 넘기기 목록에 보탠다(여러 개를 모아 한 번에 맡길 수 있게)
+   */
+  handoff(ids: string[], add = false): void {
+    // 앞서 담아 둔 것과 합친다 — 그 사이 닫힌 것은 뺀다
+    const prev = add && this.pending?.kind === 'handoff' ? this.pending.ids.filter((id) => this.app.fb.find((f) => f.id === id)?.status === 'open') : [];
+    this.pending = { kind: 'handoff', ids: [...new Set([...prev, ...ids])] };
     this.setOpen(true);
     void this.refreshStatus();
   }
@@ -217,7 +223,7 @@ export class RunDock {
     const efforts: [string, string][] = [['', t('run.effort.default')], ...((av?.runner?.efforts?.length ? av.runner.efforts : RUN_EFFORTS).map((e) => [e, t('run.effort.' + e)] as [string, string]))];
     const modes: [string, string][] = [['auto', t('run.mode.auto')], ['propose', t('run.mode.propose')]];
     const save = () => this.app.saveState();
-    const state = !av ? ['', t('run.state.checking')] : av.available ? ['ok', av.runner?.kind === 'server' ? t('run.state.server', { v: av.runner?.claude?.version || '' }) : av.runner?.kind === 'app' ? t('run.state.app', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' }) : t('run.state.runner', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' })] : ['bad', t('run.state.' + (av.reason || 'disabled'))];
+    const state = !av ? ['', t('run.state.checking')] : av.available ? ['ok', av.runner?.kind === 'demo' ? t('run.state.demo') : av.runner?.kind === 'server' ? t('run.state.server', { v: av.runner?.claude?.version || '' }) : av.runner?.kind === 'app' ? t('run.state.app', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' }) : t('run.state.runner', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' })] : ['bad', t('run.state.' + (av.reason || 'disabled'))];
     const head = h('header', { class: 'db-dock-h' },
       h('div', { class: 'db-dock-title' }, h('span', { class: 'db-dock-ic', html: icon('spark') }), h('b', { text: t('run.title') }),
         h('span', { class: 'db-dock-state ' + state[0], title: av?.message || '' }, h('i'), state[1])),
@@ -228,6 +234,8 @@ export class RunDock {
       h('button', { class: 'db-btn ghost sm db-dock-x', type: 'button', title: t('close'), 'aria-label': t('close'), onclick: () => this.setOpen(false), html: icon('close') }));
     const body = h('div', { class: 'db-dock-b' });
     if (this.pending) body.append(this.composer(this.pending));
+    const queue = h('div', { class: 'db-dock-q' });
+    body.append(queue);
     if (av && !av.available) body.append(this.setupCard(av));
     const stale = this.staleRunner(av);
     if (stale) body.append(stale);
@@ -236,9 +244,10 @@ export class RunDock {
     const logHead = h('div', { class: 'db-runlog-h' });
     const log = h('div', { class: 'db-runlog', role: 'log', 'aria-live': 'polite' });
     log.addEventListener('scroll', () => { this.follow = log.scrollTop + log.clientHeight >= log.scrollHeight - 24; });
-    this.els = { list, log, logHead };
+    this.els = { list, log, logHead, queue };
     body.append(h('div', { class: 'db-dock-cols' }, list, h('div', { class: 'db-runlog-wrap' }, logHead, log)));
     this.el.replaceChildren(head, body);
+    this.renderQueue();
     this.renderList();
     this.renderLog(true);
   }
@@ -254,7 +263,7 @@ export class RunDock {
     return h('div', { class: 'db-dock-card compose' + (can ? '' : ' waiting') },
       h('div', { class: 'db-dock-card-h' }, h('b', { text: propose ? t('run.compose.proposeTitle') : t('run.compose.title', { n: rows.length }) }),
         h('span', { class: 'db-hint', text: [...byDoc].map(([d, n]) => `${this.app.docTitle(d)} ${n}`).join(' · ') })),
-      h('p', { class: 'db-hint', text: (propose || s.mode === 'propose' ? t('run.compose.propose') : t('run.compose.auto')) + ' ' + t('run.compose.safe') }),
+      h('p', { class: 'db-hint', text: (propose || s.mode === 'propose' ? t('run.compose.propose') : t('run.compose.auto')) + ' ' + t(this.av?.runner?.kind === 'demo' ? 'run.compose.demo' : 'run.compose.safe') }),
       can ? null : h('p', { class: 'db-hint wait', text: t('run.compose.wait') }),
       h('div', { class: 'db-row' },
         h('button', { class: 'db-btn primary', type: 'button', disabled: !can || !rows.length, onclick: () => void this.launch(p.kind, rows.map((f) => f.id)) }, t(propose ? 'run.compose.proposeStart' : 'run.compose.start')),
@@ -340,6 +349,18 @@ export class RunDock {
     return h('div', { class: 'db-dock-card hint' }, h('span', { text: this.t('run.choose') }), e);
   }
 
+  /**
+   * 창만 열었을 때도 할 일이 보이게 — Claude 차례로 기다리는 피드백(돌고 있는 것 빼고)을 알리고 넘기기로 잇는다.
+   * 휴대폰 너비의 위 띠에는 넘기기 단추가 없다(D72). 피드백이 바뀌면 다시 그린다.
+   */
+  renderQueue(): void {
+    const q = this.els.queue;
+    if (!q || !this.isOpen) return;
+    const n = this.pending || !this.av?.available ? 0 : this.app.scopedFb().filter((f) => turnOf(f) === 'assistant' && !this.activeFor(f.id)).length;
+    q.replaceChildren(...(n ? [h('div', { class: 'db-dock-card queue' }, h('span', { text: this.t('run.queue', { n }) }),
+      h('button', { class: 'db-btn sm primary', type: 'button', onclick: () => void this.app.handToAssistant() }, this.t('run.queue.go')))] : []));
+  }
+
   private renderList(): void {
     const list = this.els.list;
     if (!list || !this.isOpen) return;
@@ -377,11 +398,14 @@ export class RunDock {
         usage?.limit?.utilization != null ? h('span', { class: 'db-hint', title: t('run.limit.hint'), text: t('run.limit', { p: Math.round(usage.limit.utilization * 100) }) }) : null),
       active ? h('button', { class: 'db-btn sm', type: 'button', onclick: () => void this.cancel(r.id), html: icon('stop') + ' ' + t('run.cancel') }) : '');
     const cur = this.logs.get(r.id) || { lines: [], next: 0 };
+    // 자리표시("Claude를 띄우는 중…")·마지막 오류 줄은 로그 줄이 아니다 — 세면 첫 줄(시작)을 건너뛴다. 떼고 세어 맨 뒤에 다시 붙인다
+    log.querySelectorAll('.db-ll.ph, .db-ll.err-final').forEach((e) => e.remove());
     const have = full ? 0 : log.querySelectorAll('.db-ll').length;
-    if (full || have > cur.lines.length) log.replaceChildren();
-    for (const l of cur.lines.slice(full ? 0 : have)) log.append(this.lineEl(l));
-    if (r.error && !log.querySelector('.db-ll.err-final')) log.append(h('div', { class: 'db-ll error err-final', text: r.error }));
-    if (!cur.lines.length && active) log.append(h('div', { class: 'db-ll muted', text: t('run.waiting') }));
+    const from = full || have > cur.lines.length ? 0 : have;
+    if (from === 0) log.replaceChildren();
+    for (const l of cur.lines.slice(from)) log.append(this.lineEl(l));
+    if (r.error) log.append(h('div', { class: 'db-ll error err-final', text: r.error }));
+    if (!cur.lines.length && active) log.append(h('div', { class: 'db-ll muted ph', text: t('run.waiting') }));
     this.scrollLog();
   }
 
@@ -409,7 +433,7 @@ export class RunDock {
     if (v.doc) vv.doc = this.app.docTitle(String(v.doc));
     if (v.section) vv.section = String(v.section).split(' › ').slice(-1)[0];
     if (v.fb) vv.fb = this.fbLabel(String(v.fb));
-    if (v.note) vv.note = t('run.note.' + v.note) + (v.problem ? ' ' + String(v.problem) : '');
+    vv.note = v.note ? t('run.note.' + v.note) + (v.problem ? ' ' + String(v.problem) : '') : ''; // 꼬리표 없는 줄에 '{note}' 가 그대로 보이지 않게
     if (v.reason) vv.reason = t('run.reason.' + v.reason) === 'run.reason.' + v.reason ? v.reason : t('run.reason.' + v.reason);
     if (l.k === 'start') {
       vv.kind = t('run.kindw.' + (v.kind || 'handoff'));
@@ -419,7 +443,7 @@ export class RunDock {
     }
     if (l.k === 'done') vv.what = (['edited', 'proposed', 'answered', 'asked', 'declined', 'skipped', 'failed'] as const).filter((k) => Number(v[k])).map((k) => t('run.sum.' + k, { n: v[k] })).join(' · ') || t('run.sum.none');
     if (l.k === 'done' || l.k === 'timeout') vv.time = dur(Number(v.ms || 0) || Number(v.sec || 0) * 1000);
-    const text = l.k === 'text' || l.k === 'summary' ? (l.k === 'summary' ? t('run.log.summary') + ' ' : '') + (l.text || '') : t('run.log.' + l.k, vv);
+    const text = l.k === 'text' || l.k === 'summary' ? (l.k === 'summary' ? t('run.log.summary') + ' ' : '') + (l.text || '') : t('run.log.' + l.k, vv).trim();
     const row = h('div', { class: 'db-ll ' + (cls[l.k] || '') }, h('time', { text: clock(l.at) }), h('span', { class: 'm', text: text }));
     if ((l.k.startsWith('apply.') || l.k === 'skip' || l.k === 'applyFail') && l.text && l.k !== 'apply.edit') row.append(h('q', { text: l.text }));
     const ref = l.ref;

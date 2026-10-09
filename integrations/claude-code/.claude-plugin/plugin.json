@@ -1,6 +1,6 @@
 {
   "name": "docbench",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "DocBench 를 웹 대시보드(어느 언어든)·로컬 문서 폴더에 붙이고(docbench-setup), 사람이 단 문서 피드백을 CLI 로 처리한다(docbench-feedback).",
   "author": {
     "name": "d-j-lee",

@@ -25,7 +25,7 @@
 | `src/index.ts` | `createDocBench`·`<doc-bench>`(dist/docbench.js) — 대시보드에 직접 끼움 | 호스트가 준 것(보통 rest) |
 | `src/standalone.ts` | 서버 없는 단일 HTML(release/docbench.html) | folder, 시작하기는 memory |
 | `src/app-shell.ts` | DocBench 앱 화면 `/` 와 대시보드 탭 `/embed`(dist/app.js) | rest(`/api/w/<id>`), 시작하기는 memory |
-| `src/welcome.ts` | "시작하기" 작업 공간의 글(문서 둘·예제 피드백 하나) — 저장하지 않는다 | memory |
+| `src/welcome.ts` | "시작하기" 작업 공간의 글(문서 둘·예제 피드백 하나) — 저장하지 않는다. 흉내 Claude(`demoRuns`, 실행기 종류 `demo`, D72) | memory |
 
 **같은 규칙은 한 곳에**: 바이트 보존(`textcodec`)·기록 폴더 모양(`workspace`)·기록 합치기(`records`)는 서버(Node)와 브라우저 폴더 어댑터가
 같은 코드를 쓴다. 각자는 입출력(파일·해시·잠금)과 CP949 코덱만 다르다 — 서버는 `iconv-lite`, 브라우저는 내장 `euc-kr` 디코더로 만든 역표
@@ -251,7 +251,7 @@ const bench = DocBenchHost.mount(el, { root, key, scope?, theme?, lang?, view?, 
 **폴더 어댑터**가 File System Access API 로 그 폴더를 직접 읽고 쓴다. 디스크 모양·판(바이트 해시)·이력·잠금 파일 이름까지 서버와 같아서,
 같은 폴더를 CLI·서버·앱이 이어받는다(실제 디스크에서 어댑터 ↔ CLI 왕복을 단위 시험으로 확인).
 
-- **처음 열기**: 이름도 폴더도 묻지 않고 "시작하기" 작업 공간(메모리 — 저장하지 않음)이 뜬다(D63). 주소로 열었고 기억한 문서 폴더의 권한이 이미 있으면 그 폴더를 바로 연다(`?pick` 이면 시작하기). 작업 공간 메뉴: 폴더 열기·다시 열기·읽기만 열기·기록 자리·밖으로 옮기기·시작하기.
+- **처음 열기**: 이름도 폴더도 묻지 않고 "시작하기" 작업 공간(메모리 — 저장하지 않음)이 뜬다(D63). 주소로 열었고 기억한 문서 폴더의 권한이 이미 있으면 그 폴더를 바로 연다(`?pick` 이면 시작하기). 작업 공간 메뉴: 폴더 열기·다시 열기·읽기만 열기·기록 자리·밖으로 옮기기·시작하기. 시작하기의 Claude 작업 창은 흉내 Claude 가 맡는다 — 되묻고, 답글의 값으로 그 섹션을 고치고, 흉내라고 밝힌다(D72).
 - **고르기·기억**: 열 때는 문서 폴더만 `showDirectoryPicker` 로 고른다. 대시보드 주소(http·https)로 열면 문서 폴더와 기록 보관함 핸들을 그 출처의 IndexedDB 에 두고 다음에 묻지 않는다(권한은 브라우저가 다시 물을 수 있다). `file://` 로 열면 기억하지 않는다(D36). 다른 브라우저는 `<input webkitdirectory>` 로 읽기만.
 - **기록 자리는 처음 저장할 때** (D65): 어댑터는 기록 폴더 없이(`data: null`) 시작해 읽기·둘러보기는 그대로 하고, 사람이 누른 첫 쓰기(저장·피드백·넘기기·Claude 작업)에서 `ensureData` → `requestData` 로 한 번 묻는다 — 기억한 보관함 / 보관함 고르기 / 문서 폴더 안(`.docbench`).
   고른 보관함 아래 이 문서 폴더의 기록 폴더(위 "기록 폴더"의 이름 규칙)를 붙이고(`attachData` — 설정을 다시 읽고 아는 문서를 맞춘다), 취소하면 쓰지 않는다(`RecordsNeededError`). 보기 상태처럼 사람이 누르지 않은 쓰기는 묻지 않고 건너뛴다.

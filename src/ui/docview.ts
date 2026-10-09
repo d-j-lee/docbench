@@ -301,6 +301,8 @@ export class DocView {
     if (!el) return;
     const at = this.app.ad.docs.checkedAt?.(this.id);
     const live = this.app.fbMode === 'live';
+    // 확인 시각을 모르는 저장소(연습 공간 등)는 "확인 중"을 띄워 두지 않는다 — 끝나지 않는 표시로 보였다(주인 폰 실사용)
+    el.hidden = !live && !this.app.ad.docs.checkedAt;
     el.textContent = live ? this.t('doc.fresh.live') : at ? this.t('doc.fresh.at', { ago: relTime(new Date(at).toISOString(), this.t) }) : this.t('doc.fresh.pending');
     el.title = this.t(live ? 'doc.fresh.live.hint' : 'doc.fresh.poll.hint');
     el.classList.toggle('live', live);

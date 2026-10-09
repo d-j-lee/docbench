@@ -420,8 +420,8 @@ export interface RunLogLine {
 
 export interface RunnerInfo {
   id: string;
-  /** 'runner' = 단일 HTML 용 실행기(폴더 하나), 'app' = 이 PC 의 DocBench 앱(여러 폴더), 'server' = docbench serve·대시보드 */
-  kind: 'runner' | 'server' | 'app';
+  /** 'runner' = 단일 HTML 용 실행기(폴더 하나), 'app' = 이 PC 의 DocBench 앱(여러 폴더), 'server' = docbench serve·대시보드, 'demo' = 시작하기(연습 공간)의 흉내 — 실제 Claude 가 아니다 */
+  kind: 'runner' | 'server' | 'app' | 'demo';
   /** 이 엔진을 "내 것"으로 쓰는 계정 id (설치 안내가 짝을 지어 이 PC 의 설정에 적는다) — 이름이 달라도 잇는다 */
   owners?: string[];
   user: string;

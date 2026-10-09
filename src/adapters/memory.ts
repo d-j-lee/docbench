@@ -23,6 +23,8 @@ export interface MemoryInit {
 
 export interface MemoryControl {
   externalEdit(id: string, md: string, by?: Person): void;
+  /** 누가 고쳤는지·왜(요약·피드백)를 남기며 쓴다 — 시작하기의 흉내 Claude 가 쓴다 */
+  write(id: string, md: string, by: Person, summary?: string, feedbackIds?: string[]): void;
   feedback(): Feedback[];
 }
 
@@ -57,6 +59,7 @@ export function createMemoryAdapters(init: MemoryInit): DocBenchAdapters & { con
   };
   const control: MemoryControl = {
     externalEdit(id, md, by = { kind: 'assistant', name: 'AI' }) { write(id, toLF(md), by, 'external edit'); emitDoc({ type: 'doc', id }); emitDoc({ type: 'changes' }); },
+    write(id, md, by, summary, feedbackIds) { write(id, toLF(md), by, summary, feedbackIds); emitDoc({ type: 'doc', id }); emitDoc({ type: 'changes' }); },
     feedback: () => rows,
   };
   init.onReady?.(control);

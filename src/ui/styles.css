@@ -101,6 +101,10 @@
 .docbench .db-turns { display: flex; gap: 6px; }
 .docbench .db-pill { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 2px 10px; font-size: 12.5px; font-weight: 600; border: 0; background: var(--db-sunk); color: var(--db-ink-2); white-space: nowrap; }
 .docbench .db-pill .n { font-family: var(--db-font-mono); font-variant-numeric: tabular-nums; }
+.docbench .db-pill .ic, .docbench .db-send .ic { display: inline-flex; }
+.docbench .db-pill .ic svg { width: 12px; height: 12px; }
+.docbench .db-send { display: inline-flex; align-items: center; gap: 6px; }
+.docbench .db-send .ic svg { width: 14px; height: 14px; }
 .docbench .db-pill.owner { background: var(--db-wait-soft); color: var(--db-wait); }
 .docbench .db-pill.assistant { background: var(--db-go-soft); color: var(--db-go); }
 .docbench .db-toggle { display: none; }
@@ -120,7 +124,8 @@
 
 @container docbench (max-width: 1099px) {
   .docbench .db-shell { grid-template-columns: var(--db-rail) minmax(0, 1fr); }
-  .docbench .db-panel { position: absolute; inset: 0 0 0 auto; width: min(var(--db-panel), 100%); z-index: 8; box-shadow: var(--db-shadow); transform: translateX(105%); transition: transform .18s; }
+  /* 겹쳐 뜨는 패널은 격자 칸이 아니라 작업대 전체를 기준으로 — 칸(3)을 그대로 두면 두 칸 격자에서 폭이 0 이 된다(0.3.0~0.5.0, 761~1099px) */
+  .docbench .db-panel { grid-column: auto; grid-row: auto; position: absolute; inset: 0 0 0 auto; width: min(var(--db-panel), 100%); z-index: 8; box-shadow: var(--db-shadow); transform: translateX(105%); transition: transform .18s; }
   .docbench.panel-open .db-panel { transform: none; }
   .docbench .db-toggle.panel { display: inline-flex; }
   .docbench.panel-open .db-scrim { display: block; position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.22); }
@@ -132,13 +137,25 @@
   .docbench.rail-open .db-rail { transform: none; }
   .docbench.rail-open .db-scrim { display: block; position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.22); }
   .docbench .db-toggle.nav { display: inline-flex; }
-  .docbench .db-brand small, .docbench .db-clock.plan, .docbench .db-clock .lbl, .docbench .db-pill .lbl, .docbench .db-bar .db-send, .docbench .db-claude .clk { display: none; }
+  .docbench .db-brand small, .docbench .db-clock.plan, .docbench .db-clock .lbl, .docbench .db-pill .lbl, .docbench .db-bar .db-send .t, .docbench .db-claude .clk { display: none; }
   .docbench .db-bar { gap: 6px; padding-inline: 10px; }
   .docbench .db-page { padding-left: 4px; }
   .docbench .db-main { padding-inline: 16px; }
 }
+@container docbench (max-width: 560px) {
+  /* 휴대폰 너비: 위 띠가 한 줄에 들어가게 — 이름·Claude 글은 접고, 넘기기는 Claude 창 안에서(창이 기다리는 피드백을 보여 준다) */
+  .docbench .db-bar .db-me { padding: 2px; }
+  .docbench .db-me .n, .docbench .db-claude .lb, .docbench .db-bar .db-send.dockable { display: none; }
+  .docbench .db-bar .db-claude .sh { display: inline; }
+  .docbench .db-bar > .db-toggle, .docbench .db-bar > .db-me, .docbench .db-bar > .db-claude { flex: none; }
+}
 @container docbench (max-width: 460px) {
-  .docbench .db-brand b { display: none; }
+  .docbench .db-brand { display: none; }
+  .docbench .db-bar { gap: 4px; padding-inline: 8px; }
+  .docbench .db-pill { padding: 2px 8px; gap: 4px; }
+}
+@container docbench (max-width: 400px) {
+  .docbench .db-bar .db-claude .sh { display: none; }
 }
 
 /* ---------- 문서 레일 ---------- */
@@ -455,6 +472,7 @@
 
 /* ---------------------------------------------------------------- 상단 바: Claude 단추 */
 .docbench .db-claude { gap: 6px; }
+.docbench .db-claude .sh { display: none; }
 .docbench .db-claude .ic svg { width: 12px; height: 12px; display: block; color: var(--db-go); }
 .docbench .db-claude[aria-pressed="true"] { background: var(--db-go-soft); border-color: var(--db-go); }
 .docbench .db-claude.running, .docbench .db-claude.queued { border-color: var(--db-go); color: var(--db-go); }
@@ -488,6 +506,9 @@
 .docbench .db-dock-card p { margin: 0; }
 .docbench .db-dock-card.compose { border-color: var(--db-go); background: color-mix(in srgb, var(--db-go-soft) 55%, var(--db-surface)); }
 .docbench .db-dock-card.setup { border-color: color-mix(in srgb, var(--db-wait) 45%, var(--db-line)); background: color-mix(in srgb, var(--db-wait-soft) 45%, var(--db-surface)); }
+.docbench .db-dock-card.queue { flex-direction: row; align-items: center; gap: 8px; }
+.docbench .db-dock-card.queue > span { flex: 1; min-width: 0; }
+.docbench .db-dock-q:empty { display: none; }
 .docbench .db-dock-card.stale { flex-direction: row; align-items: center; gap: 8px; border-color: color-mix(in srgb, var(--db-wait) 45%, var(--db-line)); }
 .docbench .db-dock-card.stale > span:nth-child(2) { flex: 1; }
 .docbench .db-dock-card.hint { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 6px 10px; font-size: 12.5px; }

@@ -102,7 +102,9 @@ export class Panel {
       const b = h('button', { class: 'db-btn sm', type: 'button', onclick: async () => {
         if (!this.bulkArmed) { this.bulkArmed = true; b.textContent = t('fb.bulk.confirm', { n: ownerRows.length }); setTimeout(() => { this.bulkArmed = false; b.textContent = t('fb.bulk', { n: ownerRows.length }); }, 4000); return; }
         this.bulkArmed = false;
-        for (const f of ownerRows) await app.updateFeedback(f, { waitingOn: 'assistant', thread: [...f.thread, { author: app.me, text: t('fb.act.toAssistant'), at: new Date().toISOString() }] });
+        const done: string[] = [];
+        for (const f of ownerRows) if (await app.updateFeedback(f, { waitingOn: 'assistant', thread: [...f.thread, { author: app.me, text: t('fb.act.toAssistant'), at: new Date().toISOString() }] })) done.push(f.id);
+        if (done.length) void app.askAssistant(done);
       } }, t('fb.bulk', { n: ownerRows.length }));
       this.list.append(h('div', { class: 'db-row' }, b));
     }
@@ -151,6 +153,8 @@ export class Panel {
     const act = h('div', { class: 'db-c-act' });
     const now = () => new Date().toISOString();
     const msg = (text: string) => ({ author: app.me, text, at: now() });
+    /** Claude 차례로 넘기고, 그 자리에서 Claude 에게 맡기는 길을 연다 — 차례만 바뀌고 아무 일도 없던 것(주인 실사용, D72) */
+    const toClaude = async (x: Feedback, patch: Partial<Feedback>) => { if (await app.updateFeedback(x, patch)) void app.askAssistant([x.id]); };
     const run = app.dock?.activeFor(f.id);
     if (run) {
       // Claude 작업이 이 피드백을 다루는 중 — 결과는 회신·제안으로 붙는다
@@ -162,7 +166,7 @@ export class Panel {
     } else if (f.status === 'open') {
       // 제안이 걸려 있으면 결정은 제안 상자의 적용·거절로 한다 (버튼 중복 방지)
       if (turn === 'owner' && app.can('feedback.update') && f.proposal?.state !== 'pending') {
-        act.append(h('button', { class: 'db-btn sm primary', type: 'button', title: t('fb.act.toAssistant.hint'), onclick: () => void app.updateFeedback(f, { waitingOn: 'assistant', thread: [...f.thread, msg(t('fb.act.toAssistant'))] }) }, t('fb.act.toAssistant')));
+        act.append(h('button', { class: 'db-btn sm primary', type: 'button', title: t('fb.act.toAssistant.hint'), onclick: () => void toClaude(f, { waitingOn: 'assistant', thread: [...f.thread, msg(t('fb.act.toAssistant'))] }) }, t('fb.act.toAssistant')));
         act.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => void app.updateFeedback(f, { status: 'declined', thread: [...f.thread, msg(t('fb.act.decline'))] }) }, t('fb.act.decline')));
       }
       if ((app.dock || app.can('assistant.propose')) && f.target.kind === 'section' && !(f.proposal && f.proposal.state === 'pending')) {
@@ -170,14 +174,14 @@ export class Panel {
       }
       if (app.can('feedback.update')) act.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => void app.updateFeedback(f, { status: 'resolved', thread: [...f.thread, msg(t('fb.act.resolve'))] }) }, t('fb.act.resolve')));
     } else if (app.can('feedback.update')) {
-      act.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => void app.updateFeedback(f, { status: 'open', waitingOn: 'assistant', thread: [...f.thread, msg(t('fb.act.reopen'))] }) }, t('fb.act.reopen')));
+      act.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => void toClaude(f, { status: 'open', waitingOn: 'assistant', thread: [...f.thread, msg(t('fb.act.reopen'))] }) }, t('fb.act.reopen')));
     }
     if (app.can('feedback.update') && !this.busy.has(f.id) && !run) {
       act.append(h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => {
         if (c.querySelector('.db-reply')) return;
         const ta = h('textarea', { placeholder: t('fb.reply.placeholder'), 'aria-label': t('fb.act.reply') }) as HTMLTextAreaElement;
         const box = h('div', { class: 'db-reply' }, ta, h('div', { class: 'db-c-act' },
-          h('button', { class: 'db-btn sm primary', type: 'button', onclick: () => { const v = ta.value.trim(); if (v) void app.updateFeedback(f, { status: 'open', waitingOn: 'assistant', thread: [...f.thread, msg(v)] }); } }, t('fb.reply.send')),
+          h('button', { class: 'db-btn sm primary', type: 'button', onclick: () => { const v = ta.value.trim(); if (v) void toClaude(f, { status: 'open', waitingOn: 'assistant', thread: [...f.thread, msg(v)] }); } }, t('fb.reply.send')),
           h('button', { class: 'db-btn sm', type: 'button', onclick: () => { const v = ta.value.trim(); if (v) void app.updateFeedback(f, { thread: [...f.thread, msg(v)] }); } }, t('fb.reply.sendOwner')),
           h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => box.remove() }, t('edit.cancel'))));
         c.append(box);
