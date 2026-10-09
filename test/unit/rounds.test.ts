@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { applyRunOutput, buildRunContext, planRevert, failUnreadable, NO_ANSWER, NO_DOC, type ApplyHost, type HostDoc } from '../../src/core/apply';
 import { planReview, planRun, RUN_MAX_DOCS, normalizeRunInput, buildRunPrompt, type ReviewContext } from '../../src/core/runs';
-import { roomClaudeMd, roomSettings, standingInstructions, terminalCommand, terminalCommands, terminalPromptFile, parentClaudeMd, ROOM_MARK } from '../../src/core/room';
+import { roomClaudeMd, roomSettings, standingInstructions, terminalCommand, terminalCommands, terminalDeepLink, isRoomPath, terminalPromptFile, parentClaudeMd, ROOM_MARK } from '../../src/core/room';
 import { normalizeFeedback } from '../../src/core/feedback';
 import type { Feedback, RunLogLine } from '../../src/types';
 
@@ -216,5 +216,14 @@ describe('Claude 자리 (core/room.ts, D76)', () => {
     expect(two.command.sh).toBe("cd '/home/x/claude notes' && claude --model 'opus' 'DocBench 요청 run-1 를 처리해 줘 (runs/run-1.prompt.md).'");
     expect(two.resume.sh).toBe("cd '/home/x/claude notes' && claude -c --model 'opus' 'DocBench 요청 run-1 를 처리해 줘 (runs/run-1.prompt.md).'");
     expect(two.resume.pwsh).toBe("Set-Location -LiteralPath '/home/x/claude notes'; claude -c --model 'opus' 'DocBench 요청 run-1 를 처리해 줘 (runs/run-1.prompt.md).'");
+    // Claude Code deep link — 자리를 알 때만. 네트워크 경로·'..'·방향 제어 문자는 받지 않는다(Claude Code 도 거부)
+    expect(two.link).toBe('claude-cli://open?cwd=%2Fhome%2Fx%2Fclaude%20notes&q=' + encodeURIComponent('DocBench 요청 run-1 를 처리해 줘 (runs/run-1.prompt.md).'));
+    expect(terminalCommands({ id: 'run-1' }).link).toBeUndefined();
+    expect(terminalDeepLink({ id: 'run-1', room: 'C:\\Users\\dj\\기록', locale: 'en' })).toBe('claude-cli://open?cwd=' + encodeURIComponent('C:\\Users\\dj\\기록') + '&q=' + encodeURIComponent('Handle DocBench request run-1 (runs/run-1.prompt.md).'));
+    expect(['C:\\a\\b', 'D:/x', '/home/a'].map(isRoomPath)).toEqual([true, true, true]);
+    expect(['\\\\srv\\share\\r', '//srv/r', 'C:\\a\\..\\b', 'rel', 'C:\\a\u202eb', ''].map(isRoomPath)).toEqual([false, false, false, false, false, false]);
+    // 켜 둔 Claude 에 "다음"만 — 기다리는 요청을 오래된 것부터(여럿이 쓰는 폴더면 같은 runner 만)
+    expect(roomClaudeMd({ docsName: 'x' })).toMatch(/"다음".*오래된 것부터/);
+    expect(roomClaudeMd({ docsName: 'x', locale: 'en' })).toMatch(/"next".*oldest first/);
   });
 });

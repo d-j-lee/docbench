@@ -233,7 +233,7 @@ components:
         overview: { type: string, description: Claude 의 한두 문장 요약 }
         created: { type: array, items: { type: string }, description: review 가 올린 피드백 id }
         view: { type: array, items: { $ref: '#/components/schemas/ReadingPlan' }, description: 'review·view 의 읽기 정리 — 화면이 보기 상태(접기)로만 받아들인다' }
-        terminal: { type: object, description: '터미널 Claude 를 기다리는 요청(queued, runner terminal:…)에만 — 서버가 아는 기록 자리로 붙이는 안내(POST /runs/terminal 의 terminal 과 같은 모양). 파일에 적지 않는다', properties: { room: { type: string }, roomName: { type: string }, command: { type: object }, resume: { type: object } } }
+        terminal: { type: object, description: '터미널 Claude 를 기다리는 요청(queued, runner terminal:…)에만 — 서버가 아는 기록 자리로 붙이는 안내(POST /runs/terminal 의 terminal 과 같은 모양). 파일에 적지 않는다', properties: { room: { type: string }, roomName: { type: string }, command: { type: object }, resume: { type: object }, link: { type: string } } }
         docs: { type: array, items: { type: string } }
         error: { type: string }
         usage: { type: object, description: '모델·시간·토큰·(구독) 5시간 한도 몫 — Claude Code 가 알려 준 값' }
@@ -528,7 +528,7 @@ paths:
                   - { $ref: '#/components/schemas/RunStatus' }
                   - type: object
                     properties:
-                      terminal: { type: object, properties: { room: { type: string, description: 기록 폴더(절대 경로) }, roomName: { type: string }, command: { type: object, properties: { pwsh: { type: string }, sh: { type: string } } }, resume: { type: object, description: '같은 줄에 claude -c(지난 대화 이어서)', properties: { pwsh: { type: string }, sh: { type: string } } } } }
+                      terminal: { type: object, properties: { room: { type: string, description: 기록 폴더(절대 경로) }, roomName: { type: string }, command: { type: object, properties: { pwsh: { type: string }, sh: { type: string } } }, resume: { type: object, description: '같은 줄에 claude -c(지난 대화 이어서)', properties: { pwsh: { type: string }, sh: { type: string } } }, link: { type: string, description: 'Claude Code deep link claude-cli://open?cwd=<기록 폴더>&q=<요청 말> — 새 터미널 창에 입력만 해 둔다(D80)' } } }
         '400': { description: 잘못된 요청 또는 처리할 것이 없음 }
         '422': { description: 읽기 전용 작업 폴더 }
   /instructions:

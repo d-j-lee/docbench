@@ -459,6 +459,7 @@ test('터미널 Claude(설치 없음, D76): 기록 폴더가 Claude 자리 — �
   assert.match(r.data.terminal.command.pwsh, new RegExp(`^Set-Location -LiteralPath '.+'; claude '.*${r.data.id}`));
   assert.match(r.data.terminal.command.sh, new RegExp(`^cd '.+' && claude '.*${r.data.id}`));
   assert.match(r.data.terminal.resume.sh, new RegExp(`^cd '.+' && claude -c '.*${r.data.id}`));
+  assert.ok(r.data.terminal.link.startsWith('claude-cli://open?cwd=' + encodeURIComponent(room) + '&q='), '서버는 자리를 알아 버튼 하나(deep link)');
   // 다시 열어도(목록에서) 같은 안내 — 서버가 아는 기록 자리로 붙인다
   const listed = (await api('GET', '/runs')).data.items.find((x) => x.id === r.data.id);
   assert.deepEqual([listed.state, listed.terminal.room, listed.terminal.command.pwsh], ['queued', room, r.data.terminal.command.pwsh]);

@@ -148,9 +148,14 @@ test('문구 선택 → 적는 칸(인용) → 초안 표시 → 터미널 한 �
   await sendDrafts(page, { ids: [f.id], via: 'terminal' });
   const term = page.locator('dialog[open] .db-term');
   await term.waitFor();
+  // 경로를 아는 서버: 버튼 하나 — Claude Code 의 deep link 가 기록 폴더에서 요청을 입력해 둔 채로 연다. 칠 줄은 "열리지 않으면" 아래
+  const link = await term.locator('a.db-term-open').getAttribute('href');
+  assert.ok(link.startsWith('claude-cli://open?cwd=' + encodeURIComponent(path.join(dir, '.docbench')) + '&q='), link);
+  await term.locator('details > summary', { hasText: '열리지 않으면' }).click();
   const cmd = await term.locator('.db-cmdbox').innerText();
   const id = /요청 (run-[\w-]+) /.exec(cmd)?.[1];
   assert.ok(id && cmd.includes(path.join(dir, '.docbench')), cmd);
+  assert.ok(decodeURIComponent(link).includes(id), '같은 요청');
   for (const x of ['.req.json', '.prompt.md', '.ctx.json']) await fs.access(path.join(dir, '.docbench/runs', id + x));
   assert.match(JSON.parse(await fs.readFile(path.join(dir, '.docbench/runs', id + '.req.json'), 'utf8')).runner, /^terminal:/);
   await term.getByRole('button', { name: '닫기' }).click();

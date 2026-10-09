@@ -516,6 +516,8 @@ export interface TerminalHandoff {
   command: { pwsh: string; sh: string };
   /** 같은 줄로 지난 대화 이어서(claude -c) — "지난 대화 이어서"를 고른 사람에게 */
   resume?: { pwsh: string; sh: string };
+  /** Claude Code deep link(claude-cli://open?cwd=…&q=…) — 기록 폴더의 절대 경로를 알 때만. 누르면 새 터미널 창에 요청이 입력된 채로 열린다 */
+  link?: string;
 }
 
 export interface RunsAvailability {

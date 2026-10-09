@@ -72,7 +72,9 @@ export class App {
     try {
       this.manifest = await this.ad.docs.manifest();
     } catch (e) {
-      this.els.page.replaceChildren(h('p', { class: 'db-notice tone-bad', text: this.t('doc.loadFail', { msg: (e as Error).message }) }));
+      // 열쇠가 없거나 틀린 주소 — 시스템 말(UNAUTHORIZED) 대신 어떻게 여는지
+      const unauth = (e as { status?: number })?.status === 401 || /UNAUTHORIZED/.test(String((e as Error)?.message));
+      this.els.page.replaceChildren(h('p', { class: 'db-notice tone-bad', text: unauth ? this.t('doc.needKey') : this.t('doc.loadFail', { msg: (e as Error).message }) }));
       this.emit({ type: 'error', message: 'manifest', error: e });
       return;
     }
@@ -681,10 +683,12 @@ export class App {
     }
     const feats = this.opts.features || {};
     const busy = this.dock?.busyDocs() || new Set<string>();
+    const waiting = this.dock?.waitingDocs() || new Map<string, RunStatus>();
     const dots = (key: string) => {
       const box = h('span', { class: 'db-dots' });
       const cnt = per[key];
       if (busy.has(key)) box.append(h('span', { class: 'db-spin sm', title: t('doc.busy') }));
+      else if (waiting.has(key)) box.append(h('span', { class: 'ic db-wait-ic', title: t('doc.waitingTerminal'), html: icon('clock') }));
       if (cnt?.draft) box.append(h('span', { class: 'db-dot draft', title: t('turn.draft'), text: cnt.draft }));
       if (cnt?.assistant) box.append(h('span', { class: 'db-dot assistant', title: t('turn.assistant'), text: cnt.assistant }));
       if (cnt?.owner) box.append(h('span', { class: 'db-dot owner', title: t('turn.owner'), text: cnt.owner }));
@@ -747,7 +751,7 @@ export class App {
       const a = this.dock.activeRun();
       const av = this.dock.availability;
       tools.append(tool('claude', 'spark', t('run.title'), () => this.dock!.toggle(), this.dock.isOpen,
-        a ? h('span', { class: 'db-spin sm' }) : av && !av.available ? h('span', { class: 'db-dot off', text: t('run.bar.off') }) : null));
+        a ? (this.dock.isTerminal(a) ? h('span', { class: 'ic', title: t('run.bar.terminal'), html: icon('clock') }) : h('span', { class: 'db-spin sm' })) : av && !av.available ? h('span', { class: 'db-dot off', text: t('run.bar.off') }) : null));
     }
     if (views.has('changes') && feats.changes !== false && this.ad.docs.changes) tools.append(tool('changes', 'history', t('view.changes'), () => void this.navigate('changes'), this.view === 'changes'));
     if (views.has('map') && feats.map !== false) tools.append(tool('map', 'map', t('view.map'), () => void this.navigate('map'), this.view === 'map', per['#map'] ? dots('#map') : null));

@@ -145,8 +145,9 @@ export class Panel {
     const caret = focusKey && 'selectionStart' in act! ? [act!.selectionStart, act!.selectionEnd] as const : null;
     const parts: HTMLElement[] = [head, this.list];
     const rows = this.rowsOf(filter);
-    if (filter === 'draft') {
-      if (rows.length) this.list.append(this.draftTools(rows));
+    // 보내기 막대는 보낼 초안이 있을 때만 — 빈 칸에 "0개 보내기"를 늘 세워 두지 않는다(붙일 말은 기억해 둔다)
+    if (filter === 'draft' && rows.length) {
+      this.list.append(this.draftTools(rows));
       parts.push(this.sendBar(rows));
     }
     this.el.replaceChildren(...parts);

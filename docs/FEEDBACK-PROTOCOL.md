@@ -51,7 +51,7 @@
 | 어디로 | 하는 일 | 준비 |
 |---|---|---|
 | 이 PC 의 DocBench 앱 / 서버 | 엔진이 `claude -p` 를 문서 폴더 밖에서 읽기 도구만 주어 띄우고 결과를 반영한다. 진행은 Claude 작업 창에 | `docbench app` (설치 문구 하나) 또는 `docbench serve` |
-| 터미널 한 줄 (설치 없음, D76) | 기록 폴더에 요청 파일을 쓰고 칠 한 줄을 보여 준다. 기록 폴더에서 Claude Code 를 켜면 결과 파일을 남기고, 열려 있는 화면(또는 앱)이 반영한다 | Claude Code 만 |
+| 터미널 한 줄 (설치 없음, D76·D80) | 기록 폴더에 요청 파일을 쓰고 **Claude Code 에서 열기**(deep link — 새 터미널 창에 요청이 입력된 채로, Enter 만) · 칠 한 줄 · 켜 둔 Claude 에 "다음"을 보여 준다. Claude 가 결과 파일을 남기면 열려 있는 화면(또는 앱)이 반영한다 | Claude Code 만(대화형으로 한 번이라도 쓴 PC — deep link 가 그때 등록된다) |
 | 대시보드 터미널 | 대시보드가 자기 터미널로 위의 한 줄을 실행한다(본문은 넘기지 않는다) | 대시보드 연결 |
 | 요청함 | `inbox/req-*.json` 을 남기고 알린다 — 터미널에서 `/docbench:docbench-feedback` | Claude Code + 플러그인 |
 
@@ -121,7 +121,9 @@ docbench fb add --doc <문서> --section "<섹션 키>" --title "<짧은 제목>
 Set-Location -LiteralPath '<기록 폴더>'; claude 'DocBench 요청 <id> 를 처리해 줘 (runs/<id>.prompt.md).'
 ```
 
-Claude 는 `runs/<id>.result.json` 하나만 쓴다. 같은 계정의 화면·앱이 그 파일을 보고 같은 규칙으로 반영한다. 요청 없이 스스로 올리는 제안은 `runs/inbox-<이름>.result.json`(먼저 검토 모양). 경로를 모르는 브라우저는 그 폴더에서 열라고 안내한다(Windows: 탐색기 주소창에 `pwsh`).
+기록 폴더의 절대 경로를 알면(앱·서버, 또는 단일 HTML 에 사람이 한 번 알려 준 경로 — 끝 폴더가 기록 폴더여야 받는다) 같은 일을 deep link 로: `claude-cli://open?cwd=<기록 폴더>&q=<위 요청 말>`. Claude Code 가 대화형으로 처음 쓰일 때 OS 에 등록하고(Windows `HKCU\Software\Classes\claude-cli`), 새 터미널 창에 그 폴더에서 요청을 **입력만** 해 둔다(보내기는 사람이 Enter — [공식 문서](https://code.claude.com/docs/en/deep-links)). 처음 켤 때의 신뢰 창은 기본값이 "No, exit" 이라 ↓ 로 "Yes, I trust this folder" 를 고른다. 이미 그 폴더에서 Claude 를 켜 두었으면 "다음"이라고만 하면 기다리는 요청을 오래된 것부터 처리한다(자리의 CLAUDE.md).
+
+Claude 는 `runs/<id>.result.json` 하나만 쓴다. 같은 계정의 화면·앱이 그 파일을 보고 같은 규칙으로 반영한다. 요청 없이 스스로 올리는 제안은 `runs/inbox-<이름>.result.json`(먼저 검토 모양). 경로를 모르는 브라우저는 위치를 한 번 묻거나 그 폴더에서 열라고 안내한다(Windows: 탐색기 주소창에 `pwsh`).
 
 **작성자 표시**: 사람 작성자는 `{ kind: "human", id: <계정>, name?: <표시 이름> }` — 화면은 계정(`id`)으로 "내 것"을 가린다. 계정은 단일 HTML 이면 그 브라우저에 저절로 만든 `u-` + 10자리 16진, 서버·앱이면 이 PC 의 설정 `user`(없으면 운영체제 로그인 이름)다. 표시 이름은 쓸 때의 별명이고 바뀔 수 있다.
 CLI 는 기본으로 `assistant:Claude` 로 기록한다. 사람이 CLI 를 쓰면 `--as human:<이름>` 또는 `DOCBENCH_ACTOR=human:<이름>` — 계정 없이 이름만 적힌다.

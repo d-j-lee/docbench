@@ -274,7 +274,7 @@ const bench = DocBenchHost.mount(el, { root, key, scope?, theme?, lang?, view?, 
 - **JSON 파일**: 메모장·PowerShell 5.1 이 붙이는 BOM 을 떼고 읽는다(서버도 같게 — `core.parseJsonText`).
 - **쓰기**: `createWritable()` 은 임시(.crswap) 파일에 쓰고 닫을 때 바꿔 끼운다.
 - **Claude 작업**: 페이지는 PC 프로그램을 켤 수 없으므로 이 PC 의 DocBench 앱(또는 예전 실행기 `docbench runner`)이 기록 폴더의 요청 파일을 받아 claude 를 띄운다. 연결 문구는 CLI 파일을 받아 확인하고 `link "<문서 폴더>" [--data "<기록 폴더>"] --owner <이 화면의 계정>` → `app --detach` 로 잇는다 — 짝(기록 폴더·계정)이 이 PC 의 설정에 적히고 켜진 앱이 몇 초 안에 그 폴더를 맡는다(D60·D63·D67).
-  엔진 없이는 "어디로 = 터미널 한 줄"(D76): 기록 폴더에 요청·자리 파일을 쓰고 칠 한 줄을 보여 준다. 페이지는 기록 폴더의 절대 경로를 몰라 "그 폴더에서 열기"를 안내한다(Windows: 탐색기 주소창에 `pwsh`). 결과 파일은 이 페이지가 몇 초마다 보고 반영한다.
+  엔진 없이는 "어디로 = 터미널 한 줄"(D76): 기록 폴더에 요청·자리 파일을 쓰고 칠 한 줄을 보여 준다. 페이지는 기록 폴더의 절대 경로를 몰라 위치를 한 번 묻고(끝 폴더가 기록 폴더일 때만 받아 이 브라우저에 기억), 그 뒤로는 Claude Code deep link 단추 하나(D80). 그 전까지는 "그 폴더에서 열기"를 안내한다(Windows: 탐색기 주소창에 `pwsh`). 결과 파일은 이 페이지가 몇 초마다 보고 반영한다.
 - **없는 것**: git 기준본, 요청함 알림 명령(`notify.command`).
 - **CSP**: 파일 안에 `connect-src 'none'`·`img-src data: blob:`·referrer 없음 — DocBench 가 문서를 어디로도 보내지 않는 데 더해, 페이지 안에서 요청·그림으로 새는 길도 막는다. 문서 속 바깥 주소 그림은 보이지 않는다. 새 창 이동은 CSP 로 못 막는다(문서 속 스크립트는 DOMPurify 가 지운다).
 - `file://` 은 보안 문맥이라 쓰기가 된다. `http://사내호스트` 는 보안 문맥이 아니어서 읽기만 된다.

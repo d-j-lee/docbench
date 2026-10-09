@@ -326,7 +326,7 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 **설치 없이 (터미널 한 줄, D76)** — 화면의 보내기에서 "어디로 = 터미널 한 줄". 화면이 기록 폴더에 요청 파일(`runs/<id>.req.json`·`.prompt.md`·`.ctx.json`)과 Claude 자리 파일(`CLAUDE.md`·`.claude/settings.json`·`instructions.md`)을 쓰고 한 줄을 준다. 사람이 그 한 줄을 PowerShell(또는 셸)에 붙여 넣으면, 기록 폴더에서 켜진 Claude Code 가 요청 파일을 읽고 `runs/<id>.result.json` 하나를 쓴다. 열린 화면(단일 HTML) 또는 앱이 그것을 받아 반영한다.
 - 왜 기록 폴더에서 켜나: Claude Code 는 **켠 폴더**를 기준으로 지시(그 폴더와 **위 폴더들**의 CLAUDE.md)·권한(그 폴더의 `.claude/settings.json` — 위 폴더 것은 물려받지 않음)·접근 범위·대화 기록(`claude -c`)·신뢰 창을 정한다. 문서 폴더에서 켜면 그 저장소의 지시·훅이 섞이고 문서 폴더에 파일이 생긴다(D57). 기록 폴더의 설정은 결과 파일만 묻지 않고 쓰게 하고, 기록·문서 폴더 직접 편집은 막고, 위 폴더의 CLAUDE.md 는 `claudeMdExcludes` 로 뺀다(관리자 CLAUDE.md 는 뺄 수 없다).
 - 처음 한 번은 Claude Code 가 그 폴더를 믿을지 묻는다 — 설정의 허용(allow) 규칙은 믿은 뒤에야 쓰인다.
-- 앱·서버가 기록 폴더의 절대 경로를 알면 한 줄에 `Set-Location` 이 들어 있다. 단일 HTML 은 경로를 몰라 "그 폴더에서 열기"를 안내한다(Windows: 탐색기 주소창에 `pwsh`). 앱·서버는 문서 폴더를 `additionalDirectories` 로 더해 Claude 가 읽게 하고, 단일 HTML 은 고칠 글을 요청 파일에 넣는다.
+- 앱·서버가 기록 폴더의 절대 경로를 알면 한 줄에 `Set-Location` 이 들어 있고, **Claude Code 에서 열기** 단추(deep link `claude-cli://open?cwd=…&q=…`, D80)가 새 터미널 창에 요청을 입력해 둔 채로 연다 — 붙여 넣기 없이 Enter 만. 단일 HTML 은 경로를 몰라 기록 폴더 위치를 한 번 묻고(이 브라우저에만 기억), 그 전까지는 "그 폴더에서 열기"를 안내한다(Windows: 탐색기 주소창에 `pwsh`). 켜 둔 Claude 에는 "다음" 한 마디로 이어 간다. 앱·서버는 문서 폴더를 `additionalDirectories` 로 더해 Claude 가 읽게 하고, 단일 HTML 은 고칠 글을 요청 파일에 넣는다.
 
 **플러그인으로 (켜 둔 Claude 대화)** — 대시보드 터미널의 Claude Code 에서 `/docbench-feedback`.
 
@@ -336,7 +336,7 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 - 터미널을 자동으로 깨우려면(A·B·C) **이 PC 의 설정**(§3 공통 준비)의 `workspaces["<문서 폴더>"].notify.command` 에 명령을 적는다. 명령은 문서 폴더를 현재 폴더로, 서버 프로세스의 환경 변수를 물려받아 셸 없이 실행된다. 요청함으로 보낼 때 그 명령이
   `DOCBENCH_REQUEST`(요청 파일 경로)·`DOCBENCH_ROOT` 환경변수를 받고 실행된다(요청함으로 보낼 때). **대시보드가 이미 Claude 터미널을 띄워 두고 입력을 밀어 넣을 수 있으면**
   그 API 를 부르는 작은 스크립트를 거는 것이 가장 자연스럽다 — 떠 있는 세션이 `/docbench-feedback` 을 받는다.
-- 단일 HTML(E)은 앱이 이어져 있으면 Claude 작업(§6), 아니면 터미널 한 줄. 명령을 실행하지는 않는다(페이지는 프로그램을 켜지 못한다).
+- 단일 HTML(E)은 앱이 이어져 있으면 Claude 작업(§6), 아니면 터미널 한 줄. 페이지는 프로그램을 켜지 못한다 — Claude Code 가 OS 에 등록한 deep link 로 새 터미널 창을 열게 할 뿐이고, 보내기는 사람이 Enter.
 - 대화하며 처리하고 싶으면 플러그인 길, 맡겨 두고 결과만 보려면 Claude 작업(§6), 설치 없이 지금 Claude Code 로는 터미널 한 줄. 같은 피드백을 동시에 잡아도 판 비교로 한쪽만 반영된다.
 
 **무인 처리** — 이제는 §6 Claude 작업을 권한다(Claude 에게 읽기 도구만, 반영은 DocBench 가 판 비교로). 아래 `notify.command` 로 도구를 다 가진 `claude -p` 를 띄우는 길은 신뢰하는 사람만 피드백을 다는 폴더에서만 — 이 PC 의 설정에:
@@ -401,7 +401,7 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 | Claude 가 고친 문서 | `docbench doc write …` 뒤 가만히 둔 화면이 새 글을 보여 준다 (앱·서버 바로, 단일 HTML 몇 초) |
 | Claude 작업 | 창에 "연결됨" → 초안 둘 + 붙일 말로 보내기 → 로그가 흐르고 끝나면 문서에 바뀐 글(초록·취소선, 누가: Claude) · "볼 것"에 회차 → 바뀐 곳 → 하나 되돌리기(글이 바이트 그대로 돌아옴) → 하나 확인 |
 | 제안만 · Claude 검토 | "제안만"으로 보내면 문서는 그대로·볼 것에 차이 → 적용. "Claude 검토"(제안·질문) → 볼 것에 작성자 Claude 카드, 읽기 정리 → 접기·안내(되돌리기) |
-| 터미널 한 줄 | 앱을 끈 채 "어디로 = 터미널 한 줄" → 한 줄을 PowerShell 에 → 처음 한 번 폴더 신뢰 → Claude 가 결과 파일 → 화면 볼 것에 반영. 기록 폴더 밖(문서 폴더)에는 아무것도 생기지 않는다 |
+| 터미널 한 줄 | 앱을 끈 채 "어디로 = 터미널 한 줄" → **Claude Code 에서 열기**(또는 한 줄을 PowerShell 에) → 처음 한 번 폴더 신뢰(↓ 로 "Yes, I trust this folder") → Claude 가 결과 파일 → 화면 볼 것에 반영. 기록 폴더 밖(문서 폴더)에는 아무것도 생기지 않는다 |
 | 도구 밖 수정 | 편집기·터미널에서 고친 뒤 화면으로 돌아오면 그 문서는 바로, 다른 문서는 목록에 "바뀜". 편집 중에 바뀌면 내 글이 지켜진다 |
 | 보안 | 다른 PC 에서 4317 이 안 열린다(기본 127.0.0.1). 프록시 뒤라면 `--token` |
 | 회귀 | `npm run check` |

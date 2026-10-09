@@ -57,7 +57,8 @@ export function roomClaudeMd(r: RoomInfo): string {
     '',
     '## Requests',
     '- People review documents in DocBench and send feedback in batches. Each batch is a request in `runs/`.',
-    '- Pending requests: `runs/*.req.json` whose `runner` starts with "terminal" and that have no `.result.json` and no status file (`<id>.json`) yet. When the person names a request id, handle only that one.',
+    '- Pending requests: `runs/*.req.json` whose `runner` starts with "terminal" and that have no `.result.json`, no status file (`<id>.json`) and no `.cancel` yet. When the person names a request id, handle only that one.',
+    '- If the person just says "next", "go", "handle it" (no id), handle the pending requests oldest first, one result file each. If pending requests have different `runner` values (several people share this folder), handle only the ones with the same `runner` as the request you handled earlier in this conversation — or ask whose to handle.',
     '- For each request read `runs/<id>.prompt.md` to the end and follow it. Write the result as ONE JSON value to `runs/<id>.result.json` exactly in the schema given there. Do not edit any other file — DocBench applies the result to the documents with version checks.',
     '- Then tell the person in one or two sentences what you did; the open DocBench screen applies it within seconds.',
     '',
@@ -80,7 +81,8 @@ export function roomClaudeMd(r: RoomInfo): string {
     '',
     '## 요청 처리',
     '- 사람은 DocBench 화면에서 문서를 읽고 피드백을 묶어 보냅니다. 보낸 묶음 하나가 `runs/` 의 요청 하나입니다.',
-    '- 처리할 요청: `runs/*.req.json` 중 `runner` 가 "terminal" 로 시작하고, 같은 id 의 `.result.json` 과 상태 파일(`<id>.json`)이 아직 없는 것. 사람이 요청 id 를 말하면 그것만.',
+    '- 처리할 요청: `runs/*.req.json` 중 `runner` 가 "terminal" 로 시작하고, 같은 id 의 `.result.json`·상태 파일(`<id>.json`)·`.cancel` 이 아직 없는 것. 사람이 요청 id 를 말하면 그것만.',
+    '- 사람이 id 없이 "다음", "처리해 줘", "이어서"라고만 하면 처리할 요청을 오래된 것부터 하나씩(요청마다 결과 파일 하나). `runner` 가 서로 다른 요청이 섞여 있으면(여럿이 함께 쓰는 폴더) 이 대화에서 앞서 처리한 요청과 같은 `runner` 의 것만 — 그런 요청이 없었으면 누구 것을 할지 묻습니다.',
     '- 요청마다 `runs/<id>.prompt.md` 를 끝까지 읽고 그대로 따릅니다. 결과는 그 안에 적힌 모양(JSON Schema)대로 JSON 하나를 `runs/<id>.result.json` 에만 씁니다. 다른 파일은 고치지 않습니다 — 문서 반영은 DocBench 가 판을 비교해 합니다.',
     '- 쓰고 나면 무엇을 했는지 한두 줄로 말해 줍니다. 열려 있는 DocBench 화면이 몇 초 안에 반영합니다.',
     '',
@@ -197,8 +199,31 @@ export function terminalPromptFile(id: string, req: RunStartInput, prompt: strin
  * 터미널에서 칠 한 줄. room = 기록 폴더의 절대 경로(아는 쪽만 — 서버·앱). 모르면 그 폴더에서 치라고 안내한다.
  * shell: pwsh(Windows 기본) | sh
  */
+/** Claude 에게 할 말 — 칠 줄과 deep link 가 같은 말 */
+const terminalAsk = (id: string, locale?: 'ko' | 'en') => (locale === 'en' ? `Handle DocBench request ${id} (runs/${id}.prompt.md).` : `DocBench 요청 ${id} 를 처리해 줘 (runs/${id}.prompt.md).`);
+
+/** 기록 폴더의 절대 경로로 쓸 수 있나 — Windows 드라이브 경로나 유닉스 경로. 네트워크(UNC)·'..'·제어 문자는 안 된다(deep link 도 거부) */
+export function isRoomPath(p: unknown): p is string {
+  if (typeof p !== 'string' || !p || p.length > 1000) return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/.test(p)) return false;
+  if (/^[\\/]{2}/.test(p)) return false;
+  if (p.split(/[\\/]/).includes('..')) return false;
+  return /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('/');
+}
+
+/**
+ * Claude Code 의 deep link — 새 터미널 창에 Claude Code 를 기록 폴더에서 켜고 요청을 입력해 둔다(보내기는 사람이 Enter).
+ * Claude Code 가 처음 대화형으로 쓰일 때 OS 에 등록한다(Windows: HKCU\Software\Classes\claude-cli). 공식: code.claude.com/docs/en/deep-links
+ * 모델·노력은 실을 수 없다 — 그 PC 의 Claude Code 기본값
+ */
+export function terminalDeepLink(o: { id: string; room: string; locale?: 'ko' | 'en' }): string | null {
+  if (!isRoomPath(o.room)) return null;
+  return `claude-cli://open?cwd=${encodeURIComponent(o.room)}&q=${encodeURIComponent(terminalAsk(o.id, o.locale))}`;
+}
+
 export function terminalCommand(o: { id: string; room?: string; shell: 'pwsh' | 'sh'; model?: string; effort?: string; resume?: boolean; locale?: 'ko' | 'en' }): string {
-  const ask = o.locale === 'en' ? `Handle DocBench request ${o.id} (runs/${o.id}.prompt.md).` : `DocBench 요청 ${o.id} 를 처리해 줘 (runs/${o.id}.prompt.md).`;
+  const ask = terminalAsk(o.id, o.locale);
   // PowerShell 은 ‘ ’ ‚ ‛ 도 작은따옴표로 친다 — 모두 두 번 써서 글자로. sh 는 '\'' 로
   const q = (s: string) => o.shell === 'pwsh' ? `'${s.replace(/['\u2018\u2019\u201A\u201B]/g, '$&$&')}'` : `'${s.replace(/'/g, `'\\''`)}'`;
   const flags = [o.resume ? '-c' : '', o.model ? `--model ${q(o.model)}` : '', o.effort ? `--effort ${o.effort}` : ''].filter(Boolean).join(' ');
@@ -208,9 +233,10 @@ export function terminalCommand(o: { id: string; room?: string; shell: 'pwsh' | 
 }
 
 /** 터미널 안내에 줄 두 벌(새 대화 · 지난 대화 이어서 -c) × 두 셸 — 서버·앱·단일 HTML 이 같은 모양으로 */
-export function terminalCommands(o: { id: string; room?: string; model?: string; effort?: string; locale?: 'ko' | 'en' }): { command: { pwsh: string; sh: string }; resume: { pwsh: string; sh: string } } {
+export function terminalCommands(o: { id: string; room?: string; model?: string; effort?: string; locale?: 'ko' | 'en' }): { command: { pwsh: string; sh: string }; resume: { pwsh: string; sh: string }; link?: string } {
   const c = (shell: 'pwsh' | 'sh', resume: boolean) => terminalCommand({ ...o, shell, resume });
-  return { command: { pwsh: c('pwsh', false), sh: c('sh', false) }, resume: { pwsh: c('pwsh', true), sh: c('sh', true) } };
+  const link = o.room ? terminalDeepLink({ id: o.id, room: o.room, locale: o.locale }) : null;
+  return { command: { pwsh: c('pwsh', false), sh: c('sh', false) }, resume: { pwsh: c('pwsh', true), sh: c('sh', true) }, ...(link ? { link } : {}) };
 }
 
 // ---------------------------------------------------------------- 결과 파일 받기 (서버·화면 공통 규칙)

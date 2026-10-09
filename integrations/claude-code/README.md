@@ -16,4 +16,4 @@ claude plugin install docbench@docbench
 - `cli/docbench.mjs` — `docbench` CLI 파일 하나(`release/docbench.mjs` 와 같은 것, `npm run release` 가 복사). DocBench 앱(`app`)·피드백 처리(`fb`·`doc`·`status`)·예전 실행기(`runner`)가 다 들어 있다. 스킬은 `node "${CLAUDE_PLUGIN_ROOT}/cli/docbench.mjs"` 로 부르므로 플러그인만 깔면 CLI 를 따로 받지 않아도 된다(Node 20.11+). 앱을 상시로 켤 때는 이 파일을 `%LOCALAPPDATA%\docbench\docbench.mjs`(macOS `~/Library/Application Support/docbench/`, Linux `~/.config/docbench/`)로 복사해 쓴다 — 플러그인 경로는 갱신 때 바뀔 수 있고, 로그인 때 켜기·바로가기는 경로에 영문이 아닌 글자가 있으면 만들지 않는다.
 - 단일 HTML 화면의 Claude 연결 안내도 같은 자리에 같은 파일을 받아 앱을 켜고 `docbench link --owner <계정>` 으로 그 폴더를 잇는다.
 - `CLAUDE.md.snippet` — 대시보드·문서 폴더의 CLAUDE.md 에 붙여 넣을 몇 줄.
-- **플러그인 없이**: 화면의 보내기에서 "어디로 = 터미널 한 줄"을 고르면 기록 폴더에서 Claude Code 를 켜는 한 줄이 나온다. 그 폴더의 `CLAUDE.md`·`.claude/settings.json` 은 DocBench 가 쓰므로 이 플러그인도, 이 스킬도 필요 없다(D76).
+- **플러그인 없이**: 화면의 보내기에서 "어디로 = 터미널 한 줄"을 고르면 기록 폴더에서 Claude Code 를 여는 단추(deep link)와 같은 일을 하는 한 줄이 나온다. 켜 둔 Claude 에는 "다음"이라고만 하면 된다. 그 폴더의 `CLAUDE.md`·`.claude/settings.json` 은 DocBench 가 쓰므로 이 플러그인도, 이 스킬도 필요 없다(D76).

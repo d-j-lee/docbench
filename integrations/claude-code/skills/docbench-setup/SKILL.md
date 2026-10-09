@@ -52,7 +52,7 @@ DocBench 는 문서 폴더의 `.md` 를 제목 깊이별로 접어 보고, 섹�
 | 문서가 DB·사내 시스템 | **D. 계약 구현** (`docs/openapi.yaml`) |
 
 - **T 가 못 하는 것**: 다른 PC 의 브라우저(보는 사람 PC 의 앱에 붙는다), https·사내 호스트 이름 대시보드는 [미확인] — 브라우저가 `http://127.0.0.1` 로 가는 스크립트·iframe 을 막을 수 있으니 먼저 시험한다. 대시보드 인증은 DocBench 에 걸리지 않는다(앱 열쇠가 대신).
-- **E 가 못 하는 것**: 명령 실행(터미널 한 줄은 사람이 붙여 넣는다), 파일 감시(몇 초 간격 확인 + 창으로 돌아오면 바로), 바깥 주소 그림. 보안 문맥(`file://`·`http://localhost`·https)에서만 쓰기가 된다. 브라우저는 엣지·크롬.
+- **E 가 못 하는 것**: 명령 실행(터미널로는 Claude Code 의 deep link 단추가 새 창을 열고 사람이 Enter — 기록 폴더 위치를 한 번 알려 준 뒤. 안 되면 한 줄을 붙여 넣는다), 파일 감시(몇 초 간격 확인 + 창으로 돌아오면 바로), 바깥 주소 그림. 보안 문맥(`file://`·`http://localhost`·https)에서만 쓰기가 된다. 브라우저는 엣지·크롬.
 - 모든 방식이 같은 기록 폴더 모양을 쓰므로 나중에 바꿔도 피드백은 이어진다.
 
 ## 3. DocBench 받기 — 판을 고정해서
@@ -194,7 +194,7 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 - **피드백 스킬이 터미널 Claude 에 보이게**: 플러그인(`claude plugin install docbench@docbench`)이면 어디서든 보인다. 아니면 터미널 Claude 가 **시작하는 폴더**의 `.claude/skills/docbench-feedback/` 또는 사용자 폴더(`%USERPROFILE%\.claude\skills\`)에 사본의 `integrations/claude-code/skills/docbench-feedback` 를 둔다. 이름은 `/docbench-feedback`(플러그인은 `/docbench:docbench-feedback` 도). 실제로 터미널에서 불러지는지 확인한다.
 - **작업 폴더 찾기**: CLI 는 현재 폴더에서 위로 문서 폴더를 찾는다(기록 짝·`.docbench` 가 있는 곳 — 앱이 더한 폴더도). 터미널이 문서 폴더 밖에서 시작하면 그 시작 환경에 `DOCBENCH_ROOT=<문서 폴더>` 를 넣고, 시작부를 못 고치면 대시보드 `CLAUDE.md` 에 "CLI 는 `node <cli> --root <문서 폴더> …`" 한 줄을 남긴다(없으면 종료 코드 2).
 - **보내기를 어디로**:
-  0. **설치 없이**: 화면의 "어디로 = 터미널 한 줄" — 사람이 그 한 줄을 PowerShell 에 붙여 넣으면 기록 폴더에서 Claude Code 가 켜져 처리한다(플러그인·앱 불필요, 사본 `docs/PORTING.md` §5). 기록 폴더를 Claude 의 자리로 쓰는 이유(켠 폴더가 지시·권한·대화 기록을 정한다)를 사용자에게 한 줄로 알린다.
+  0. **설치 없이**: 화면의 "어디로 = 터미널 한 줄" — **Claude Code 에서 열기** 단추(deep link, 새 터미널 창에 요청이 입력된 채로 — Enter 만)나 그 한 줄을 PowerShell 에 붙여 넣으면 기록 폴더에서 Claude Code 가 켜져 처리한다(처음 한 번 신뢰 창은 ↓ 로 "Yes, I trust this folder")(플러그인·앱 불필요, 사본 `docs/PORTING.md` §5). 기록 폴더를 Claude 의 자리로 쓰는 이유(켠 폴더가 지시·권한·대화 기록을 정한다)를 사용자에게 한 줄로 알린다.
   1. **T + 대시보드에 터미널 입력 API 가 있으면**: `onHandoff(req)` 에서 셸 터미널이면 `req.command`(설치 없이 새 Claude Code — 기록 폴더로 가서 요청 파일 처리), 이미 켜진 Claude 대화면 `req.prompt` 를 보내고 `{ handled: true, message }`. `prompt` 는 `/docbench:docbench-feedback 문서 폴더 "<이름>" 에서 보낸 피드백 N건(<id>…)을 처리해 줘.` 한 줄 — 플러그인 이름이 붙어 있으니 스킬만 복사해 깐 터미널이면 `/docbench-feedback` 으로 바꿔 보낸다. 폴더 **이름**만 있으므로 터미널이 그 폴더에서 시작하지 않았으면 `root` 를 덧붙인다. Enter 가 필요하면 `\r`. 15초 안에 답한다(늦거나 `handled: false` 면 작업대가 Claude 작업 창으로). 그 API 는 이제 자동 입력 통로이므로 다른 사이트가 부를 수 없게(전용 헤더 검사 등) 되어 있는지 확인한다.
   2. **T 에서 `onHandoff` 를 주지 않으면**: 앱의 Claude 작업 창(아래)이 맡는다.
   3. **B·C**: 기록 폴더 `inbox/req-*.json` 을 남기고, 대시보드가 터미널에 입력을 밀어 넣을 수 있으면 그 API 를 부르는 작은 스크립트를 이 PC 의 설정 `workspaces["<문서 폴더>"].notify.command`(배열, 셸 없이 실행)에 건다. 알아 둘 것: 현재 폴더 = 문서 폴더(상대 경로는 거기 기준) · 환경 변수 = 서버 프로세스의 것(C 는 대시보드 환경, B 는 곁 프로세스 환경 — 대시보드 주소·인증 값은 곁 프로세스를 띄울 때 넘긴다) + `DOCBENCH_REQUEST`·`DOCBENCH_ROOT` · 한 번에 하나만 돌고 출력은 `inbox/req-*.json.log` · 터미널 API 가 Enter 를 붙이는지.

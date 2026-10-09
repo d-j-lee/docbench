@@ -5,7 +5,7 @@
  */
 import type { RunLogLine, RunsAvailability, RunStartInput, RunStatus, TerminalHandoff } from '../types';
 import { runnerSetupPrompt, isTerminalRunner } from '../core/runs';
-import { terminalCommands } from '../core/room';
+import { terminalCommands, isRoomPath } from '../core/room';
 import { h, icon } from './dom';
 import type { App } from './app';
 
@@ -160,11 +160,18 @@ export class RunDock {
   lastFor(fbId: string): RunStatus | undefined { return this.runs.find((r) => r.feedbackIds.includes(fbId)); }
   /** 이 피드백을 지금 다루는(줄 서 있거나 도는) 작업 */
   activeFor(fbId: string): RunStatus | undefined { return this.runs.find((r) => ACTIVE.has(r.state) && r.feedbackIds.includes(fbId)); }
-  /** 지금 Claude 가 손대는 문서 */
-  busyDocs(): Set<string> {
+  /** 지금 Claude 가 손대는 문서 — 터미널을 기다리는 요청은 빼고(아직 아무도 손대지 않았다) */
+  busyDocs(): Set<string> { return this.docsOf((r) => ACTIVE.has(r.state) && !this.isTerminal(r)); }
+  /** 터미널의 Claude 를 기다리는 요청의 문서 — 사람이 한 줄을 쳐야 시작한다 */
+  waitingDocs(): Map<string, RunStatus> {
+    const out = new Map<string, RunStatus>();
+    for (const r of this.runs) if (this.isTerminal(r)) for (const d of this.docsOf((x) => x === r)) if (!out.has(d)) out.set(d, r);
+    return out;
+  }
+  private docsOf(want: (r: RunStatus) => boolean): Set<string> {
     const out = new Set<string>();
     for (const r of this.runs) {
-      if (!ACTIVE.has(r.state)) continue;
+      if (!want(r)) continue;
       for (const d of r.docs || []) out.add(d);
       for (const id of r.feedbackIds) { const f = this.app.fb.find((x) => x.id === id); if (f?.docId) out.add(f.docId); }
     }
@@ -213,8 +220,13 @@ export class RunDock {
       roomName: setup?.dataHome && setup.dataName ? setup.dataName : this.t('term.room.unknown'), homeName: setup?.dataHome,
       ...terminalCommands({ id: r.id, model: r.model, effort: r.effort, locale: this.app.opts.locale === 'en' ? 'en' : 'ko' }),
     };
-    // 지난 대화 이어서: 만든 쪽이 준 -c 줄. 옛 서버가 준 안내(resume 없음)는 그대로 — 손으로 고친 명령을 만들지 않는다
-    this.app.dialogs.terminal({ ...ho, command: s.resume && ho.resume ? ho.resume : ho.command });
+    const locale = this.app.opts.locale === 'en' ? 'en' as const : 'ko' as const;
+    const pick = (x: TerminalHandoff): TerminalHandoff => ({ ...x, command: s.resume && x.resume ? x.resume : x.command });
+    // 지난 대화 이어서: 만든 쪽이 준 -c 줄. 옛 서버가 준 안내(resume 없음)는 그대로 — 손으로 고친 명령을 만들지 않는다.
+    // 경로를 모르는 쪽(브라우저)은 사람이 알려 준 기록 폴더 경로로 칠 줄·deep link 를 다시 만든다
+    this.app.dialogs.terminal(pick(ho), {
+      rebuild: ho.room ? undefined : (room) => (isRoomPath(room) ? pick({ ...ho, room, ...terminalCommands({ id: r.id, room, model: r.model, effort: r.effort, locale }) }) : null),
+    });
   }
 
   async cancel(id: string): Promise<void> {

@@ -317,9 +317,13 @@ export class DocView {
   renderBusy(): void {
     const b = this.els.busy;
     if (!b) return;
-    const busy = this.app.dock?.busyDocs().has(this.id);
-    b.hidden = !busy;
-    if (busy) b.replaceChildren(h('span', { class: 'db-spin' }), this.t('doc.busy'), h('button', { class: 'db-btn ghost sm', type: 'button', onclick: () => this.app.dock?.setOpen(true) }, this.t('run.open')));
+    const dock = this.app.dock;
+    const busy = dock?.busyDocs().has(this.id);
+    // 터미널을 기다리는 요청은 "처리 중"이 아니다 — 사람이 한 줄을 쳐야 시작한다
+    const waiting = !busy ? dock?.waitingDocs().get(this.id) : undefined;
+    b.hidden = !busy && !waiting;
+    if (busy) b.replaceChildren(h('span', { class: 'db-spin' }), this.t('doc.busy'), h('button', { class: 'db-btn ghost sm', type: 'button', onclick: () => dock?.setOpen(true) }, this.t('run.open')));
+    else if (waiting) b.replaceChildren(h('span', { class: 'ic', html: icon('clock') }), this.t('doc.waitingTerminal'), h('button', { class: 'db-btn ghost sm', type: 'button', onclick: () => dock?.showTerminal(waiting) }, this.t('sent.terminal.show')));
   }
 
   // ------------------------------------------------------------ 바뀐 섹션

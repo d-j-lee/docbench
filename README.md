@@ -60,7 +60,7 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 - Claude 는 문서 폴더 안을 **읽기만** 한다. 고친 섹션은 정해진 모양으로 돌려주고, 실제 쓰기는 DocBench 규칙으로 한다 — 그 사이 사람이 같은 섹션을 고쳤으면 덮지 않고 제안으로 돌린다. 지켜보는 사람이 없는 실행이라 문서 속 글이 Claude 를 속여도(프롬프트 주입) 명령 실행·폴더 밖 읽기는 할 수 없다([docs/SECURITY.md](docs/SECURITY.md)).
 - 바로 고친 것도 **되돌리기** 한 번이면 고치기 전 글로(그 뒤 또 바뀐 곳은 저절로 하지 않고 차이를 보여 준다). "제안만"이면 문서는 그대로, 차이를 보고 적용.
 - 구독 로그인(Claude Code)을 그대로 쓰며 API 키가 필요 없다. 로그인하지 않았거나 필요한 플래그가 없는 옛 Claude Code 면 실행하지 않고 그 자리에서 할 일(`claude auth login`·`claude update`)을 알려 준다.
-- **설치 없이 터미널 한 줄**: 앱이 없으면 "어디로 = 터미널 한 줄". 화면이 기록 폴더에 요청 파일을 쓰고 한 줄을 준다 — `Set-Location '<기록 폴더>'; claude 'DocBench 요청 <id> 를 처리해 줘 …'`. 기록 폴더를 Claude 의 자리로 쓰는 것은, Claude Code 가 **켠 폴더**의 지시(CLAUDE.md)·권한·대화 기록을 쓰기 때문이다 — DocBench 가 거기 둔 지시·권한(결과 파일만 쓰기)으로 돌고, 내 문서 폴더의 설정·훅이 섞이지 않는다. Claude 가 결과 파일을 남기면 열린 화면이 받아 같은 규칙으로 반영한다.
+- **설치 없이 터미널 한 줄**: 앱이 없으면 "어디로 = 터미널 한 줄". 화면이 기록 폴더에 요청 파일을 쓰고 **Claude Code 에서 열기** 단추를 준다 — Claude Code 의 deep link(`claude-cli://open?cwd=<기록 폴더>&q=…`)가 새 터미널 창에 요청을 입력해 둔 채로 연다(Enter 만). 단일 HTML 은 기록 폴더 위치를 한 번 알려 주면 된다. 열리지 않으면 같은 일을 하는 한 줄 `Set-Location '<기록 폴더>'; claude 'DocBench 요청 <id> 를 처리해 줘 …'`, 켜 둔 Claude 가 있으면 "다음" 한 마디. 기록 폴더를 Claude 의 자리로 쓰는 것은, Claude Code 가 **켠 폴더**의 지시(CLAUDE.md)·권한·대화 기록을 쓰기 때문이다 — DocBench 가 거기 둔 지시·권한(결과 파일만 쓰기)으로 돌고, 내 문서 폴더의 설정·훅이 섞이지 않는다. Claude 가 결과 파일을 남기면 열린 화면이 받아 같은 규칙으로 반영한다.
 - 앱으로 잇고 싶으면 Claude 작업 창의 **연결 문구**를 Claude Code 에 붙여 넣는다 — CLI 파일 하나([`release/docbench.mjs`](release/docbench.mjs))를 받아 지문을 확인하고, 앱을 켜고, 이 화면의 계정과 짝짓는다(`docbench link --owner`). 짝지은(또는 이름이 같은) 앱만 저절로 고른다 — 폴더를 함께 쓰는 동료의 PC·구독으로 돌지 않게.
 - 앱·`docbench serve` 는 Claude 작업을 기본으로 켠다(`serve --no-claude` 로 끔). 대시보드에 직접 끼우는 처리기는 기본 끔 — 이 PC 사람 한 명이 쓰는 대시보드면 `runs: true`.
 

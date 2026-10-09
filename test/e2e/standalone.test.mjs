@@ -916,6 +916,18 @@ test('터미널 한 줄(설치 없음): 요청·맥락·Claude 자리는 기록 
   assert.match(cmd, /^claude '/, '경로를 모르면 cd 없이 claude 만');
   assert.ok(cmd.includes(`runs/${id}.prompt.md`));
   assert.ok((await term.innerText()).includes(`기록 폴더 "${home}/${a}"`), "어느 기록 폴더에서 열지");
+  // 경로를 모르는 브라우저: 기록 폴더 위치를 한 번 알려 주면 버튼 하나(Claude Code deep link) — 끝 폴더가 기록 폴더가 아니면 받지 않는다(문서 폴더에서 켜는 실수 방지)
+  const where = term.locator('input[aria-label^="기록 폴더 위치"]');
+  await where.fill('/home/dj/문서');
+  await term.getByRole('button', { name: '이 경로로' }).click();
+  await term.locator('.db-hint.warn', { hasText: '전체 경로가 아닙니다' }).waitFor();
+  assert.equal(await term.locator('a.db-term-open').count(), 0);
+  await where.fill(`/home/dj/${home}/${a}`);
+  await term.getByRole('button', { name: '이 경로로' }).click();
+  const deep = await term.locator('a.db-term-open').getAttribute('href');
+  assert.ok(deep.startsWith('claude-cli://open?cwd=' + encodeURIComponent(`/home/dj/${home}/${a}`) + '&q=') && decodeURIComponent(deep).includes(id), deep);
+  await term.locator('details > summary', { hasText: '열리지 않으면' }).click();
+  assert.match(await term.locator('.db-cmdbox').innerText(), new RegExp(`^cd '/home/dj/${home}/${a}' && claude '`), '경로를 알면 칠 줄도 그 자리로');
 
   // 요청·맥락·지시와 Claude 자리(CLAUDE.md·권한)는 기록 폴더에만 — 문서 폴더에는 문서만
   const runs = await ls(`${a}/runs`);
