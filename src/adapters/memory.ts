@@ -38,6 +38,7 @@ export function createMemoryAdapters(init: MemoryInit): DocBenchAdapters & { con
   let changes: ChangeEntry[] = load('changes', []);
   let rows: Feedback[] = load('feedback', (init.feedback || []).map((r, i) => normalizeFeedback({ ...r, order: r.order ?? i }, r.id || newFeedbackId())));
   let view: ViewState | null = load('view', null);
+  let standing: string = load('standing', '');
   const fbSubs = new Set<(r: Feedback[]) => void>();
   const docSubs = new Set<(e: DocEvent) => void>();
   const emitFb = () => { save('feedback', rows); const snap = rows.map((r) => ({ ...r })); fbSubs.forEach((cb) => cb(snap)); };
@@ -93,7 +94,8 @@ export function createMemoryAdapters(init: MemoryInit): DocBenchAdapters & { con
       async update(id, patch) {
         const i = rows.findIndex((r) => r.id === id);
         if (i < 0) throw new Error('not found');
-        const f = { ...rows[i], ...patch, id, version: (rows[i].version || 1) + 1, updatedAt: new Date().toISOString() } as Feedback;
+        // null 은 지우기 — 서버·폴더와 같이 정규화를 거친다
+        const f = normalizeFeedback({ ...rows[i], ...patch, id, version: (rows[i].version || 1) + 1, updatedAt: new Date().toISOString() } as never, id);
         rows = rows.map((r, j) => (j === i ? f : r));
         emitFb();
         return f;
@@ -102,10 +104,11 @@ export function createMemoryAdapters(init: MemoryInit): DocBenchAdapters & { con
       mode: () => (key ? 'local' : 'local'),
     },
     viewState: { load: async () => view, save: async (s) => { view = s; save('view', s); } },
+    instructions: { load: async () => standing, save: async (t) => { standing = String(t || '').slice(0, 4000); save('standing', standing); } },
     identity: { me: async () => me, can: () => true },
     assistant: init.assistant,
     notifier: {
-      async send(s) { return { delivered: false, message: `${s.count}건을 AI 차례로 표시했습니다 (데모 — 실제로 보내지 않음)` }; },
+      async send(s) { return { delivered: false, message: `${s.count}건을 보냄으로 표시했습니다 (데모 — 실제로 보내지 않음)` }; },
     },
   };
 }

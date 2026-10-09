@@ -7,6 +7,7 @@
 //      FAKE_CLAUDE_RUN=edit(기본) | propose | answer | ask | decline | bad-text | slow | error | garbage | none | mixed
 //      (slow 는 FAKE_CLAUDE_SLOW_MS 만큼 기다린 뒤 FAKE_CLAUDE_AFTER(기본 edit)로)
 //      FAKE_CLAUDE_ARGS=<파일>  받은 인자·실행 위치를 그 파일에 남긴다 (시험이 확인)
+//      선제안(### Document 블록): 문서마다 마지막 섹션 제안 + 첫 섹션 질문, 읽기 정리면 마지막 섹션 먼저·나머지 접기
 import { writeFileSync, appendFileSync } from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -33,6 +34,24 @@ if (args[args.indexOf('--output-format') + 1] === 'stream-json') {
   out({ type: 'system', subtype: 'init', claude_code_version: '9.9.9', model: 'fake-model', tools: ['Read', 'Grep', 'Glob'], permissionMode: 'dontAsk' });
   out({ type: 'rate_limit_event', rate_limit_info: { unifiedWindows: { five_hour: { utilization: 0.12, resetsAt: 1791453600 } } } });
   out({ type: 'system', subtype: 'thinking_tokens', estimated_tokens: 42 });
+  // 선제안·읽기 정리(review): 문서마다 마지막 섹션에 제안 하나·첫 섹션에 질문 하나 / 읽기 정리는 마지막 섹션 먼저, 나머지 접기
+  if (input.includes('### Document ')) {
+    const { core: { getSectionText } } = await import(new URL('../../server/core.mjs', import.meta.url).href);
+    const docs = [...input.matchAll(/### Document (\S+) — [^\n]*\nSection keys:\n((?:- .+\n?)+)(?:Text:\n<<<DOCUMENT\n([\s\S]*?)\nDOCUMENT>>>)?/g)].map((x) => ({ id: x[1], keys: [...x[2].matchAll(/^- (.+)$/gm)].map((k) => k[1]), md: x[3] != null ? x[3] + '\n' : null }));
+    if (mode === 'slow') await sleep(Number(process.env.FAKE_CLAUDE_SLOW_MS || 6000));
+    const view = /TASK: a READING PLAN/.test(input);
+    const items = [];
+    const plans = [];
+    for (const d of docs) {
+      const last = d.keys.at(-1), first = d.keys.find((k) => k.includes(' › ')) || d.keys[0];
+      if (view) { plans.push({ docId: d.id, fold: d.keys.filter((k) => k !== last && k.includes(' › ')), focus: [last], guide: `${last.split(' › ').pop()} 부터 읽으세요.` }); continue; }
+      const sec = d.md != null ? getSectionText(d.md, last) : null;
+      if (sec != null) items.push({ docId: d.id, section: last, kind: 'suggest', title: '한 줄 요약 더하기', message: '끝에 요약이 있으면 읽기 쉽습니다.', text: sec.replace(/\n*$/, '') + '\n\n(선제안) 요약 한 줄\n' });
+      if (first !== last) items.push({ docId: d.id, section: first, kind: 'question', title: '기준이 무엇인가요?', message: '판단 기준이 빠져 있습니다 — 무엇을 기준으로 하나요?', text: '' });
+    }
+    out({ type: 'result', subtype: 'success', is_error: false, result: '', duration_ms: 900, num_turns: 2, usage: { input_tokens: 10, output_tokens: 20 }, structured_output: { overview: view ? '읽는 순서를 정리했습니다.' : `문서 ${docs.length}개를 먼저 읽었습니다.`, items, view: plans } });
+    process.exit(0);
+  }
   const items = [];
   const re = /### Item \d+ · feedbackId (\S+)\n([\s\S]*?)(?=\n### Item |\s*$)/g;
   let m;
@@ -40,7 +59,9 @@ if (args[args.indexOf('--output-format') + 1] === 'stream-json') {
     const body = m[2];
     const sec = /<<<SECTION\n([\s\S]*?)\nSECTION>>>/.exec(body);
     const file = /, file ([^)]+)\)/.exec(body);
-    const keys = [...body.matchAll(/^- (.+)$/gm)].map((x) => x[1]);
+    // 고를 수 있는 섹션 키는 그 목록에서만 — 피드백 본문의 "- …" 줄을 키로 읽지 않게
+    const km = /Section keys you may choose[^\n]*\n((?:- .+\n?)+)/.exec(body);
+    const keys = km ? [...km[1].matchAll(/^- (.+)$/gm)].map((x) => x[1]).filter((k) => !k.startsWith('* ')) : [];
     items.push({ id: m[1], section: sec ? sec[1] : null, file: file ? file[1] : null, keys, allowed: (/Allowed: (.+)/.exec(body) || [])[1] || '' });
   }
   if (items[0]?.file) out({ type: 'assistant', message: { content: [{ type: 'text', text: '문서를 읽어 보겠습니다.' }, { type: 'tool_use', name: 'Read', input: { file_path: items[0].file } }] } });

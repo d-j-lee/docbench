@@ -678,3 +678,119 @@
 .docbench .db-browse-path code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 500 12.5px/1.6 var(--db-font-mono); background: var(--db-sunk); border-radius: 6px; padding: 3px 8px; }
 .docbench .db-browse-list { display: flex; flex-direction: column; gap: 1px; max-height: min(52vh, 420px); overflow: auto; border: 1px solid var(--db-line); border-radius: 8px; padding: 4px; background: var(--db-bg); }
 .docbench .db-browse-list .db-dir { padding-left: 8px; }
+
+/* ---------- 0.6 검토 회차: 초안 → 보내기 → 볼 것 (D73·D74·D76) ----------
+   색: 초안 = info(파랑), 볼 것 = wait(호박), 보냄 = go(초록), 끝남 = 회색 */
+.docbench .db-pill.draft { background: var(--db-info-soft); color: var(--db-info); }
+.docbench .db-badge.draft { background: var(--db-info-soft); color: var(--db-info); }
+.docbench mark.db-fbq.draft { border-bottom: 2px dashed var(--db-info); }
+.docbench .db-card.t-draft { border-left-color: var(--db-info); }
+.docbench .db-card.t-draft.picked { background: color-mix(in srgb, var(--db-info-soft) 40%, var(--db-surface)); }
+.docbench .db-card.kbd { box-shadow: 0 0 0 2px var(--db-info); }
+.docbench .db-pick { width: 15px; height: 15px; margin: 0; accent-color: var(--db-info); }
+.docbench .db-star { border: 0; background: none; padding: 0 2px; font-size: 14px; line-height: 1; color: var(--db-line-2); }
+.docbench .db-star:hover { color: var(--db-ink-3); }
+.docbench .db-star[aria-pressed="true"] { color: var(--db-wait); }
+.docbench .db-dtools { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 0 2px; }
+.docbench .db-dtools .db-hint { margin-right: auto; }
+.docbench .db-c-body.editable, .docbench .db-c-sugg.editable { cursor: text; border-radius: 6px; margin: -2px -4px; padding: 2px 4px; }
+.docbench .db-c-body.editable:hover, .docbench .db-c-sugg.editable:hover { background: var(--db-sunk); }
+.docbench .db-c-sugg pre { margin: 2px 0 0; white-space: pre-wrap; font: 12.5px/1.55 var(--db-font-body); background: var(--db-sunk); border-radius: 6px; padding: 5px 8px; }
+.docbench .db-c-req { font-size: 12.5px; color: var(--db-ink-2); white-space: pre-wrap; cursor: pointer; }
+.docbench .db-c-req.clamp { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.docbench .db-reply textarea.mono { font: 12.5px/1.55 var(--db-font-mono); }
+
+/* 보내기 막대 — 초안 칸 아래에 붙어 있다 */
+.docbench .db-sendbar { flex: none; border-top: 1px solid var(--db-line); padding: 8px 12px 10px; display: flex; flex-direction: column; gap: 6px; background: var(--db-surface); }
+.docbench .db-sendbar .db-note { width: 100%; min-height: 38px; border: 1px solid var(--db-line-2); border-radius: 7px; padding: 5px 8px; font-size: 13px; background: var(--db-bg); resize: vertical; }
+.docbench .db-sendbar select { border: 1px solid var(--db-line-2); border-radius: 6px; background: var(--db-bg); padding: 1px 4px; font-size: 12.5px; color: var(--db-ink); max-width: 100%; }
+.docbench .db-adv summary { cursor: pointer; font-size: 12px; color: var(--db-ink-3); }
+.docbench .db-adv[open] > .db-row, .docbench .db-adv[open] > .db-btn { margin-top: 6px; }
+.docbench .db-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--db-ink-2); }
+.docbench .db-sendbtn { padding-inline: 14px; }
+.docbench .db-sendbtn[disabled] { opacity: .5; cursor: default; }
+.docbench .db-seg.sm button { padding: 2px 8px; font-size: 12px; }
+
+/* 볼 것 — 회차 */
+.docbench .db-round { border: 1px solid var(--db-line); border-radius: 10px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; background: var(--db-sunk); }
+.docbench .db-round-h { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+.docbench .db-round-note { font-size: 12.5px; color: var(--db-ink-2); }
+.docbench .db-round-ov { display: flex; gap: 6px; font-size: 13px; line-height: 1.55; background: var(--db-surface); border-radius: 8px; padding: 6px 8px; }
+.docbench .db-round-ov .ic { flex: none; color: var(--db-go); margin-top: 2px; }
+.docbench .db-round-ov .ic svg { width: 12px; height: 12px; }
+.docbench .db-round-view { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; background: var(--db-surface); border-radius: 8px; padding: 6px 8px; }
+.docbench .db-rkind { font-weight: 650; border-radius: 4px; padding: 0 6px; background: var(--db-sunk); color: var(--db-ink-2); }
+.docbench .db-rkind.edit { background: var(--db-go-soft); color: var(--db-go); }
+.docbench .db-rkind.propose, .docbench .db-rkind.suggest { background: var(--db-chg-soft); color: var(--db-chg); }
+.docbench .db-rkind.ask, .docbench .db-rkind.question { background: var(--db-wait-soft); color: var(--db-wait); }
+.docbench .db-rkind.reverted, .docbench .db-rkind.decline { text-decoration: line-through; }
+.docbench .db-rkind.failed { background: var(--db-bad-soft); color: var(--db-bad); }
+.docbench .db-pgroup.sub { position: static; margin: 2px 0 0; padding: 2px 2px; background: none; backdrop-filter: none; border: 0; font-weight: 600; color: var(--db-ink-3); }
+.docbench .db-cmp .db-hint.warn { color: var(--db-wait); font-weight: 600; }
+.docbench .db-standing-tip { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+.docbench .db-link { background: none; border: 0; padding: 0; font: inherit; color: var(--db-info); cursor: pointer; text-decoration: underline; }
+.docbench .db-turnlbl.draft { color: var(--db-info); }
+
+/* 그 자리에서 적기 */
+.docbench .db-cmp { position: absolute; z-index: 9; width: 400px; max-width: calc(100% - 24px); background: var(--db-surface); border: 1px solid var(--db-line-2); border-radius: 12px; box-shadow: var(--db-shadow); padding: 8px 10px 10px; display: flex; flex-direction: column; gap: 7px; }
+.docbench .db-cmp.sheet { left: 0 !important; right: 0; bottom: 0; top: auto !important; width: auto !important; max-width: none; border-radius: 14px 14px 0 0; max-height: 80%; overflow: auto; }
+.docbench .db-cmp-h { display: flex; align-items: center; gap: 6px; }
+.docbench .db-cmp-where { flex: 1; min-width: 0; display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--db-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.docbench .db-cmp-where .ic svg { width: 12px; height: 12px; }
+.docbench .db-cmp-x { padding: 2px 4px; }
+.docbench .db-cmp-x svg { width: 10px; height: 10px; }
+.docbench .db-cmp-q { display: block; quotes: none; font-size: 12.5px; color: var(--db-ink-2); border-left: 2px solid var(--db-line-2); padding-left: 8px; max-height: 4.6em; overflow: auto; }
+.docbench .db-cmp-quick { display: flex; flex-wrap: wrap; gap: 4px; }
+.docbench .db-cmp-quick .db-chip { font-size: 12px; }
+.docbench .db-cmp-ask, .docbench .db-cmp-rw { display: flex; flex-direction: column; gap: 6px; }
+.docbench .db-cmp-ta { width: 100%; min-height: 70px; border: 1px solid var(--db-line-2); border-radius: 8px; padding: 6px 8px; font-size: 13.5px; background: var(--db-bg); resize: vertical; }
+.docbench .db-cmp-ta.rw { min-height: 96px; font: 13px/1.55 var(--db-font-body); }
+.docbench .db-cmp-why { border: 1px solid var(--db-line-2); border-radius: 7px; padding: 4px 8px; font-size: 12.5px; background: var(--db-bg); }
+.docbench .db-cmp-f { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+
+/* 읽기 정리 안내 */
+.docbench .db-guide { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: flex-start; margin: 10px 0; padding: 8px 12px; border-radius: 8px; background: var(--db-info-soft); font-size: 13px; }
+.docbench .db-guide-t { flex: 1; min-width: 16ch; }
+.docbench .db-guide-t b { display: inline-flex; align-items: center; gap: 5px; color: var(--db-info); }
+.docbench .db-guide-t b svg { width: 12px; height: 12px; }
+.docbench .db-guide-t p { margin: 3px 0 0; color: var(--db-ink); line-height: 1.55; }
+.docbench .db-guide-a { display: flex; gap: 6px; }
+.docbench .db-review-btn { color: var(--db-go); }
+
+/* 선제안 고르기 · 터미널 한 줄 */
+.docbench .db-radios { display: flex; flex-direction: column; gap: 4px; }
+.docbench .db-radio { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--db-line); border-radius: 8px; padding: 6px 10px; font-size: 13.5px; cursor: pointer; }
+.docbench .db-radio:has(input:checked) { border-color: var(--db-go); background: color-mix(in srgb, var(--db-go-soft) 50%, var(--db-surface)); }
+.docbench .db-radio input { margin-top: 3px; accent-color: var(--db-go); }
+.docbench .db-radio > span { display: flex; flex-direction: column; gap: 1px; }
+.docbench .db-sheet textarea[rows="2"] { min-height: 52px; }
+.docbench .db-term .db-steps { font-size: 13.5px; gap: 8px; }
+.docbench .db-term .db-steps li { line-height: 1.55; }
+.docbench .db-cmdbox { margin: 6px 0 0; white-space: pre-wrap; word-break: break-all; font: 12.5px/1.55 var(--db-font-mono); background: var(--db-sunk); border-radius: 8px; padding: 8px 10px; user-select: all; }
+
+/* 중간 너비(태블릿·작은 노트북): 읽으며 적는 동안 문서를 가리지 않게 — 목록은 겹쳐 띄우고, 검토 패널은 옆에 둔다 */
+@container docbench (min-width: 761px) and (max-width: 1099px) {
+  .docbench .db-shell { grid-template-columns: minmax(0, 1fr); }
+  .docbench.panel-open .db-shell { grid-template-columns: minmax(0, 1fr) min(var(--db-panel), 44%); }
+  .docbench .db-main, .docbench .db-dock { grid-column: 1; }
+  .docbench .db-panel { position: static; transform: none; transition: none; box-shadow: none; width: auto; grid-column: 2; grid-row: 1 / span 2; display: none; }
+  .docbench.panel-open .db-panel { display: flex; }
+  .docbench.panel-open .db-scrim { display: none; }
+  .docbench .db-rail { position: absolute; inset: 0 auto 0 0; width: min(300px, 88%); z-index: 8; box-shadow: var(--db-shadow); transform: translateX(-105%); transition: transform .18s; }
+  .docbench.rail-open .db-rail { transform: none; }
+  .docbench.rail-open .db-scrim { display: block; position: absolute; inset: 0; z-index: 7; background: rgba(0,0,0,.22); }
+  .docbench .db-toggle.nav { display: inline-flex; }
+}
+.docbench .db-chip-s.created { background: var(--db-info-soft); color: var(--db-info); }
+.docbench .db-msg.clamp { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* 알림이 다음에 누를 단추(초안 칸의 저장, 보내기 막대)를 가리지 않게 — 넓으면 문서 칸 가운데 아래, 좁으면 위 띠 아래 */
+@container docbench (min-width: 1100px) {
+  .docbench .db-toast { left: calc(var(--db-rail) + (100% - var(--db-rail) - var(--db-panel)) / 2); max-width: calc(100% - var(--db-rail) - var(--db-panel) - 24px); }
+}
+@container docbench (min-width: 761px) and (max-width: 1099px) {
+  .docbench.panel-open .db-toast { left: calc((100% - min(var(--db-panel), 44%)) / 2); max-width: calc(100% - min(var(--db-panel), 44%) - 24px); }
+}
+@container docbench (max-width: 760px) {
+  .docbench .db-toast { bottom: auto; top: calc(var(--db-bar) + 10px); }
+}

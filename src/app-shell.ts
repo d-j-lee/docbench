@@ -4,7 +4,7 @@
  *  - 앱(/): 작업 공간 메뉴(왼쪽 위)에서 폴더를 더하고 바꾼다. 폴더 추가는 이 PC 의 폴더를 둘러보는 창(고르기 창 없음) —
  *    드라이브도 바로 더한다(펼친 곳만 읽는다, D64). 이미 더한 작업 공간 안의 폴더는 그 작업 공간의 범위로, 품는 폴더는 기록을 합친다(D66).
  *    사람은 이 PC 의 로그인(이름은 "나"에서), 기록은 이 PC 의 기록 보관함 — 묻지 않는다.
- *  - 끼움(/embed?root=…&scope=…&t=열쇠): 대시보드 탭의 iframe. 호스트(host.js)와 postMessage 로 테마·넘기기·이동·할 일 수를 주고받는다(D68).
+ *  - 끼움(/embed?root=…&scope=…&t=열쇠): 대시보드 탭의 iframe. 호스트(host.js)와 postMessage 로 테마·보내기·이동·할 일 수를 주고받는다(D68).
  *    허용한 출처(app.allowOrigins)의 메시지만 받는다 — 서버가 그 목록을 화면에 넣고, frame-ancestors 로 다른 출처는 끼우지도 못한다.
  */
 import { createDocBench, createRestAdapters, trimBySession, createMemoryAdapters, version, type DocBenchHandle } from './index';
@@ -145,7 +145,7 @@ async function welcome(root: HTMLElement): Promise<void> {
   manifest.project.storage = t('welcome.storage');
   manifest.groups = manifest.groups.filter((g) => g.id !== '_bench');
   const mem = createMemoryAdapters({ manifest, docs: w.docs, feedback: w.feedback, me: { kind: 'human', ...info.me } });
-  mem.runs = demoRuns(mem, locale, ['fb.act.toAssistant', 'fb.act.reopen', 'fb.act.decline', 'fb.act.resolve', 'fb.proposal.reject'].map((k) => t(k)));
+  mem.runs = demoRuns(mem, locale, ['fb.proposal.reject', 'fb.proposal.appliedMsg', 'result.revert.msg'].map((k) => t(k)));
   document.title = `${t('welcome.title')} · DocBench`;
   await mount(root, mem, { workspace: menu(root), initialDoc: Object.keys(w.docs)[0] });
   if (!info.workspaces.length) bench?.toast(t('app.empty'), { action: t('app.add'), onAction: () => void addFolder(root).catch((e) => fail(root, e)) });

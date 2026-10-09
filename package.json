@@ -1,6 +1,6 @@
 {
   "name": "docbench",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "사람과 AI가 같은 문서를 이해·피드백·수정·관리하는 작업대 — 접기 뷰어, 섹션 피드백, 편집 도우미, 로컬 작업 폴더 서버",
   "private": true,
   "license": "MIT",

@@ -184,7 +184,11 @@ export interface DocSource {
 // ---------------------------------------------------------------- 피드백
 
 export type Severity = 'high' | 'medium' | 'low';
-export type FeedbackStatus = 'open' | 'resolved' | 'declined';
+/**
+ * draft = 보내기 전의 내 메모(초안) — Claude·CLI·알림이 집어 가지 않는다. 디스크에는 늘 waitingOn 'owner' 로 적어
+ * 옛 판도 "Claude 차례"로 오인하지 않게 한다(D73). open = 주고받는 중, resolved = 끝남, declined = 하지 않기로 함
+ */
+export type FeedbackStatus = 'draft' | 'open' | 'resolved' | 'declined';
 /** 다음 수를 둘 쪽. owner = 문서 주인(사람), assistant = AI */
 export type WaitingOn = 'owner' | 'assistant';
 
@@ -223,6 +227,23 @@ export interface Proposal {
   state: 'pending' | 'applied' | 'rejected';
 }
 
+/**
+ * Claude 가 처리한 결과 — 사람이 "확인"할 때까지 볼 것(open·owner)에 남는다(D73).
+ * change: 바로 고친 경우 무엇을 어느 판에서 어느 판으로 — 되돌리기의 근거(section 이 없으면 문서 전체)
+ */
+export interface FeedbackResult {
+  /** failed = 반영하지 못함(고친 글이 비었거나 모양이 틀림, Claude 가 답하지 않음) — problem 에 이유 */
+  kind: 'edit' | 'propose' | 'answer' | 'ask' | 'decline' | 'review' | 'failed';
+  at: string;
+  /** 그 결과를 낸 Claude 작업 id */
+  run?: string;
+  change?: { docId: string; section?: string; from: string; to: string };
+  /** 되돌렸으면 그때 */
+  reverted?: string;
+  /** failed 의 이유 (사람이 읽는 한 줄) */
+  problem?: string;
+}
+
 export interface Feedback {
   id: string;
   version?: number;
@@ -238,6 +259,12 @@ export interface Feedback {
   author: Person;
   thread: ThreadMessage[];
   proposal?: Proposal;
+  /** "이렇게 바꿔" — 사람이 직접 적은 바꿀 글. 문구 피드백이면 selector.exact 를 이 글로, 섹션이면 섹션 본문 전체를 */
+  suggestion?: string;
+  /** Claude 가 처리한 마지막 결과 */
+  result?: FeedbackResult;
+  /** 초안으로 되가져온 사람의 계정 — 그 사람의 초안으로 보인다(작성자·마지막 답보다 먼저). 초안이 아니면 없다 */
+  drafter?: string;
   wasCollapsed?: boolean;
   order?: number;
   createdAt: string;
@@ -247,7 +274,8 @@ export interface Feedback {
 export type NewFeedback = Omit<Feedback, 'id' | 'version' | 'createdAt' | 'updatedAt' | 'thread' | 'status' | 'waitingOn' | 'author'> &
   Partial<Pick<Feedback, 'status' | 'waitingOn' | 'author' | 'thread'>>;
 
-export type FeedbackPatch = Partial<Omit<Feedback, 'id' | 'createdAt'>>;
+/** 고칠 필드만. **null 이면 그 필드를 지운다**(JSON 은 undefined 를 싣지 못한다 — REST·파일 어디서나 같은 뜻) */
+export type FeedbackPatch = { [K in keyof Omit<Feedback, 'id' | 'createdAt'>]?: Omit<Feedback, 'id' | 'createdAt'>[K] | null };
 
 export class FeedbackConflictError extends Error {
   readonly code = 'CONFLICT';
@@ -274,9 +302,16 @@ export interface DocViewState {
   folds?: Record<string, boolean>;
   /** 숨긴 이름표 */
   hiddenLabels?: string[];
-  /** 마지막으로 본 버전 */
+  /** 마지막으로 본 버전 — "확인"을 누를 때만 옮긴다(보기만 하면 바뀐 글 표시가 남는다) */
   lastSeen?: string;
+  /** 본 판 뒤로 바뀌었지만 하나씩 확인한 섹션 — 키 → 확인할 때 글의 지문. 글이 또 바뀌면 다시 보인다 */
+  acked?: Record<string, string>;
+  /** Claude 의 읽기 안내(읽기 정리를 받아들였을 때) · 그 전의 접기 상태(되돌리기) */
+  guide?: string;
+  foldsBefore?: Record<string, boolean>;
 }
+
+export type SendVia = 'app' | 'terminal' | 'host' | 'demo' | 'notify';
 
 export interface ViewState {
   v: 1;
@@ -288,7 +323,13 @@ export interface ViewState {
   map?: { open?: Record<string, boolean>; filters?: Record<string, unknown> };
   /** Claude 작업 창: 고른 모델·노력·방식, 열림 */
   /** chosen = 이름 맞추기 안내를 접은 표시, runner = 내가 고른 실행기 id (이름이 다른 실행기를 내 것으로 쓸 때) */
-  runs?: { model?: string; effort?: RunEffort | ''; mode?: RunMode; open?: boolean; chosen?: string; runner?: string };
+  runs?: { model?: string; effort?: RunEffort | ''; mode?: RunMode; open?: boolean; chosen?: string; runner?: string;
+    /** 보낼 곳: 이 PC 의 앱(자동) · 터미널 Claude(설치 없음) · 대시보드 터미널 · 연습용 흉내 · 요청함 */
+    via?: SendVia;
+    /** 터미널: 지난 대화 이어서(claude -c) */
+    resume?: boolean;
+    /** 볼 것에서 치운 읽기 정리(작업 id) */
+    viewSeen?: string[] };
   /** 변경 표시(더한 글·지운 글)를 문서 위에 그릴지 */
   showChanges?: boolean;
   /** 왼쪽 문서 목록: 폴더 나무 / config.json 의 모음 */
@@ -301,7 +342,8 @@ export interface ViewState {
   open?: string[];
 }
 
-export type PanelFilter = 'active' | 'owner' | 'assistant' | 'closed';
+/** 검토 패널의 칸: 초안 · 볼 것(내 확인·답 필요) · 보냄(Claude 가 처리 중·대기) · 끝남 */
+export type PanelFilter = 'draft' | 'review' | 'sent' | 'done';
 
 export interface ViewStateStore {
   load(): Promise<ViewState | null>;
@@ -315,7 +357,7 @@ export type Action =
   | 'feedback.delete'
   | 'assistant.propose'
   | 'assistant.notify'
-  /** 백그라운드 Claude 작업(넘기기·제안)을 시작 */
+  /** 백그라운드 Claude 작업(보낸 묶음·먼저 검토)을 시작 */
   | 'assistant.run';
 
 export interface Identity {
@@ -345,10 +387,10 @@ export interface Assistant {
 }
 
 export interface Notifier {
-  /** 버튼 문구. 예: "AI에게 넘기기" */
+  /** 보낼 곳 이름(어디로). 예: "이 대화의 Claude 에게" */
   label?: string;
   /** delivered = AI 를 실제로 깨웠다 · queued = 요청함에 남겼다(터미널의 AI 가 읽는다) · message = 화면에 그대로 보일 안내 */
-  send(summary: { count: number; docs: string[]; feedbackIds: string[] }): Promise<{ delivered: boolean; queued?: boolean; message?: string }>;
+  send(summary: { count: number; docs: string[]; feedbackIds: string[]; note?: string }): Promise<{ delivered: boolean; queued?: boolean; message?: string }>;
 }
 
 export interface Platform {
@@ -364,14 +406,19 @@ export interface DocBenchAdapters {
   assistant?: Assistant;
   notifier?: Notifier;
   platform?: Platform;
-  /** 백그라운드 Claude 작업 — 서버(docbench serve·대시보드)는 직접, 단일 HTML 은 이 PC 의 실행기(docbench runner)가 띄운다 */
+  /** 백그라운드 Claude 작업 — 서버(docbench serve·대시보드)는 직접, 단일 HTML 은 이 PC 의 앱이 띄우거나 터미널 Claude 에게 맡긴다 */
   runs?: RunsAdapter;
+  /** 이 작업 공간에서 Claude 가 늘 지킬 지시(기록 폴더 instructions.md) — Claude 작업·터미널 Claude 가 요청마다 붙인다 */
+  instructions?: { load(): Promise<string>; save(text: string): Promise<void> };
 }
 
 // ---------------------------------------------------------------- Claude 작업 (백그라운드 실행)
 
-/** handoff = Claude 차례 피드백을 처리(고침·제안·답·질문·보류), propose = 고르게 한 피드백에 수정 제안만 */
-export type RunKind = 'handoff' | 'propose';
+/**
+ * handoff = 보낸 피드백을 처리(고침·제안·답·질문·보류), propose = 고르게 한 피드백에 수정 제안만,
+ * review = Claude 가 먼저 문서를 읽고 제안·질문을 올린다(선제안) 또는 읽기 정리(접을 곳·읽는 순서)를 제안한다(D74)
+ */
+export type RunKind = 'handoff' | 'propose' | 'review';
 /** auto = Claude 가 판단해 바로 고치기도 한다, propose = 고치지 않고 제안만 올린다 */
 export type RunMode = 'auto' | 'propose';
 export type RunEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
@@ -384,7 +431,18 @@ export interface RunStartInput {
   model?: string;
   effort?: RunEffort;
   mode?: RunMode;
+  /** 이번 묶음 전체에 붙이는 지시(공통 지시) — 항목마다의 허용 처리를 넓히지 못한다 */
+  note?: string;
+  /** review: 읽을 문서 (최대 RUN_MAX_DOCS) */
+  docIds?: string[];
+  /** review: 문서 하나일 때 볼 섹션만 */
+  sections?: string[];
+  /** review: suggest = 제안·질문을 올린다, view = 문서는 그대로 두고 읽기 정리(접을 곳·읽는 순서)만 */
+  goal?: 'suggest' | 'view';
 }
+
+/** 읽기 정리 — 문서는 그대로, 화면에서 접을 섹션과 읽는 순서 안내(받아들이면 내 화면에만) */
+export interface ReadingPlan { docId: string; fold: string[]; focus?: string[]; guide?: string }
 
 export interface RunRequest extends RunStartInput {
   id: string;
@@ -394,7 +452,7 @@ export interface RunRequest extends RunStartInput {
   runner: string;
 }
 
-export interface RunSummary { edited: number; proposed: number; answered: number; asked: number; declined: number; skipped: number; failed: number }
+export interface RunSummary { edited: number; proposed: number; answered: number; asked: number; declined: number; skipped: number; failed: number; created: number }
 
 export interface RunStatus extends RunRequest {
   state: RunState;
@@ -405,6 +463,15 @@ export interface RunStatus extends RunRequest {
   summary?: RunSummary;
   /** 처리한 피드백의 문서 */
   docs?: string[];
+  /** review: Claude 의 총평 · 만든 피드백 · 읽기 정리 */
+  overview?: string;
+  created?: string[];
+  view?: ReadingPlan[];
+  /**
+   * 터미널 Claude 를 기다리는 요청(queued, runner terminal:…)의 안내 — 어댑터가 자기가 아는 기록 자리로 붙인다(함께 쓰는 파일에서 읽지 않는다).
+   * 화면을 다시 열어도 "명령 다시 보기"가 맞는 폴더를 가리키게
+   */
+  terminal?: TerminalHandoff;
   error?: string;
   usage?: { model?: string; durationMs?: number; turns?: number; inputTokens?: number; outputTokens?: number; costUsd?: number; limit?: { window: string; utilization?: number; resetsAt?: number } };
 }
@@ -438,6 +505,19 @@ export interface RunnerInfo {
   queue?: number;
 }
 
+/** 터미널 Claude 에게 맡길 때 화면이 보여 줄 것 */
+export interface TerminalHandoff {
+  /** 기록 폴더(Claude 자리)의 절대 경로 — 서버·앱만 안다. 없으면 그 폴더에서 치라고 안내한다 */
+  room?: string;
+  /** 기록 폴더 이름 · 기록 보관함 이름(밖에 둘 때) — 폴더를 찾아가게 */
+  roomName: string;
+  homeName?: string;
+  /** 칠 한 줄 — pwsh(Windows) · sh */
+  command: { pwsh: string; sh: string };
+  /** 같은 줄로 지난 대화 이어서(claude -c) — "지난 대화 이어서"를 고른 사람에게 */
+  resume?: { pwsh: string; sh: string };
+}
+
 export interface RunsAvailability {
   available: boolean;
   /**
@@ -445,7 +525,7 @@ export interface RunsAvailability {
    * no-claude = claude 를 못 찾음, old-claude = 안전 실행 플래그가 없는 판, not-logged-in = Claude Code 에 로그인하지 않음(구독 로그인 필요),
    * read-only = 폴더에 쓸 수 없음
    */
-  reason?: 'no-runner' | 'not-mine' | 'no-claude' | 'old-claude' | 'not-logged-in' | 'read-only' | 'disabled';
+  reason?: 'no-runner' | 'old-runner' | 'not-mine' | 'no-claude' | 'old-claude' | 'not-logged-in' | 'read-only' | 'disabled';
   message?: string;
   runner?: RunnerInfo;
   /** 폴더를 함께 쓰는 다른 실행기들 (여럿이면 고른다) */
@@ -463,6 +543,11 @@ export interface RunsAdapter {
   choose?(runnerId: string): void;
   /** 연결 전에 준비할 것 (단일 HTML: 기록 폴더를 아직 고르지 않았으면 지금 고르게 한다) */
   prepare?(): Promise<void>;
+  /**
+   * 터미널의 Claude Code 에게 맡긴다 — 설치 없음(D76). 요청·맥락·지시 파일을 기록 폴더(Claude 자리)에 쓰고 칠 한 줄을 돌려준다.
+   * Claude 가 결과 파일을 남기면 같은 계정의 화면·앱이 같은 규칙으로 반영한다.
+   */
+  startTerminal?(input: RunStartInput): Promise<RunStatus & { terminal: TerminalHandoff }>;
   /**
    * 실행기가 없을 때 보여 줄 연결 안내의 재료 (단일 HTML — 받을 CLI 주소·지문).
    * dataHome·dataName = 기록을 문서 폴더 밖(기록 보관함 dataHome 아래 dataName)에 둘 때 그 이름들,
@@ -541,10 +626,12 @@ export interface WorkspaceMenu {
 /** 호스트가 맡는 일 (DocBenchOptions.host) — 대시보드 탭에 끼울 때 */
 export interface HostHooks {
   /**
-   * "Claude 에게 넘기기"를 호스트가 맡는다 — 예: 대시보드가 자기 Claude Code 터미널에 prompt 를 보낸다.
-   * handled=false 면 작업대가 스스로(Claude 작업 창·요청함) 처리한다.
+   * 보내기를 호스트가 맡는다 — 대시보드가 자기 터미널로.
+   *  - prompt: 이미 켜진 Claude Code 대화에 넣을 한 줄(플러그인의 /docbench:docbench-feedback — CLI 로 처리)
+   *  - command: 셸에서 칠 한 줄(설치 없음, D76) — 기록 폴더로 가서 새 Claude Code 를 켜 요청 파일을 처리한다. 없으면 셸 길은 없다
+   * 둘 중 하나만 쓴다. handled=false 면 작업대가 스스로(Claude 작업 창·터미널 안내·요청함) 처리한다.
    */
-  handoff?(req: { feedbackIds: string[]; docs: string[]; prompt: string }): Promise<{ handled: boolean; message?: string }>;
+  handoff?(req: { feedbackIds: string[]; docs: string[]; prompt: string; command?: string }): Promise<{ handled: boolean; message?: string }>;
 }
 
 /** 작업대가 묻는 짧은 선택 (DocBenchHandle.ask) */
@@ -557,7 +644,8 @@ export interface AskOptions {
 
 export type DocBenchEvent =
   | { type: 'navigate'; view: string }
-  | { type: 'todo'; owner: number; assistant: number }
+  /** 할 일 수 — draft = 보내지 않은 초안, owner = 볼 것(내 확인·답 필요), assistant = 보냄(Claude 가 처리할 것). 숫자만 싣는다 */
+  | { type: 'todo'; owner: number; assistant: number; draft: number }
   | { type: 'feedback:created'; feedback: Feedback }
   | { type: 'feedback:updated'; feedback: Feedback }
   | { type: 'doc:saved'; docId: string; version: string }

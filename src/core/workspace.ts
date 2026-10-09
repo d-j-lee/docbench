@@ -15,7 +15,7 @@
  *       blobs/<판>.md         본 적 있는 판의 본문 (바뀐 섹션 계산용, 커밋하지 않음)
  *       state.json            마지막으로 알던 문서 판 (외부 편집 감지용, 커밋하지 않음)
  *       viewstate/<user>.json 접기·깊이 등 보기 상태 (커밋하지 않음)
- *       inbox/                "AI에게 넘기기" 요청 (커밋하지 않음)
+ *       inbox/                요청함으로 보낸 것 (커밋하지 않음)
  *       locks/                같은 대상 쓰기를 줄 세우는 잠금 파일 (커밋하지 않음)
  *       runs/                 Claude 작업 요청·상태·로그 (커밋하지 않음, src/core/runs.ts)
  *       runners/              실행기 심장 박동 (커밋하지 않음)
@@ -114,7 +114,8 @@ export const dataFolderCandidates = (docsName: string, n = 9): string[] => {
 export const IGNORE_DIRS = new Set(['.git', 'node_modules', '.docbench', '.svn', '.hg', '__pycache__', '.venv', 'dist', 'build', '.idea', '.vscode']);
 
 /** .docbench/.gitignore — 사람이 읽는 피드백·이력·설정만 커밋 대상 */
-export const DOT_GITIGNORE = 'blobs/\nviewstate/\ninbox/\nlocks/\nruns/\nrunners/\nstate.json\n*.tmp\n';
+// .claude/·CLAUDE.md = 이 PC 의 Claude 자리(D76, 경로가 들어간 설정) — instructions.md(늘 지킬 지시)는 팀이 함께 쓴다
+export const DOT_GITIGNORE = 'blobs/\nviewstate/\ninbox/\nlocks/\nruns/\nrunners/\nstate.json\n*.tmp\n.claude/\nCLAUDE.md\n';
 
 /** 예전 판이 만든 .docbench/.gitignore 에 빠진 줄을 덧붙인 글(바뀔 것이 없으면 null) — 사람이 더한 줄은 그대로 */
 export function mergeGitignore(existing: string): string | null {
@@ -140,7 +141,7 @@ export interface WorkspaceConfig {
   render?: Manifest['render'];
   assistantName: string;
   assistant: { command?: string | string[]; args?: string[]; model?: string; timeoutSec?: number } | null;
-  /** inbox: .docbench/inbox 에 요청 파일 · command: 넘기기 때 실행할 명령(배열, 서버만) · message: 화면에 보일 안내 */
+  /** inbox: .docbench/inbox 에 요청 파일 · command: 요청함으로 보낼 때 실행할 명령(배열, 서버만) · message: 화면에 보일 안내 */
   notify: { inbox?: boolean; command?: string[] | null; message?: string | null };
   readOnly: boolean;
   /** 계정 (이 PC 의 설정 user — 없으면 운영체제 로그인) */
@@ -227,7 +228,7 @@ export function pcSettingsFor(file: unknown, rootPaths: string[], ci = false): P
  *
  * **실행 명령과 이름은 이 PC 의 설정에서만 받는다**: `assistant`(헤드리스 claude 명령·인자), `notify.command`, `user` 는
  * 문서 폴더 밖 PC 설정(pc)에서만 쓴다. git·OneDrive·공유 폴더로 퍼지는 config.json 에 누가 명령을 적어 넣어도
- * 다른 사람 PC 에서 "넘기기"·"제안" 때 실행되지 않고, 모두가 한 사람으로 기록되지도 않게 한다. 무시한 것은 warnings 로 알린다.
+ * 다른 사람 PC 에서 보내기 때 실행되지 않고, 모두가 한 사람으로 기록되지도 않게 한다. 무시한 것은 warnings 로 알린다.
  * 브라우저(단일 HTML)는 pc 를 넘기지 않는다 — 명령을 실행하지 않고, 사람은 그 브라우저의 계정(표시 이름은 화면의 "나", D63).
  */
 export function mergeConfig(raw: unknown, folderName: string, pc?: PcSettings): WorkspaceConfig {
@@ -389,7 +390,14 @@ export const lockKey = {
   state: 'state',
   /** changes.jsonl 덧붙이기 — 브라우저는 O_APPEND 가 없어 파일을 통째로 바꿔 끼우므로 서버·CLI 도 이 잠금 안에서 덧붙인다 */
   changes: 'changes',
+  /** 터미널 Claude 의 결과 반영 — 같은 계정의 화면·앱이 함께 볼 수 있어 한 번만 */
+  run: (id: string) => 'run:' + id,
+  /** 기록 폴더의 Claude 자리 파일(CLAUDE.md·.claude/settings.json·instructions.md) */
+  room: 'room',
 };
+
+/** 기록 폴더에 있어도 되는 것 — 표식 없는 폴더를 기록 폴더로 쓸 때 검사(서버·CLI) */
+export const DATA_ENTRIES = ['feedback', 'blobs', 'viewstate', 'inbox', 'locks', 'runs', 'runners', '.gitignore', 'CLAUDE.md', '.claude', 'instructions.md'];
 
 /**
  * 이력 파일에서 새로 붙은 바이트 → 완성된 줄(마지막 줄바꿈까지)의 기록과 소비한 바이트 수.
@@ -406,7 +414,7 @@ export function completeChangeLines(bytes: Uint8Array): { entries: ChangeEntry[]
   return { entries, consumed: end + 1 };
 }
 
-/** 넘기기 요청 파일 이름 */
+/** 요청함 파일 이름 */
 export const requestFileName = (now = Date.now()): string => `req-${now}.json`;
 
 // ---------------------------------------------------------------- 매니페스트

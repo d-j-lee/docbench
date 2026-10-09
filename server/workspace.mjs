@@ -12,11 +12,11 @@
  *       blobs/<version>.md    본 적 있는 판의 본문 (바뀐 섹션 계산용, 커밋하지 않음)
  *       state.json            마지막으로 알던 문서 판 (외부 편집 감지용, 커밋하지 않음)
  *       viewstate/<user>.json 접기·깊이 등 보기 상태 (커밋하지 않음)
- *       inbox/                "AI에게 넘기기" 요청 (커밋하지 않음)
+ *       inbox/                요청함으로 보낸 것 (커밋하지 않음)
  *
  * 서버와 CLI 가 같은 클래스를 쓴다. 서버가 꺼져 있어도 CLI 만으로 일관되게 기록된다.
  */
-import { promises as fs, watch as fsWatch } from 'node:fs';
+import { promises as fs, watch as fsWatch, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { decode, encode, hashBytes, atomicWrite, readJson, writeJson, canEncodeLegacy, EncodingReadOnlyError } from './textio.mjs';
@@ -225,7 +225,7 @@ export async function claimDataDir(dir, root, o = {}) {
   }
   if (!marker) {
     const ents = await fs.readdir(dir).catch(() => []);
-    if (ents.some((n) => !['feedback', 'blobs', 'viewstate', 'inbox', 'locks', 'runs', 'runners', '.gitignore'].includes(n) && !/^(config|state)\.json$|^changes\.jsonl$/.test(n))) {
+    if (ents.some((n) => !core.DATA_ENTRIES.includes(n) && !/^(config|state)\.json$|^changes\.jsonl$/.test(n))) {
       throw new DataLocationError(`기록 폴더로 쓰려는 곳에 다른 파일이 있습니다 — 빈 폴더를 고르세요: ${dir}`);
     }
   }
@@ -782,6 +782,34 @@ export class Workspace {
   }
   /** @param {string} id */
   async deleteFeedback(id) { await fs.rm(this.fbFile(id), { force: true }); }
+
+  // ------------------------------------------------------------ Claude 자리 (기록 폴더, D76)
+  /**
+   * 기록 폴더를 Claude 의 자리로 갖춘다: CLAUDE.md(안내)·.claude/settings.json(좁은 권한)·instructions.md(늘 지킬 지시).
+   * DocBench 가 만든 표시가 있는 파일만 고쳐 쓴다 — 사람이 바꿔 쓴 것은 두고, instructions.md 는 없을 때만 만든다.
+   */
+  async ensureRoom() {
+    await this.withLock(core.lockKey.room, async () => {
+      const info = { docsName: path.basename(this.root), docsPath: this.root, roomPath: this.dir, inside: this.dataMode === 'inside', locale: /** @type {any} */ (this.config).locale === 'en' ? 'en' : 'ko' };
+      const md = path.join(this.dir, core.ROOM_FILES.claudeMd);
+      const cur = await fs.readFile(md, 'utf8').catch(() => null);
+      const next = core.roomClaudeMd(/** @type {any} */ (info));
+      if (cur == null || (cur.startsWith(core.ROOM_MARK) && cur !== next)) await atomicWrite(md, Buffer.from(next, 'utf8'));
+      const st = path.join(this.dir, core.ROOM_FILES.settings);
+      const curS = /** @type {any} */ (await readJson(st));
+      const nextS = core.roomSettings(/** @type {any} */ (info));
+      if (core.roomSettingsWritable(curS, existsSync(st), true, nextS)) { await fs.mkdir(path.dirname(st), { recursive: true }); await atomicWrite(st, Buffer.from(nextS, 'utf8')); }
+      const ins = path.join(this.dir, core.ROOM_FILES.instructions);
+      if (!existsSync(ins)) await atomicWrite(ins, Buffer.from(core.roomInstructionsSeed(/** @type {any} */ (info).locale), 'utf8'));
+    });
+  }
+  /** 늘 지킬 지시 — instructions.md 에서 주석을 뺀 글 */
+  async standing() { return core.standingInstructions(await fs.readFile(path.join(this.dir, core.ROOM_FILES.instructions), 'utf8').catch(() => '')); }
+  /** @param {string} text */
+  async saveStanding(text) {
+    const body = String(text || '').replace(/\r\n?/g, '\n').slice(0, 4000);
+    await this.withLock(core.lockKey.room, () => atomicWrite(path.join(this.dir, core.ROOM_FILES.instructions), Buffer.from(core.roomInstructionsSeed(/** @type {any} */ (this.config).locale === 'en' ? 'en' : 'ko') + (body ? body.trim() + '\n' : ''), 'utf8')));
+  }
 
   // ------------------------------------------------------------ 보기 상태·요청함
   /** @param {string} [user] */

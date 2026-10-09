@@ -1,8 +1,8 @@
 /**
  * 작업대 본체 — 골격·데이터·이동·상단 바·레일·단축키.
  */
-import type { Action, AskOptions, DocBenchAdapters, DocBenchEvent, DocBenchOptions, DocEvent, Feedback, Manifest, Person, Unsubscribe, ViewState } from '../types';
-import { normalizeFeedback, countTurns, turnOf } from '../core/feedback';
+import type { Action, AskOptions, DocBenchAdapters, DocBenchEvent, DocBenchOptions, DocEvent, Feedback, FeedbackPatch, Manifest, Person, ReadingPlan, RunnerInfo, RunStartInput, RunStatus, SendVia, Unsubscribe, ViewState } from '../types';
+import { normalizeFeedback, countTurns, turnOf, isMyDraft } from '../core/feedback';
 import { compileRules, countPlaceholders, type Compiled } from './render';
 import { h, $, fmtTime, debounce, icon } from './dom';
 import { makeT, type T } from './i18n';
@@ -14,7 +14,9 @@ import { renderChanges } from './changes';
 import { RunDock } from './runs';
 import { Hover } from './hover';
 import { Explorer } from './explorer';
-import { terminalHandoffPrompt } from '../core/runs';
+import { Composer } from './composer';
+import { terminalHandoffPrompt, RUN_MAX_DOCS } from '../core/runs';
+import { KEY_SEP } from '../core/source';
 import cssText from './styles.css';
 
 const STYLE_ID = 'docbench-styles';
@@ -41,6 +43,8 @@ export class App {
   dialogs!: Dialogs;
   /** Claude 작업 창 (어댑터에 runs 가 있을 때만) */
   dock: RunDock | null = null;
+  /** 그 자리에서 적기 */
+  composer!: Composer;
   hover!: Hover;
   /** 탐색기 (어댑터에 docs.tree 가 있을 때만 — 펼친 폴더만 읽는다) */
   explorer: Explorer | null = null;
@@ -60,6 +64,7 @@ export class App {
     this.t = makeT(opts.locale || 'ko', { ai: this.ai });
     if (opts.injectStyles !== false) injectStyles(opts.styleNonce);
     this.buildShell();
+    this.composer = new Composer(this);
   }
 
   // ------------------------------------------------------------ 시작·정리
@@ -103,6 +108,8 @@ export class App {
 
   destroy(): void {
     this.destroyed = true;
+    // 적는 칸의 문서 전역 듣기(Esc·바깥 누르기)를 걷는다 — 다음 작업대의 Esc 를 가로채지 않게
+    this.composer?.close();
     this.dock?.destroy();
     for (const u of this.unsubs.splice(0)) { try { u(); } catch { /* 이미 끊김 */ } }
     this.doc?.destroy();
@@ -221,7 +228,8 @@ export class App {
     this.unsubs.push(store.subscribe(
       (rows) => {
         this.fbMode = store.mode ? store.mode() : 'local';
-        this.fb = rows.map((r) => normalizeFeedback(r as unknown as Record<string, unknown>, r.id));
+        // 남의 초안은 보이지 않는다 — 보내기 전까지는 그 사람만의 메모(함께 쓰는 기록 폴더)
+        this.fb = rows.map((r) => normalizeFeedback(r as unknown as Record<string, unknown>, r.id)).filter((f) => f.status !== 'draft' || isMyDraft(f, this.me));
         this.onFeedback(first);
         first = false;
       },
@@ -231,7 +239,6 @@ export class App {
   }
 
   private onFeedback(_first: boolean): void {
-    this.dock?.renderQueue();
     this.renderBar();
     this.renderRail();
     this.doc?.anchorFeedback();
@@ -319,6 +326,7 @@ export class App {
   // ------------------------------------------------------------ 이동
   async navigate(view: string, opts: { section?: string; compareFrom?: string; feedbackId?: string } = {}): Promise<void> {
     if (!this.manifest) return;
+    if (view !== this.view && this.composer?.isOpen) void this.composer.flush(); // 적던 글은 초안으로 남긴다
     if (this.doc?.isEditing() && view !== this.view) {
       const ok = await this.dialogs.confirm(this.t('edit.leave'));
       if (!ok) return;
@@ -383,22 +391,19 @@ export class App {
       bar.append(box);
     }
     const c = countTurns(this.scopedFb());
-    // 대시보드가 탭에 배지를 달 수 있게 — 바뀔 때만
-    const todoSig = `${c.owner}:${c.assistant}`;
-    if (todoSig !== this.lastTodo) { this.lastTodo = todoSig; this.emit({ type: 'todo', owner: c.owner, assistant: c.assistant }); }
+    // 대시보드가 탭에 배지를 달 수 있게 — 바뀔 때만(숫자만)
+    const todoSig = `${c.owner}:${c.assistant}:${c.draft}`;
+    if (todoSig !== this.lastTodo) { this.lastTodo = todoSig; this.emit({ type: 'todo', owner: c.owner, assistant: c.assistant, draft: c.draft }); }
+    const pill = (cls: string, ic: 'edit' | 'eye', label: string, n: number, f: 'draft' | 'review') =>
+      h('button', { class: 'db-pill ' + cls + (n ? '' : ' zero'), type: 'button', title: label, 'aria-label': `${label} ${n}`, onclick: () => this.panel.open(undefined, f) },
+        h('span', { class: 'ic', html: icon(ic) }), h('span', { class: 'lbl', text: label }), h('span', { class: 'n', text: n }));
     bar.append(h('div', { class: 'db-turns' },
-      // 좁은 화면에서는 글 대신 그림(사람·Claude)이 남는다 — 숫자만 덩그러니 남지 않게
-      h('button', { class: 'db-pill owner', type: 'button', title: this.t('turn.owner'), 'aria-label': `${this.t('turn.owner')} ${c.owner}`, onclick: () => this.panel.open('all', 'owner') }, h('span', { class: 'ic', html: icon('user') }), h('span', { class: 'lbl', text: this.t('turn.owner') }), h('span', { class: 'n', text: c.owner })),
-      h('button', { class: 'db-pill assistant', type: 'button', title: this.t('turn.assistant'), 'aria-label': `${this.t('turn.assistant')} ${c.assistant}`, onclick: () => this.panel.open('all', 'assistant') }, h('span', { class: 'ic', html: icon('spark') }), h('span', { class: 'lbl', text: this.t('turn.assistant') }), h('span', { class: 'n', text: c.assistant })),
-    ));
-    if ((this.can('assistant.notify') || this.dock) && c.assistant > 0) {
-      bar.append(h('button', { class: 'db-btn primary db-send' + (this.dock && !this.opts.host?.handoff ? ' dockable' : ''), type: 'button', title: this.t(this.dock ? 'send.hint.run' : 'send.hint.inbox'), 'aria-label': this.t('send.label', { n: c.assistant }), onclick: () => void this.handToAssistant() },
-        h('span', { class: 'ic', html: icon('spark') }), h('span', { class: 't', text: this.t('send.label', { n: c.assistant }) })));
-    }
+      pill('draft', 'edit', this.t('pill.draft'), c.draft, 'draft'),
+      pill('owner', 'eye', this.t('pill.review'), c.owner, 'review')));
     if (this.dock) {
       const a = this.dock.activeRun();
       const av = this.dock.availability;
-      const st = a ? a.state : av && !av.available ? 'off' : 'idle';
+      const st = a ? (this.dock.isTerminal(a) ? 'terminal' : a.state) : av && !av.available && !this.ad.runs?.startTerminal ? 'off' : 'idle';
       const lb = this.t(st === 'off' ? 'run.bar.offFull' : 'run.bar.' + st);
       // 좁은 화면에서는 글을 접고 그림·도는 표시만 — 그래서 이름은 aria-label 로도 둔다
       bar.append(h('button', { class: 'db-btn db-claude ' + st, type: 'button', 'aria-pressed': String(this.dock.isOpen), 'aria-label': lb, title: av?.message || this.t('run.bar.hint'), onclick: () => this.dock!.toggle() },
@@ -461,49 +466,198 @@ export class App {
     requestAnimationFrame(() => this.els.rail.querySelector<HTMLElement>(`[title="${CSS.escape(dir + '/')}"]`)?.scrollIntoView({ block: 'center' }));
   }
 
+  // ------------------------------------------------------------ 보내기 · 선제안 (D73·D74·D76)
+  /** 어디로 보낼 수 있나 — 이 PC 의 앱(자동) · 터미널 Claude(설치 없음) · 대시보드 터미널 · 연습용 흉내 · 요청함 */
+  connection(): { options: SendVia[]; current: SendVia | null; runner?: RunnerInfo } {
+    const av = this.dock?.availability;
+    const runs = this.ad.runs;
+    const opts: SendVia[] = [];
+    if (this.opts.host?.handoff) opts.push('host');
+    if (runs && av?.available && av.runner) opts.push(av.runner.kind === 'demo' ? 'demo' : 'app');
+    // 터미널 한 줄도 Claude 작업이다 — 맡길 권한이 없으면(작업 창도 없다) 고르지 않는다
+    if (runs?.startTerminal && this.dock && this.can('assistant.run')) opts.push('terminal');
+    if (!runs && this.ad.notifier && this.can('assistant.notify')) opts.push('notify');
+    const want = this.state.runs?.via;
+    return { options: opts, current: want && opts.includes(want) ? want : opts[0] || null, runner: av?.runner };
+  }
+
+  private runInput(base: Pick<RunStartInput, 'kind' | 'feedbackIds'> & Partial<RunStartInput>): RunStartInput {
+    const s = this.state.runs || {};
+    return { model: s.model || undefined, effort: (s.effort || undefined) as RunStartInput['effort'], mode: s.mode || 'auto', ...base };
+  }
+
   /**
-   * 카드에서 Claude 차례로 넘긴 뒤 — 넘겼는데 아무 일도 없는 일이 없게(D72): 대시보드가 맡으면 그쪽으로,
-   * Claude 작업 창이 있으면 그 항목을 담아 연다(연결이 없으면 그 자리에서 연결 안내, 연습 공간은 흉내 Claude),
-   * 둘 다 없으면 다음에 무엇을 하면 되는지 알린다.
+   * 고른 초안을 한 번에 보낸다 — 초안을 "보냄"으로 바꾸고(판 비교) Claude 작업 하나로. 시작하지 못하면 초안으로 되돌린다
+   * (보냄에 남아 아무 일도 없는 것처럼 보이지 않게).
    */
-  async askAssistant(ids: string[]): Promise<void> {
-    if (this.opts.host?.handoff || !this.dock) {
-      // 카드마다 보내지 않는다 — 대시보드 터미널·요청함(notify.command·대화창 보내기)이 카드 하나마다 돌지 않게. 위쪽 넘기기로 모아 보낸다
-      const canSend = !!this.opts.host?.handoff || !!this.ad.notifier;
-      this.toast(this.t(canSend ? 'send.marked' : 'send.none'), { sticky: !canSend });
+  async sendDrafts(ids: string[], o: { note?: string; fromBar?: boolean } = {}): Promise<boolean> {
+    const t = this.t;
+    const rows = ids.map((id) => this.fb.find((f) => f.id === id)).filter((f): f is Feedback => !!f && f.status === 'draft');
+    if (!rows.length) { this.toast(t('send.nothing')); return false; }
+    const conn = this.connection();
+    if (!conn.current) { this.toast(t('send.none'), { sticky: true }); return false; }
+    // 지난 알림(초안 보기 등)이 보내기 뒤까지 남아 막대를 가리지 않게
+    this.hideToast();
+    // 묶음에 붙일 말은 보내기 막대에서 보낼 때만 — 카드 하나를 급히 보낼 때 다음 묶음의 말을 써 버리지 않게
+    const note = (o.note ?? '').trim() || undefined;
+    const sent: string[] = [];
+    for (const f of rows) if (await this.updateFeedback(f, { status: 'open', waitingOn: 'assistant', drafter: null })) sent.push(f.id);
+    if (!sent.length) return false;
+    const docs = [...new Set(rows.map((f) => f.docId).filter(Boolean))];
+    const input = this.runInput({ kind: 'handoff', feedbackIds: sent, ...(note ? { note } : {}) });
+    try {
+      await this.dispatch(conn.current, input, docs);
+      if (o.fromBar) this.panel.clearNote();
+      this.emit({ type: 'assistant:requested', feedbackIds: sent });
+      this.panel.render();
+      return true;
+    } catch (e) {
+      // 시작하지 못했다 — 내 초안으로 되돌린다(보냄에 남아 아무 일도 없는 것처럼 보이지 않게)
+      for (const id of sent) { const back = await this.ad.feedback.update(id, { status: 'draft', waitingOn: 'owner', drafter: this.me.id || null }).catch(() => null); if (back) this.noteFeedback(back); }
+      this.panel.render();
+      this.toast(t('run.startFail', { msg: (e as Error).message }), { sticky: true });
+      return false;
+    }
+  }
+
+  /** Claude 에게 먼저 검토 받기 — 문서(들)·섹션을 읽고 제안·질문을 올리거나 읽기 정리를 제안한다 */
+  async requestReview(o: { docIds: string[]; sections?: string[]; goal: 'suggest' | 'view'; note?: string }): Promise<boolean> {
+    const conn = this.connection();
+    if (!conn.current || conn.current === 'notify') { this.toast(this.t('review.none'), { sticky: true }); return false; }
+    const input = this.runInput({ kind: 'review', feedbackIds: [], docIds: o.docIds.slice(0, RUN_MAX_DOCS), goal: o.goal, ...(o.sections?.length ? { sections: o.sections } : {}), ...(o.note ? { note: o.note } : {}) });
+    try { await this.dispatch(conn.current, input, o.docIds); return true; } catch (e) {
+      this.toast(this.t('run.startFail', { msg: (e as Error).message }), { sticky: true });
+      return false;
+    }
+  }
+
+  /**
+   * 방금 만들거나 고친 피드백을 화면 목록에 바로 넣는다 — 저장소의 구독 알림은 늦게 올 수 있어(REST·폴더),
+   * 곧바로 이어지는 일(바로 보내기)이 옛 모습을 보지 않게. 알림이 오면 그대로 덮인다
+   */
+  noteFeedback(f: Feedback): void {
+    if (!f?.id) return;
+    const visible = f.status !== 'draft' || isMyDraft(f, this.me);
+    const i = this.fb.findIndex((x) => x.id === f.id);
+    if (i >= 0) { if (visible) this.fb[i] = f; else this.fb.splice(i, 1); } else if (visible) this.fb.push(f);
+  }
+
+  /** 보낼 곳으로 */
+  private async dispatch(via: SendVia, input: RunStartInput, docs: string[]): Promise<void> {
+    const t = this.t;
+    const what = input.kind === 'review' ? t('review.started') : t('send.started', { n: input.feedbackIds.length });
+    if (via === 'app' || via === 'demo') {
+      await this.dock!.startRun(input);
+      this.toast(what, { action: t('run.open'), onAction: () => this.dock?.setOpen(true) });
       return;
     }
-    this.hidePanelOverlay();
-    this.dock.handoff(ids, true);
-  }
-
-  /** 피드백 창이 본문 위에 겹쳐 뜨는 너비(태블릿·휴대폰)면 접는다 — 겹친 창과 덮개가 Claude 창을 가린다 */
-  private hidePanelOverlay(): void {
-    if (this.root.classList.contains('panel-open') && getComputedStyle(this.els.panel).position === 'absolute') this.root.classList.remove('panel-open');
-  }
-
-  async handToAssistant(): Promise<void> {
-    const rows = this.scopedFb().filter((f) => turnOf(f) === 'assistant' && !this.dock?.activeFor(f.id));
-    if (!rows.length) { this.toast(this.t('send.empty')); return; }
-    // 대시보드가 맡으면(자기 Claude Code 터미널에 보내기 등) 그쪽으로 — 아니면 작업대가 스스로
-    const host = this.opts.host?.handoff;
-    if (host) {
-      const docs = [...new Set(rows.map((r) => r.docId).filter(Boolean))];
-      try {
-        const r = await host({ feedbackIds: rows.map((f) => f.id), docs, prompt: terminalHandoffPrompt(this.manifest.rootName || this.manifest.project.name, undefined, rows.map((f) => f.id)) });
-        if (r?.handled) { this.toast(r.message || this.t('send.host')); this.emit({ type: 'assistant:requested', feedbackIds: rows.map((f) => f.id) }); return; }
-      } catch (e) { this.toast(this.t('err.generic', { msg: (e as Error).message })); return; }
+    if (via === 'terminal' || via === 'host') {
+      const runs = this.ad.runs;
+      const st = runs?.startTerminal ? await runs.startTerminal(input) : null;
+      if (via === 'host') {
+        // 대시보드가 자기 터미널에서 돌린다 — 넘기는 것은 id·문서 이름·칠 한 줄뿐(본문 없음, D68).
+        // 켜진 Claude 대화에 넣을 한 줄(prompt)과 셸 한 줄(command) 둘 다 — 대시보드가 고른다. 다른 길로 처리되면 터미널 요청은 저절로 닫힌다
+        const prompt = terminalHandoffPrompt(this.manifest.rootName || this.manifest.project.name, undefined, input.feedbackIds, { review: input.kind === 'review' });
+        const command = st ? (navigator.userAgent.includes('Windows') ? st.terminal.command.pwsh : st.terminal.command.sh) : undefined;
+        const r = await this.opts.host!.handoff!({ feedbackIds: input.feedbackIds, docs, prompt, ...(command ? { command } : {}) });
+        if (!r?.handled) throw new Error(r?.message || t('send.host.no'));
+        this.toast(r.message || t('send.host'));
+        if (st) this.dock?.track(st);
+        return;
+      }
+      if (st) { this.dock?.track(st); this.dock?.showTerminal(st, st.terminal); }
+      return;
     }
-    // Claude 작업을 띄울 수 있으면 창에서 모델·노력을 보고 시작한다
-    if (this.dock) { this.hidePanelOverlay(); this.dock.handoff(rows.map((f) => f.id)); return; }
-    const docs = [...new Set(rows.map((r) => this.manifest.docs[r.docId]?.title || r.docId))];
-    // 맡길 곳이 아무것도 없다(Claude 작업도 요청함도 없는 화면) — 차례만 바뀌었다는 것과 다음 할 일을 알린다
-    if (!this.ad.notifier) { this.toast(this.t('send.none'), { sticky: true }); return; }
-    try {
-      const res = await this.ad.notifier!.send({ count: rows.length, docs, feedbackIds: rows.map((r) => r.id) });
-      this.toast(res.message || this.t(res.delivered ? 'send.done' : res.queued ? 'send.queued' : 'send.copied'), { sticky: !res.delivered });
-      this.emit({ type: 'assistant:requested', feedbackIds: rows.map((r) => r.id) });
-    } catch (e) { this.toast(this.t('err.generic', { msg: (e as Error).message })); }
+    if (via === 'notify') {
+      const res = await this.ad.notifier!.send({ count: input.feedbackIds.length, docs: docs.map((d) => this.docTitle(d)), feedbackIds: input.feedbackIds, ...(input.note ? { note: input.note } : {}) });
+      this.toast(res.message || t(res.delivered ? 'send.done' : res.queued ? 'send.queued' : 'send.copied'), { sticky: !res.delivered });
+    }
+  }
+
+  /** 선제안을 무엇으로 받을지 고르는 작은 창 */
+  canReview(): boolean { const c = this.connection(); return !!c.current && c.current !== 'notify' && !!this.view && !!this.manifest.docs[this.view]; }
+  async reviewMenu(_anchor?: HTMLElement): Promise<void> {
+    const t = this.t;
+    const id = this.view;
+    if (!id || !this.manifest.docs[id]) return;
+    const dir = id.includes('/') ? id.slice(0, id.lastIndexOf('/') + 1) : '';
+    const siblings = Object.keys(this.manifest.docs).filter((d) => this.inScope(d) && (dir ? d.startsWith(dir) && !d.slice(dir.length).includes('/') : !d.includes('/')));
+    const cur = this.doc?.current;
+    const r = await this.dialogs.review({
+      doc: this.docTitle(id),
+      section: cur && cur.level > 1 ? cur.path.slice(-2).join(' › ') : undefined,
+      folder: siblings.length > 1 ? { name: dir || this.manifest.rootName || '/', n: Math.min(siblings.length, RUN_MAX_DOCS) } : undefined,
+    });
+    if (!r) return;
+    const docIds = r.scope === 'folder' ? siblings.slice(0, RUN_MAX_DOCS) : [id];
+    await this.requestReview({ docIds, goal: r.goal, ...(r.scope === 'section' && cur ? { sections: [cur.key] } : {}), ...(r.note ? { note: r.note } : {}) });
+  }
+
+  /**
+   * Claude 의 읽기 정리(접을 곳·볼 곳·안내)를 내 화면에 — 문서는 그대로. navigate=false 면 지금 문서에 머문다.
+   * 아직 확인하지 않은 바뀐 섹션(과 그것을 품은 섹션)은 접지 않는다 — 바뀐 글이 접혀 숨지 않게. run = 볼 것에서 지울 작업
+   */
+  async applyReadingPlan(p: ReadingPlan | ReadingPlan[], o: { navigate?: boolean; run?: string } = {}): Promise<void> {
+    const plans = (Array.isArray(p) ? p : [p]).filter((x) => this.manifest.docs[x.docId]);
+    if (o.run) this.dismissReadingPlan(o.run, false);
+    if (!plans.length) return;
+    // 먼저 그 문서로 — 연 문서라야 확인 안 한 바뀐 섹션을 안다(접지 않을 곳)
+    const here = plans.find((x) => x.docId === this.view) || plans[0];
+    if (this.view !== here.docId && o.navigate !== false) await this.navigate(here.docId, here.focus?.[0] ? { section: here.focus[0] } : undefined);
+    let folded = 0;
+    for (const x of plans) {
+      const st = this.docState(x.docId);
+      if (!st.foldsBefore) st.foldsBefore = { ...(st.folds || {}) };
+      const folds = { ...(st.folds || {}) };
+      const changed = this.doc?.id === x.docId ? this.doc.changedKeys() : [];
+      const holdsChange = (k: string) => changed.some((c) => c === k || c.startsWith(k + KEY_SEP));
+      for (const k of x.fold) if (!holdsChange(k)) { folds[k] = true; folded++; }
+      for (const k of x.focus || []) folds[k] = false;
+      st.folds = folds;
+      st.guide = x.guide;
+    }
+    this.saveState();
+    if (this.view === here.docId) { this.doc?.applyFolds(); this.doc?.showGuide(); if (here.focus?.[0]) this.doc?.reveal(here.focus[0]); }
+    this.panel?.render();
+    this.toast(this.t(plans.length > 1 ? 'view.applied.n' : 'view.applied', { n: folded, docs: plans.length }), { action: this.t('view.undo'), onAction: () => plans.forEach((x) => this.undoReadingPlan(x.docId)) });
+  }
+  /** 볼 것의 읽기 정리를 치운다(적용했거나 필요 없다고 했거나) — 최근 50개만 기억 */
+  dismissReadingPlan(run: string, render = true): void {
+    const s = (this.state.runs ||= {});
+    const seen = s.viewSeen || [];
+    if (!seen.includes(run)) s.viewSeen = [run, ...seen].slice(0, 50);
+    this.saveState();
+    if (render) this.panel?.render();
+  }
+  /** 볼 것에 남은(아직 적용·치우지 않은) 읽기 정리 작업 */
+  pendingReadingPlans(): RunStatus[] {
+    const seen = new Set(this.state.runs?.viewSeen || []);
+    // 내가 부탁한 것만 — 함께 쓰는 기록 폴더에서 남이 받은 읽기 정리가 내 화면을 접지 않게
+    return (this.dock?.recent || []).filter((r) => r.state === 'done' && r.kind === 'review' && !!r.view?.length && !seen.has(r.id) && this.isMine(r) && r.view.some((x) => !!this.manifest.docs[x.docId]));
+  }
+  /** 내가 맡긴 작업인가 — 누가 맡겼는지 모르면(연습 공간·예전 기록) 내 것으로 본다 */
+  isMine(r: RunStatus): boolean {
+    const by = r.by?.id;
+    return !by || !this.me.id || by === this.me.id;
+  }
+  undoReadingPlan(docId: string): void {
+    const st = this.docState(docId);
+    if (st.foldsBefore) st.folds = st.foldsBefore;
+    delete st.foldsBefore; delete st.guide;
+    this.saveState();
+    if (this.doc?.id === docId) { this.doc.applyFolds(); this.doc.showGuide(); }
+  }
+
+  /** 늘 지킬 지시(기록 폴더 instructions.md) 고치기 */
+  async editStanding(): Promise<void> {
+    const ins = this.ad.instructions;
+    if (!ins) return;
+    const t = this.t;
+    let cur = '';
+    try { cur = await ins.load(); } catch { /* 처음 */ }
+    const v = await this.dialogs.prompt({ title: t('standing.title'), label: t('standing.label'), value: cur, placeholder: t('standing.ph'), note: t('standing.note'), ok: t('standing.save'), multiline: true });
+    if (v == null) return;
+    try { await ins.save(v); this.toast(t('standing.saved')); } catch (e) { this.toast(t('err.generic', { msg: (e as Error).message })); }
   }
 
   // ------------------------------------------------------------ 레일
@@ -518,12 +672,12 @@ export class App {
     const keepScroll = rail.scrollTop;
     rail.replaceChildren();
     const t = this.t;
-    const per: Record<string, { owner: number; assistant: number }> = {};
+    const per: Record<string, { owner: number; assistant: number; draft: number }> = {};
     for (const f of this.scopedFb()) {
       const tt = turnOf(f);
       const k = f.target.kind === 'item' ? '#map' : f.docId;
-      per[k] ||= { owner: 0, assistant: 0 };
-      if (tt === 'owner' || tt === 'assistant') per[k][tt]++;
+      per[k] ||= { owner: 0, assistant: 0, draft: 0 };
+      if (tt === 'owner' || tt === 'assistant' || tt === 'draft') per[k][tt]++;
     }
     const feats = this.opts.features || {};
     const busy = this.dock?.busyDocs() || new Set<string>();
@@ -531,6 +685,7 @@ export class App {
       const box = h('span', { class: 'db-dots' });
       const cnt = per[key];
       if (busy.has(key)) box.append(h('span', { class: 'db-spin sm', title: t('doc.busy') }));
+      if (cnt?.draft) box.append(h('span', { class: 'db-dot draft', title: t('turn.draft'), text: cnt.draft }));
       if (cnt?.assistant) box.append(h('span', { class: 'db-dot assistant', title: t('turn.assistant'), text: cnt.assistant }));
       if (cnt?.owner) box.append(h('span', { class: 'db-dot owner', title: t('turn.owner'), text: cnt.owner }));
       if (this.todo[key]) box.append(h('span', { class: 'db-dot todo', title: t('doc.todos'), text: this.todo[key] }));
@@ -800,8 +955,10 @@ export class App {
    * 아래 안내 한 줄. 글이 길면 그만큼 오래 두고(최대 12초), 마우스를 올리면 멈춘다.
    * sticky = 닫을 때까지 둔다(해야 할 일이 담긴 안내), action = 누를 수 있는 버튼 하나
    */
-  toast(msg: string, o: { sticky?: boolean; action?: string; onAction?: () => void } = {}): void {
+  /** weak = 알려 주기만 하는 말(다시 읽음 등) — 떠 있는 붙박이 알림(Claude 가 끝냄·보낼 수 없음)을 덮지 않는다 */
+  toast(msg: string, o: { sticky?: boolean; weak?: boolean; action?: string; onAction?: () => void } = {}): void {
     const t = this.els.toast;
+    if (o.weak && !t.hidden && t.dataset.sticky) return;
     const close = () => { t.hidden = true; clearTimeout(this.toastT); };
     t.replaceChildren(h('span', { class: 'm', text: msg }),
       o.action ? h('button', { class: 'db-btn sm', type: 'button', onclick: () => { close(); o.onAction?.(); } }, o.action) : '',
@@ -811,6 +968,7 @@ export class App {
     clearTimeout(this.toastT);
     if (!o.sticky) this.toastT = setTimeout(close, Math.min(12000, Math.max(3600, 2400 + msg.length * 60)));
   }
+  hideToast(): void { this.els.toast.hidden = true; clearTimeout(this.toastT); }
   emit(ev: DocBenchEvent): void {
     try { this.opts.onEvent?.(ev); } catch { /* 호스트 오류는 삼킨다 */ }
     this.root.dispatchEvent(new CustomEvent('docbench:' + ev.type, { detail: ev, bubbles: true }));
@@ -823,9 +981,10 @@ export class App {
   when(iso?: string): string { return fmtTime(iso); }
   find<T extends Element = HTMLElement>(sel: string): T | null { return $<T>(sel, this.root); }
 
-  async updateFeedback(f: Feedback, patch: Partial<Feedback>, toastOk?: string): Promise<boolean> {
+  async updateFeedback(f: Feedback, patch: FeedbackPatch, toastOk?: string): Promise<boolean> {
     try {
       const out = await this.ad.feedback.update(f.id, { ...patch, updatedAt: new Date().toISOString() }, { version: f.version });
+      this.noteFeedback(out);
       this.emit({ type: 'feedback:updated', feedback: out });
       if (toastOk) this.toast(toastOk);
       return true;

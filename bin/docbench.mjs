@@ -25,7 +25,7 @@
  *   docbench doc show <docId> [--section KEY] [--json]
  *   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
  *   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
- *   docbench inbox [--clear] [--json]          "넘기기" 요청함 보기·비우기
+ *   docbench inbox [--clear] [--json]          요청함(보낸 묶음 알림) 보기·비우기
  *   docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
  *                                              Claude 작업 실행기 — 단일 HTML 화면의 "Claude 작업"을 이 PC 에서 띄운다
  *                                              (--detach 창 없이 뒤에서, --startup on 로그인 때 자동으로, Windows)
@@ -67,17 +67,22 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
                                              문서 폴더 ↔ 기록 폴더 짝을 이 PC 의 설정에 (브라우저로 만든 기록). --owner = 화면의 계정 —
                                              앱·실행기가 그 사람의 것으로 Claude 작업을 맡는다. 문서 목록이 달라 다른 폴더의 기록으로 보이면 멈춘다 — 맞다면 --force
   docbench status [--json]                   차례별 피드백 수 · Claude 작업(엔진·맡겨 둔 피드백)
-  docbench fb list [--waiting assistant|owner] [--status open|resolved|declined|all] [--doc ID] [--json]
+  docbench fb list [--waiting assistant|owner] [--status open|draft|resolved|declined|all] [--doc ID] [--json]
+                                             차례: assistant = 사람이 보낸 것(Claude 가 할 일) · owner = 볼 것(사람이 확인할 결과)
+                                             초안(draft)은 아직 보내지 않은 사람의 메모 — Claude 는 손대지 않는다
   docbench fb show <id> [--json]             피드백 + 지금 그 섹션 원문·판·인코딩
-  docbench fb add --doc ID [--section KEY] -m 글 [--severity high|medium|low] [--quote 문구] [--to assistant|owner]
+  docbench fb add --doc ID [--section KEY] -m 글 [--title 제목] [--severity high|medium|low] [--quote 문구] [--to assistant|owner] [--draft]
+                                             Claude 가 쓰면 제안·질문으로 "볼 것"에(먼저 말 걸기). 사람이 쓰면 바로 보냄(--draft 면 초안)
   docbench fb reply <id> -m 글 [--resolve | --ask | --decline]
+                                             Claude 의 회신은 사람이 확인할 때까지 "볼 것"에 남는다(--resolve = 다 했다는 답 —
+                                             닫는 것은 사람). 사람이 쓰면 --resolve·--decline 이 닫는다
   docbench fb propose <id> --file 제안.md [-m 이유]
   docbench doc list [--json]
   docbench doc sections <docId> [--json]
   docbench doc show <docId> [--section KEY] [--json]
   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
-  docbench inbox [--clear] [--json]          "넘기기" 요청함 보기·비우기
+  docbench inbox [--clear] [--json]          요청함(보낸 묶음 알림) 보기·비우기
   docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
                                              Claude 작업 실행기 — 단일 HTML 화면의 "Claude 작업"을 이 PC 에서 띄운다
                                              (--detach 창 없이 뒤에서, --startup on 로그인 때 자동으로, Windows)
@@ -93,9 +98,9 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
 `;
 
 /** 값을 받지 않는 플래그 — 뒤의 인자를 삼키지 않는다 */
-const BOOL = new Set(['json', 'stdin', 'resolve', 'ask', 'decline', 'claude', 'help', 'force', 'rename', 'convert-utf8', 'clear', 'detach', 'stop', 'no-claude', 'inside', 'open']);
-/** --status 는 둘로 쓴다: fb list --status <open|resolved|declined|all>, runner --status (값 없음) */
-const STATUS_VALUES = new Set(['open', 'resolved', 'declined', 'all']);
+const BOOL = new Set(['json', 'stdin', 'resolve', 'ask', 'decline', 'claude', 'help', 'force', 'rename', 'convert-utf8', 'clear', 'detach', 'stop', 'no-claude', 'inside', 'open', 'draft']);
+/** --status 는 둘로 쓴다: fb list --status <open|draft|resolved|declined|all>, runner --status (값 없음) */
+const STATUS_VALUES = new Set(['open', 'draft', 'resolved', 'declined', 'all']);
 
 function parse(argv) {
   /** @type {{ _: string[], [k: string]: any }} */
@@ -317,7 +322,7 @@ async function main() {
   if (cmd === 'status') {
     const rows = await ws.listFeedback();
     const by = {};
-    for (const f of rows) { const t = turn(f); (by[f.docId || '(지도)'] ||= { owner: 0, assistant: 0, resolved: 0, declined: 0 })[t]++; }
+    for (const f of rows) { const t = turn(f); (by[f.docId || '(지도)'] ||= { draft: 0, owner: 0, assistant: 0, resolved: 0, declined: 0 })[t]++; }
     const c = core.countTurns(rows);
     const inbox = (await fs.readdir(path.join(ws.dir, 'inbox')).catch(() => [])).filter((n) => n.endsWith('.json')).length;
     const warnings = [...(ws.config.warnings || []), ...(ws.dataWarnings || [])];
@@ -326,6 +331,8 @@ async function main() {
     // 맡겨 둔(대기·실행 중) Claude 작업 — 터미널에서 같은 피드백을 동시에 잡지 않게. 맡을 엔진이 꺼져 있으면 셈하지 않는다
     const runsDir = path.join(ws.dir, 'runs');
     const active = [];
+    /** 터미널 Claude 에게 맡긴 요청(D76) — 결과 파일을 기다린다. 기록 폴더에서 Claude Code 를 켜면 이것을 처리한다 */
+    const terminal = [];
     for (const n of (await fs.readdir(runsDir).catch(() => [])).filter((x) => x.endsWith('.req.json')).sort()) {
       const id = n.slice(0, -'.req.json'.length);
       if (!core.validRunId(id)) continue;
@@ -334,11 +341,16 @@ async function main() {
       const state = st?.state || 'queued';
       if (state !== 'queued' && state !== 'running') continue;
       const req = st || (await read(n));
+      if (req && core.isTerminalRunner(req.runner) && state === 'queued') {
+        if (!existsSync(path.join(runsDir, core.runFiles(id).result))) terminal.push({ id, kind: req.kind, feedbackIds: Array.isArray(req.feedbackIds) ? req.feedbackIds : [], prompt: path.join(runsDir, core.runFiles(id).prompt) });
+        continue;
+      }
       if (!req || !runners.some((r) => r.id === req.runner)) continue;
       active.push({ id, state, feedbackIds: Array.isArray(req.feedbackIds) ? req.feedbackIds : [] });
     }
-    out(a, { root, data: ws.dir, dataMode: ws.dataMode, docs: ws.docs.size, feedback: c, byDoc: by, inbox, runners, activeRuns: active, warnings, pcConfigFile: ws.pcConfigFile }, () =>
-      (`작업 폴더 ${root} · 문서 ${ws.docs.size}개${inbox ? ` · 넘기기 요청 ${inbox}건` : ''}\n기록: ${ws.dir}${ws.dataMode === 'inside' ? ' (문서 폴더 안)' : ''}\nAI 차례 ${c.assistant} · 사람 차례 ${c.owner} · 반영됨 ${c.resolved} · 보류 ${c.declined}\n` +
+    out(a, { root, data: ws.dir, dataMode: ws.dataMode, docs: ws.docs.size, feedback: c, byDoc: by, inbox, runners, activeRuns: active, terminalRequests: terminal, warnings, pcConfigFile: ws.pcConfigFile }, () =>
+      (`작업 폴더 ${root} · 문서 ${ws.docs.size}개${inbox ? ` · 요청함 ${inbox}건` : ''}\n기록: ${ws.dir}${ws.dataMode === 'inside' ? ' (문서 폴더 안)' : ''}\n보냄(Claude 가 할 일) ${c.assistant} · 볼 것 ${c.owner} · 초안 ${c.draft} · 확인함 ${c.resolved} · 보류 ${c.declined}\n` +
+      terminal.map((r) => `터미널 요청 ${r.id}: ${r.kind === 'review' ? '먼저 검토' : `피드백 ${r.feedbackIds.length}건`} — ${r.prompt}\n`).join('') +
       `Claude 작업: ${runners.length ? runners.map((r) => `${r.kind === 'server' ? '서버' : r.kind === 'app' ? '앱' : '실행기'} ${r.id.split(':')[1]}${r.claude?.ok ? '' : ' (쓸 수 없음)'}${r.busy ? ' — 작업 중' : ''}`).join(', ') : '켜진 앱·실행기·서버 없음'}\n` +
       active.map((r) => `  ${r.state === 'running' ? '실행 중' : '대기'} ${r.id}: 피드백 ${r.feedbackIds.join(', ')}\n`).join('') +
       `이 PC 의 설정: ${ws.pcConfigFile}${existsSync(ws.pcConfigFile) ? '' : ' (없음)'}\n` +
@@ -388,7 +400,11 @@ async function main() {
         `${f.id} [${turn(f)}] ${f.docId} › ${where(f)}`,
         f.title ? '제목: ' + f.title : '', '내용: ' + f.body,
         f.selector?.exact ? '인용: "' + f.selector.exact + '"' : '',
+        f.severity === 'high' ? '급함(★)' : '',
+        // 사람이 "이렇게 바꿔"로 직접 쓴 글 — 고른 문구면 그 문구, 섹션이면 본문
+        f.suggestion != null ? `이렇게 바꿔${f.selector?.exact ? '(인용 문구를)' : '(본문을)'}:\n----\n${f.suggestion.replace(/\n*$/, '')}\n----` : '',
         ...f.thread.map((m) => `  - ${m.author.kind === 'assistant' ? (m.author.name || 'AI') : (m.author.name || '사람')}: ${m.text}`),
+        f.result?.kind === 'edit' && f.result.reverted ? '사람이 지난 고침을 되돌리고 다시 보냈다 — 같은 고침을 되풀이하지 말고 지금 요청대로(모호하면 되묻기)' : '',
         doc ? `문서: ${path.join(root, doc.id)} (${encLabel(doc.encoding)}${doc.bom ? '+BOM' : ''}, ${doc.eol.toUpperCase()}, 판 ${doc.version}${doc.readOnly ? ', 읽기 전용: ' + doc.readOnlyReason : ''})` : '',
         located ? `섹션: ${located.key} (줄 ${located.startLine}-${located.endLine})\n고칠 때: docbench doc write ${doc.id} --section "${located.key}" --base ${doc.version} --file <새 섹션.md> --fb ${f.id}\n----\n${section}----` : f.target.kind === 'section' ? '섹션을 찾지 못했습니다 (제목이 바뀌었을 수 있음 — docbench doc sections 로 확인)' : '',
       ].filter(Boolean).join('\n'));
@@ -402,20 +418,34 @@ async function main() {
         const d = await ws.readDoc(docId);
         if (!core.findSection(d.md, String(a.section))) die('그 섹션이 없습니다: ' + a.section + ' (docbench doc sections ' + docId + ')');
       }
-      const f = await ws.createFeedback({ docId, target, body: a.m, title: a.title, severity: a.severity, kind: a.kind, waitingOn: a.to === 'assistant' || a.to === 'owner' ? a.to : undefined, selector: a.quote ? { exact: String(a.quote) } : undefined });
+      // Claude 가 먼저 올리는 제안·질문은 "볼 것"(사람이 확인) — 결과 표시(result)로 화면이 회차에 묶는다. 사람이 쓰면 보낸 것(또는 --draft 초안)
+      const ai = ws.actor.kind === 'assistant';
+      const f = await ws.createFeedback({
+        docId, target, body: a.m, title: a.title, severity: a.severity, kind: a.kind, selector: a.quote ? { exact: String(a.quote) } : undefined,
+        // --to 를 주면 그대로(사람 차례·Claude 차례를 직접 고름)
+        ...(a.draft && !ai ? { status: 'draft', waitingOn: 'owner' } : a.to === 'assistant' || a.to === 'owner' ? { waitingOn: a.to } : ai ? { waitingOn: 'owner', result: { kind: 'review', at: new Date().toISOString(), run: 'cli' } } : {}),
+      });
       out(a, f, `만듦: ${f.id} (${turn(f)})`);
       return;
     }
     if (sub === 'reply') {
       const f = await ws.getFeedback(rest[0] || die('id 가 필요합니다'));
       if (!a.m) die('-m 회신 글이 필요합니다');
-      const msg = { author: ws.actor, text: String(a.m), at: new Date().toISOString() };
+      const ai = ws.actor.kind === 'assistant';
+      if (ai && f.status === 'draft') die('초안은 아직 보내지 않은 사람의 메모입니다 — 사람이 보낸 뒤에 회신하세요.');
+      const now = new Date().toISOString();
+      const msg = { author: ws.actor, text: String(a.m), at: now };
       const patch = { thread: [...f.thread, msg] };
-      if (a.resolve) Object.assign(patch, { status: 'resolved' });
+      if (ai) {
+        // Claude 의 회신은 사람이 확인할 때까지 "볼 것"(D73) — 끝내는 것은 사람. 방금 doc write --fb 로 고친 결과(edit)는 그대로 둔다
+        const kind = a.decline ? 'decline' : a.ask ? 'ask' : 'answer';
+        const keepEdit = f.result?.kind === 'edit' && !f.result.reverted && f.status === 'open' && f.waitingOn === 'owner';
+        Object.assign(patch, { status: 'open', waitingOn: 'owner', result: keepEdit ? f.result : { kind, at: now, run: 'cli' } });
+      } else if (a.resolve) Object.assign(patch, { status: 'resolved' });
       else if (a.decline) Object.assign(patch, { status: 'declined' });
       else if (a.ask) Object.assign(patch, { status: 'open', waitingOn: 'owner' });
       const g = await ws.updateFeedback(f.id, patch, f.version).catch(conflict);
-      out(a, g, `회신: ${g.id} → ${turn(g)}`);
+      out(a, g, `회신: ${g.id} → ${turn(g) === 'owner' ? '볼 것' : turn(g)}`);
       return;
     }
     if (sub === 'propose') {
@@ -428,9 +458,10 @@ async function main() {
       const before = core.getSectionText(doc.md, key);
       if (before == null) die('섹션을 찾지 못했습니다');
       guardSection(before, after, a);
+      if (f.status === 'draft') die('초안은 아직 보내지 않은 사람의 메모입니다 — 사람이 보낸 뒤에 제안하세요.');
       const now = new Date().toISOString();
       const g = await ws.updateFeedback(f.id, {
-        waitingOn: 'owner',
+        status: f.status === 'open' ? 'open' : f.status, waitingOn: 'owner', result: { kind: 'propose', at: now, run: 'cli' },
         proposal: { path: key.split(core.KEY_SEP), before, after, rationale: a.m, author: ws.actor, at: now, state: 'pending' },
         thread: [...f.thread, { author: ws.actor, text: a.m || '수정 제안을 올렸습니다', at: now }],
       }, f.version).catch(conflict);
@@ -475,6 +506,17 @@ async function main() {
       const fbIds = a.fb ? String(a.fb).split(',').filter(Boolean) : undefined;
       try {
         const r = await ws.writeDoc(d.id, next, { baseVersion: a.base ? String(a.base) : d.version, summary: a.m, feedbackIds: fbIds, convertTo: a['convert-utf8'] ? 'utf-8' : undefined, by: ws.actor });
+        // Claude 가 보낸 피드백을 고쳤으면 그 결과(전·후 판)를 붙여 "볼 것"으로 — 화면이 차이·되돌리기를 보인다(D73)
+        if (!r.unchanged && fbIds && ws.actor.kind === 'assistant') {
+          for (const id of fbIds) {
+            const f = await ws.getFeedback(id).catch(() => null);
+            // 이 문서의 열린(보낸·볼 것) 피드백에만 — 다른 문서의 피드백에 이 문서의 판을 붙이지 않는다
+            if (!f || f.status !== 'open' || (f.docId && f.docId !== d.id)) continue;
+            const change = { docId: d.id, ...(a.section ? { section: String(a.section) } : {}), from: d.version, to: r.version };
+            await ws.updateFeedback(f.id, { waitingOn: 'owner', result: { kind: 'edit', at: new Date().toISOString(), run: 'cli', change } }, f.version)
+              .catch((e) => process.stderr.write(`docbench: 문서는 저장했지만 피드백 ${f.id} 에 결과를 붙이지 못했습니다 (${e.code === 'CONFLICT' ? '그 사이 바뀜' : e.message}) — fb reply 로 알려 주세요\n`));
+          }
+        }
         out(a, r, r.unchanged ? '바뀐 것 없음' : `저장: ${d.id} 판 ${r.version}${d.encoding !== 'utf-8' && !a['convert-utf8'] ? ` (${encLabel(d.encoding)} 유지)` : ''}`);
       } catch (e) {
         if (e.code === 'CONFLICT') die(`그 사이 문서가 바뀌었습니다 (지금 판 ${e.current.version}). 다시 읽고 고치세요.`, 3);

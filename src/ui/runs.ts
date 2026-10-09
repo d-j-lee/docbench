@@ -1,11 +1,11 @@
 /**
- * Claude 작업 창 — 화면 아래에 붙는다. 모델·노력·방식을 고르고 넘기면, 서버(또는 이 PC 의 실행기)가 Claude 를 백그라운드로 띄운다.
- * 진행 로그가 실시간으로 보이고, 끝나면 무엇을 고치고·제안하고·물었는지 줄마다 문서·피드백으로 이어진다.
- * 실행기가 없으면(단일 HTML) Claude Code 에 붙여 넣을 설치 문구를 보여 준다.
+ * Claude 작업 창 — 보낸 묶음·선제안의 진행과 로그. 보내기는 검토 패널에서 한다(D73).
+ * 이 PC 의 앱(자동)이 맡으면 진행 로그가 실시간으로 보이고, 터미널 Claude(설치 없음, D76)에게 맡기면 칠 한 줄과
+ * 결과를 기다리는 상태가 보인다. 끝나면 결과는 검토 패널의 "볼 것"으로 간다.
  */
-import type { Feedback, RunEffort, RunLogLine, RunMode, RunsAvailability, RunStatus } from '../types';
-import { RUN_EFFORTS, RUN_MODELS, runnerSetupPrompt, terminalHandoffPrompt } from '../core/runs';
-import { turnOf } from '../core/feedback';
+import type { RunLogLine, RunsAvailability, RunStartInput, RunStatus, TerminalHandoff } from '../types';
+import { runnerSetupPrompt, isTerminalRunner } from '../core/runs';
+import { terminalCommands } from '../core/room';
 import { h, icon } from './dom';
 import type { App } from './app';
 
@@ -22,16 +22,18 @@ export class RunDock {
   private app: App;
   private av: RunsAvailability | null = null;
   private runs: RunStatus[] = [];
+  /** 최근 작업(최근 것 먼저) — 볼 것의 회차 머리·읽기 정리가 쓴다 */
+  get recent(): RunStatus[] { return this.runs; }
   private sel: string | null = null;
   private logs = new Map<string, { lines: RunLogLine[]; next: number }>();
-  /** 맡기려다 연결이 없어 기다리는 일 — 연결되면 이어서 (넘기기 여러 건 또는 제안 한 건) */
-  private pending: { kind: 'handoff' | 'propose'; ids: string[] } | null = null;
+  /** 터미널 Claude 에게 맡긴 요청의 칠 한 줄 (이 창이 연 동안) */
+  private handoffs = new Map<string, TerminalHandoff>();
   private follow = true;
   private known = new Map<string, string>();
   private tickT: ReturnType<typeof setInterval> | null = null;
   private lastStatus = 0;
   private busy = false;
-  private els: { log?: HTMLElement; logHead?: HTMLElement; list?: HTMLElement; queue?: HTMLElement } = {};
+  private els: { log?: HTMLElement; logHead?: HTMLElement; list?: HTMLElement } = {};
   private destroyed = false;
 
   constructor(app: App) {
@@ -80,9 +82,8 @@ export class RunDock {
     try { this.av = await this.ad.status(); } catch (e) { this.av = { available: false, reason: 'disabled', message: (e as Error).message }; }
     const now = JSON.stringify([this.av?.available, this.av?.reason, this.av?.runner?.id, this.av?.runner?.claude?.version, this.av?.others?.length]);
     if (prev !== now) {
-      this.render(); this.app.renderBar(); this.app.renderRail();
-      // 기다리던 일이 있으면 연결된 순간 알린다(바로 시작하지는 않는다 — 사람이 모델·노력을 보고 누른다)
-      if (was === false && this.av?.available && this.pending) this.app.toast(this.t('run.connected'), { sticky: true });
+      this.render(); this.app.renderBar(); this.app.renderRail(); this.app.panel?.render();
+      if (was === false && this.av?.available) this.app.toast(this.t('run.connected'));
     }
   }
 
@@ -92,7 +93,8 @@ export class RunDock {
     list = list.filter((r) => r && typeof r.id === 'string' && Array.isArray(r.feedbackIds));
     // 맡은 실행기가 꺼진 "대기·실행 중" 작업은 멈춘 것으로 보인다 — 카드를 붙잡지 않게 (실행기가 다시 켜지면 원래대로)
     const alive = this.aliveRunners();
-    if (alive) list = list.map((r) => (ACTIVE.has(r.state) && !alive.has(r.runner) ? { ...r, state: 'failed', error: this.t('run.staleErr'), stale: true } as RunStatus : r));
+    // 터미널 Claude 에게 맡긴 것은 실행기가 없다 — 결과 파일을 기다린다
+    if (alive) list = list.map((r) => (ACTIVE.has(r.state) && !isTerminalRunner(r.runner) && !alive.has(r.runner) ? { ...r, state: 'failed', error: this.t('run.staleErr'), stale: true } as RunStatus : r));
     const changedActive = JSON.stringify(this.runs.filter((r) => ACTIVE.has(r.state)).map((r) => r.id + r.state)) !== JSON.stringify(list.filter((r) => ACTIVE.has(r.state)).map((r) => r.id + r.state));
     for (const r of list) {
       const was = this.known.get(r.id);
@@ -102,7 +104,6 @@ export class RunDock {
     this.runs = list;
     if (!this.sel || !list.some((r) => r.id === this.sel)) this.sel = (list.find((r) => ACTIVE.has(r.state)) || list[0])?.id || null;
     if (this.sel) await this.pullLog(this.sel);
-    this.renderQueue();
     this.renderList();
     this.renderLog();
     if (changedActive || first) { this.app.renderBar(); this.app.panel?.render(); this.app.renderRail(); this.app.doc?.renderBusy(); }
@@ -136,11 +137,27 @@ export class RunDock {
 
   private finished(r: RunStatus): void {
     const s = r.summary;
+    // 터미널 요청이 다른 길로 이미 처리되어 닫힌 것 — 알릴 결과가 없다
+    if (r.state === 'done' && isTerminalRunner(r.runner) && s && !s.edited && !s.proposed && !s.answered && !s.asked && !s.declined && !s.failed && !(s.created || 0)) { this.app.panel?.render(); return; }
     const parts = s ? (['edited', 'proposed', 'answered', 'asked', 'declined', 'skipped', 'failed'] as const).filter((k) => s[k]).map((k) => this.t('run.sum.' + k, { n: s[k] })) : [];
-    const msg = r.state === 'done' ? this.t('run.toast.done', { what: parts.join(' · ') || this.t('run.sum.none') }) : r.state === 'canceled' ? this.t('run.toast.canceled') : this.t('run.toast.failed', { msg: r.error || '' });
-    this.app.toast(msg, { action: this.t('run.open'), onAction: () => { this.sel = r.id; this.setOpen(true); } });
+    const msg = r.state === 'done' ? this.t(r.kind === 'review' ? 'run.toast.reviewed' : 'run.toast.done', { what: parts.join(' · ') || this.t('run.sum.none') }) : r.state === 'canceled' ? this.t('run.toast.canceled') : this.t('run.toast.failed', { msg: r.error || '' });
+    // 읽기 정리는 문서를 바꾸지 않는다 — 그 문서를 보고 있으면 바로 적용하고 되돌리기를 준다(묻는 단계를 하나 줄인다).
+    // 다른 곳을 보고 있으면 끌고 가지 않는다 — 알리고, 볼 것에 남긴다
+    if (r.state === 'done' && r.kind === 'review' && r.goal === 'view' && r.view?.length) {
+      if (!this.app.isMine(r)) { this.app.panel?.render(); return; }
+      const view = r.view;
+      if (view.some((p) => p.docId === this.app.view)) void this.app.applyReadingPlan(view, { navigate: false, run: r.id });
+      else this.app.toast(this.t('view.arrived', { n: view.length }), { sticky: true, action: this.t('round.view.apply'), onAction: () => void this.app.applyReadingPlan(view, { run: r.id }) });
+      this.app.panel?.render();
+      return;
+    }
+    if (r.state === 'done') this.app.toast(msg, { sticky: true, action: this.t('run.toast.see'), onAction: () => this.app.panel.open(undefined, 'review') });
+    else this.app.toast(msg, { action: this.t('run.open'), onAction: () => { this.sel = r.id; this.setOpen(true); } });
+    this.app.panel?.render();
   }
 
+  /** 이 피드백을 마지막으로 맡았던 작업(끝난 것 포함, 최근 것) */
+  lastFor(fbId: string): RunStatus | undefined { return this.runs.find((r) => r.feedbackIds.includes(fbId)); }
   /** 이 피드백을 지금 다루는(줄 서 있거나 도는) 작업 */
   activeFor(fbId: string): RunStatus | undefined { return this.runs.find((r) => ACTIVE.has(r.state) && r.feedbackIds.includes(fbId)); }
   /** 지금 Claude 가 손대는 문서 */
@@ -153,7 +170,11 @@ export class RunDock {
     }
     return out;
   }
-  activeRun(): RunStatus | undefined { return this.runs.find((r) => r.state === 'running') || this.runs.find((r) => r.state === 'queued'); }
+  activeRun(): RunStatus | undefined { return this.runs.find((r) => r.state === 'running') || this.runs.find((r) => r.state === 'queued' && !this.isTerminal(r)) || this.runs.find((r) => r.state === 'queued'); }
+  /** 최근 작업 (회차 머리에 지시·총평·읽기 정리를 보일 때) */
+  runFor(id: string): RunStatus | undefined { return id ? this.runs.find((r) => r.id === id) : undefined; }
+  /** 터미널 Claude 에게 맡겨 결과를 기다리는 것 */
+  isTerminal(r: RunStatus): boolean { return isTerminalRunner(r.runner) && r.state === 'queued'; }
 
   // ------------------------------------------------------------ 동작
   setOpen(v: boolean): void {
@@ -166,40 +187,34 @@ export class RunDock {
   }
   toggle(): void { this.setOpen(!this.isOpen); }
 
-  /**
-   * 넘기기 준비 — 창을 열고 넘길 목록·설정을 보여 준다(바로 시작하지 않는다). 연결이 없으면 그 자리에서 연결 안내.
-   * add = 카드에서 하나씩 넘길 때: 열려 있는 넘기기 목록에 보탠다(여러 개를 모아 한 번에 맡길 수 있게)
-   */
-  handoff(ids: string[], add = false): void {
-    // 앞서 담아 둔 것과 합친다 — 그 사이 닫힌 것은 뺀다
-    const prev = add && this.pending?.kind === 'handoff' ? this.pending.ids.filter((id) => this.app.fb.find((f) => f.id === id)?.status === 'open') : [];
-    this.pending = { kind: 'handoff', ids: [...new Set([...prev, ...ids])] };
-    this.setOpen(true);
-    void this.refreshStatus();
+  /** 이 PC 의 앱(또는 서버·연습용 흉내)으로 바로 시작한다 */
+  async startRun(input: RunStartInput): Promise<RunStatus> {
+    const st = await this.ad.start(input);
+    this.track(st);
+    return st;
   }
 
-  /** 제안 받기 — 연결돼 있으면 바로, 아니면 연결 안내를 열고 기다린다 */
-  async propose(f: Feedback): Promise<void> {
-    if (this.av && !this.av.available) { this.pending = { kind: 'propose', ids: [f.id] }; this.setOpen(true); void this.refreshStatus(); return; }
-    await this.launch('propose', [f.id]);
+  /** 새 작업을 목록에 올리고 지켜본다 */
+  track(st: RunStatus & { terminal?: TerminalHandoff }): void {
+    if (st.terminal) this.handoffs.set(st.id, st.terminal);
+    this.sel = st.id;
+    this.runs = [st, ...this.runs.filter((r) => r.id !== st.id)];
+    this.known.set(st.id, st.state);
+    this.render();
+    this.app.renderBar(); this.app.panel?.render(); this.app.renderRail(); this.app.doc?.renderBusy();
   }
 
-  private async launch(kind: 'handoff' | 'propose', ids: string[]): Promise<void> {
-    const s = this.settings();
-    try {
-      const st = await this.ad.start({ kind, feedbackIds: ids, model: s.model || undefined, effort: (s.effort || undefined) as RunEffort | undefined, mode: kind === 'propose' ? 'propose' : s.mode || 'auto' });
-      this.pending = null;
-      this.sel = st.id;
-      this.runs = [st, ...this.runs.filter((r) => r.id !== st.id)];
-      this.known.set(st.id, st.state);
-      this.app.emit({ type: 'assistant:requested', feedbackIds: ids });
-      if (!this.isOpen) this.setOpen(true); else this.render();
-      this.app.renderBar(); this.app.panel?.render(); this.app.renderRail();
-    } catch (e) {
-      this.app.toast(this.t('run.startFail', { msg: (e as Error).message }));
-      await this.refreshStatus();
-      this.setOpen(true);
-    }
+  /** 터미널에서 칠 한 줄 — 맡긴 직후, 또는 "보냄"에서 다시 볼 때 */
+  showTerminal(r: RunStatus, h0?: TerminalHandoff): void {
+    const s = this.app.state.runs || {};
+    const setup = this.ad.setup;
+    // 어댑터가 붙여 준 안내(기록 자리를 아는 쪽)를 먼저 — 문서 폴더 이름으로 짐작하지 않는다(거기서 켜면 그 폴더의 지시·훅이 섞인다)
+    const ho = h0 || r.terminal || this.handoffs.get(r.id) || {
+      roomName: setup?.dataHome && setup.dataName ? setup.dataName : this.t('term.room.unknown'), homeName: setup?.dataHome,
+      ...terminalCommands({ id: r.id, model: r.model, effort: r.effort, locale: this.app.opts.locale === 'en' ? 'en' : 'ko' }),
+    };
+    // 지난 대화 이어서: 만든 쪽이 준 -c 줄. 옛 서버가 준 안내(resume 없음)는 그대로 — 손으로 고친 명령을 만들지 않는다
+    this.app.dialogs.terminal({ ...ho, command: s.resume && ho.resume ? ho.resume : ho.command });
   }
 
   async cancel(id: string): Promise<void> {
@@ -213,29 +228,16 @@ export class RunDock {
     this.el.hidden = !open;
     this.app.root.classList.toggle('dock-open', open);
     if (!open) return;
-    const s = this.settings();
     const av = this.av;
-    const sel = (label: string, value: string, opts: [string, string][], on: (v: string) => void, title?: string) =>
-      h('label', { class: 'db-dock-opt', title: title || '' }, h('span', { text: label }),
-        (() => { const e = h('select', { onchange: (ev: Event) => on((ev.target as HTMLSelectElement).value) }) as HTMLSelectElement; for (const [v, l] of opts) e.append(h('option', { value: v, text: l, selected: v === value })); return e; })());
-    const models: [string, string][] = [['', t('run.model.default')], ...((av?.runner?.models?.length ? av.runner.models : RUN_MODELS).map((m) => [m, m[0].toUpperCase() + m.slice(1)] as [string, string]))];
-    if (s.model && !models.some(([v]) => v === s.model)) models.push([s.model, s.model]);
-    const efforts: [string, string][] = [['', t('run.effort.default')], ...((av?.runner?.efforts?.length ? av.runner.efforts : RUN_EFFORTS).map((e) => [e, t('run.effort.' + e)] as [string, string]))];
-    const modes: [string, string][] = [['auto', t('run.mode.auto')], ['propose', t('run.mode.propose')]];
-    const save = () => this.app.saveState();
     const state = !av ? ['', t('run.state.checking')] : av.available ? ['ok', av.runner?.kind === 'demo' ? t('run.state.demo') : av.runner?.kind === 'server' ? t('run.state.server', { v: av.runner?.claude?.version || '' }) : av.runner?.kind === 'app' ? t('run.state.app', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' }) : t('run.state.runner', { v: av.runner?.claude?.version || '', host: av.runner?.host || '' })] : ['bad', t('run.state.' + (av.reason || 'disabled'))];
     const head = h('header', { class: 'db-dock-h' },
       h('div', { class: 'db-dock-title' }, h('span', { class: 'db-dock-ic', html: icon('spark') }), h('b', { text: t('run.title') }),
         h('span', { class: 'db-dock-state ' + state[0], title: av?.message || '' }, h('i'), state[1])),
-      h('div', { class: 'db-dock-opts' },
-        sel(t('run.model'), s.model || '', models, (v) => { s.model = v; save(); }, t('run.model.hint')),
-        sel(t('run.effort'), s.effort || '', efforts, (v) => { s.effort = v as RunEffort | ''; save(); }, t('run.effort.hint')),
-        sel(t('run.mode'), s.mode || 'auto', modes, (v) => { s.mode = v as RunMode; save(); this.render(); }, t('run.mode.hint'))),
+      h('span', { class: 'db-grow' }),
       h('button', { class: 'db-btn ghost sm db-dock-x', type: 'button', title: t('close'), 'aria-label': t('close'), onclick: () => this.setOpen(false), html: icon('close') }));
     const body = h('div', { class: 'db-dock-b' });
-    if (this.pending) body.append(this.composer(this.pending));
-    const queue = h('div', { class: 'db-dock-q' });
-    body.append(queue);
+    const term = this.runs.find((r) => this.isTerminal(r));
+    if (term) body.append(h('div', { class: 'db-dock-card hint' }, h('span', { class: 'db-dock-ic', html: icon('clock') }), h('span', { text: t('run.terminal.waiting') }), h('button', { class: 'db-btn sm', type: 'button', onclick: () => this.showTerminal(term) }, t('sent.terminal.show'))));
     if (av && !av.available) body.append(this.setupCard(av));
     const stale = this.staleRunner(av);
     if (stale) body.append(stale);
@@ -244,41 +246,11 @@ export class RunDock {
     const logHead = h('div', { class: 'db-runlog-h' });
     const log = h('div', { class: 'db-runlog', role: 'log', 'aria-live': 'polite' });
     log.addEventListener('scroll', () => { this.follow = log.scrollTop + log.clientHeight >= log.scrollHeight - 24; });
-    this.els = { list, log, logHead, queue };
+    this.els = { list, log, logHead };
     body.append(h('div', { class: 'db-dock-cols' }, list, h('div', { class: 'db-runlog-wrap' }, logHead, log)));
     this.el.replaceChildren(head, body);
-    this.renderQueue();
     this.renderList();
     this.renderLog(true);
-  }
-
-  private composer(p: { kind: 'handoff' | 'propose'; ids: string[] }): HTMLElement {
-    const t = this.t;
-    const rows = p.ids.map((id) => this.app.fb.find((f) => f.id === id)).filter((f): f is Feedback => !!f);
-    const byDoc = new Map<string, number>();
-    for (const f of rows) byDoc.set(f.docId || '#map', (byDoc.get(f.docId || '#map') || 0) + 1);
-    const s = this.settings();
-    const can = !!this.av?.available;
-    const propose = p.kind === 'propose';
-    return h('div', { class: 'db-dock-card compose' + (can ? '' : ' waiting') },
-      h('div', { class: 'db-dock-card-h' }, h('b', { text: propose ? t('run.compose.proposeTitle') : t('run.compose.title', { n: rows.length }) }),
-        h('span', { class: 'db-hint', text: [...byDoc].map(([d, n]) => `${this.app.docTitle(d)} ${n}`).join(' · ') })),
-      h('p', { class: 'db-hint', text: (propose || s.mode === 'propose' ? t('run.compose.propose') : t('run.compose.auto')) + ' ' + t(this.av?.runner?.kind === 'demo' ? 'run.compose.demo' : 'run.compose.safe') }),
-      can ? null : h('p', { class: 'db-hint wait', text: t('run.compose.wait') }),
-      h('div', { class: 'db-row' },
-        h('button', { class: 'db-btn primary', type: 'button', disabled: !can || !rows.length, onclick: () => void this.launch(p.kind, rows.map((f) => f.id)) }, t(propose ? 'run.compose.proposeStart' : 'run.compose.start')),
-        h('button', { class: 'db-btn ghost', type: 'button', onclick: () => { this.pending = null; this.render(); } }, t('compose.cancel')),
-        !can && this.app.ad.notifier ? h('button', { class: 'db-btn sm', type: 'button', onclick: () => void this.terminalFallback(rows) }, t('run.terminal.btn')) : null));
-  }
-
-  /** 실행기 없이: 요청함에 남기고 터미널에 붙여 넣을 한 줄을 복사 */
-  private async terminalFallback(rows: Feedback[]): Promise<void> {
-    const t = this.t;
-    const name = this.ad.setup?.folderName || this.app.manifest.project.name;
-    try { await this.app.ad.notifier?.send({ count: rows.length, docs: [...new Set(rows.map((f) => this.app.docTitle(f.docId)))], feedbackIds: rows.map((f) => f.id) }); } catch { /* 요청함은 선택 */ }
-    const line = terminalHandoffPrompt(name, this.ad.setup);
-    const ok = await this.app.copy(line);
-    this.app.toast(ok ? t('run.terminal.copied') : t('run.terminal.manual', { cmd: line }), { sticky: true });
   }
 
   /** 실행기 판이 이 화면과 다르면 한 줄 — 설치 문구를 다시 붙여 넣으면 같은 판으로 바뀐다 */
@@ -294,7 +266,7 @@ export class RunDock {
   }
 
   /**
-   * 연결 안내 — 필요한 순간(넘기기·제안을 눌렀을 때) 이 창에 뜬다. 단계: (기록 폴더) → Claude Code → 문구 붙여 넣기 → 연결을 기다림.
+   * 연결 안내 — 엔진이 없을 때 이 창에 뜬다(터미널 한 줄로도 된다고 함께). 단계: (기록 폴더) → Claude Code → 문구 붙여 넣기 → 연결을 기다림.
    * 구독 로그인 그대로, API 키 없이. 연결되면 이 카드는 사라지고 기다리던 일을 이어서 맡긴다.
    */
   private setupCard(av: RunsAvailability): HTMLElement {
@@ -312,6 +284,10 @@ export class RunDock {
         try { await this.ad.prepare?.(); } catch (e) { this.app.toast((e as Error).message); }
         await this.refreshStatus(); this.render();
       } }, t('run.setup.pickData'))), h('p', { class: 'db-hint', text: t('run.setup.pickData.why') }));
+    } else if (reason === 'old-runner' && setup) {
+      // 예전 판 앱: 같은 설치 문구가 새 판으로 바꾼다(바꿔 쓰기)
+      const prompt = runnerSetupPrompt(setup);
+      box.append(h('div', { class: 'db-row' }, copyBtn(prompt)));
     } else if (reason === 'no-runner' && setup) {
       const prompt = runnerSetupPrompt(setup);
       const ta = h('textarea', { class: 'db-dock-prompt', readonly: true, rows: '5', 'aria-label': t('run.setup.prompt') }) as HTMLTextAreaElement;
@@ -335,10 +311,8 @@ export class RunDock {
       const cmd = reason === 'old-claude' ? 'claude update' : reason === 'not-logged-in' ? 'claude auth login' : 'claude --version';
       box.append(h('div', { class: 'db-row' }, h('code', { class: 'db-cmd', text: cmd }), copyBtn(cmd, false)));
     }
-    if (this.app.ad.notifier && (reason === 'no-runner' || reason === 'no-claude' || reason === 'old-claude' || reason === 'not-logged-in')) {
-      const waiting = this.app.scopedFb().filter((f) => turnOf(f) === 'assistant');
-      if (waiting.length) box.append(h('p', { class: 'db-hint' }, t('run.terminal.alt') + ' ', h('button', { class: 'db-btn sm', type: 'button', onclick: () => void this.terminalFallback(waiting) }, t('run.terminal.btn'))));
-    }
+    // 앱 없이도 된다 — 보내기에서 "터미널"을 고르면 설치 없이 지금 쓰는 Claude Code 로(D76)
+    if (this.ad.startTerminal && reason !== 'read-only' && reason !== 'disabled') box.append(h('p', { class: 'db-hint' }, t('run.setup.orTerminal')));
     return box;
   }
 
@@ -347,18 +321,6 @@ export class RunDock {
     const e = h('select', { onchange: (ev: Event) => this.useRunner((ev.target as HTMLSelectElement).value) }) as HTMLSelectElement;
     for (const r of all) e.append(h('option', { value: r.id, selected: r.id === av.runner!.id, text: `${r.user}@${r.host} · ${r.kind === 'server' ? 'serve' : r.kind === 'app' ? this.t('run.kind.app') : 'runner'}` }));
     return h('div', { class: 'db-dock-card hint' }, h('span', { text: this.t('run.choose') }), e);
-  }
-
-  /**
-   * 창만 열었을 때도 할 일이 보이게 — Claude 차례로 기다리는 피드백(돌고 있는 것 빼고)을 알리고 넘기기로 잇는다.
-   * 휴대폰 너비의 위 띠에는 넘기기 단추가 없다(D72). 피드백이 바뀌면 다시 그린다.
-   */
-  renderQueue(): void {
-    const q = this.els.queue;
-    if (!q || !this.isOpen) return;
-    const n = this.pending || !this.av?.available ? 0 : this.app.scopedFb().filter((f) => turnOf(f) === 'assistant' && !this.activeFor(f.id)).length;
-    q.replaceChildren(...(n ? [h('div', { class: 'db-dock-card queue' }, h('span', { text: this.t('run.queue', { n }) }),
-      h('button', { class: 'db-btn sm primary', type: 'button', onclick: () => void this.app.handToAssistant() }, this.t('run.queue.go')))] : []));
   }
 
   private renderList(): void {
@@ -374,7 +336,7 @@ export class RunDock {
         h('button', { type: 'button', class: 'db-run' + (r.id === this.sel ? ' sel' : ''), 'data-state': r.state, onclick: () => { this.sel = r.id; this.follow = true; void this.pullLog(r.id).then(() => { this.renderList(); this.renderLog(true); }); } },
           h('span', { class: 'db-run-ic ' + r.state, html: r.state === 'running' ? '' : r.state === 'done' ? icon('check') : r.state === 'queued' ? icon('clock') : r.state === 'canceled' ? icon('stop') : icon('warn') }),
           h('span', { class: 'db-run-t' },
-            h('b', { text: t(r.kind === 'propose' ? 'run.kind.propose' : 'run.kind.handoff', { n: r.feedbackIds.length }) }),
+            h('b', { text: r.kind === 'review' ? t(r.goal === 'view' ? 'run.kind.view' : 'run.kind.review', { n: r.docIds?.length || 1 }) : t(r.kind === 'propose' ? 'run.kind.propose' : 'run.kind.handoff', { n: r.feedbackIds.length }) }),
             h('small', { text: [clock(r.startedAt || r.at), r.model, r.effort && t('run.effort.' + r.effort), r.mode === 'propose' && r.kind !== 'propose' ? t('run.mode.propose') : ''].filter(Boolean).join(' · ') }),
             chips.length ? h('span', { class: 'db-chips-s' }, chips) : null))));
     }
@@ -428,7 +390,7 @@ export class RunDock {
   private lineEl(l: RunLogLine): HTMLElement {
     const t = this.t;
     const v = (l.v || {}) as Record<string, string | number | undefined>;
-    const cls: Record<string, string> = { text: 'say', denied: 'warn', toolError: 'warn', 'apply.edit': 'good', 'apply.propose': 'accent', 'apply.ask': 'owner', 'apply.answer': 'good', 'apply.decline': 'muted', skip: 'muted', safe: 'muted', applyFail: 'bad', error: 'bad', timeout: 'bad', canceled: 'muted', done: 'good', warn: 'warn', summary: 'say' };
+    const cls: Record<string, string> = { text: 'say', denied: 'warn', toolError: 'warn', 'apply.edit': 'good', 'apply.propose': 'accent', 'apply.ask': 'owner', 'apply.answer': 'good', 'apply.decline': 'muted', skip: 'muted', safe: 'muted', applyFail: 'bad', error: 'bad', timeout: 'bad', canceled: 'muted', done: 'good', warn: 'warn', summary: 'say', 'review.suggest': 'accent', 'review.question': 'owner', 'review.view': 'good', terminal: 'muted' };
     const vv: Record<string, unknown> = { ...v };
     if (v.doc) vv.doc = this.app.docTitle(String(v.doc));
     if (v.section) vv.section = String(v.section).split(' › ').slice(-1)[0];
@@ -437,6 +399,7 @@ export class RunDock {
     if (v.reason) vv.reason = t('run.reason.' + v.reason) === 'run.reason.' + v.reason ? v.reason : t('run.reason.' + v.reason);
     if (l.k === 'start') {
       vv.kind = t('run.kindw.' + (v.kind || 'handoff'));
+      if (v.kind === 'review') vv.kind += ' · ' + t('run.sum.docs', { n: v.n || 0 });
       vv.model = v.model || t('run.model.default');
       vv.effort = v.effort ? t('run.effort.' + v.effort) : t('run.effort.default');
       vv.mode = t('run.mode.' + (v.mode || 'auto'));

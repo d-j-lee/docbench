@@ -10,3 +10,5 @@ export * from './textcodec';
 export * from './workspace';
 export * from './runs';
 export * from './records';
+export * from './apply';
+export * from './room';

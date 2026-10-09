@@ -3,12 +3,13 @@
 사람과 AI가 같은 문서를 **읽고 · 피드백하고 · 고치고 · 기록**하는 작업대.
 
 - **보기**: 제목 깊이별 접기(상태 기억), 근거 표기 칩(`[실측]` `[추정]` …), 빈칸 형광, 이름표 거르기, 찾기, 개요. 왼쪽은 탐색기 — 펼친 폴더만 읽어 드라이브를 통째로 열어도 바로 뜨고, 자주 쓰는 문서·폴더는 "작업 중"에 고정한다
-- **피드백**: 섹션·접힌 덩어리·고른 문구에 단다. 카드마다 "누구 차례"(사람 / AI)가 있고 대화가 이어진다. 본문의 표시에 마우스를 올리면 그 피드백이, 카드에 올리면 본문의 그 자리가 보인다
-- **Claude 작업**: Claude 차례 피드백을 넘기면 Claude 가 **백그라운드에서**(모델·노력 선택) 처리한다 — 분명한 요청은 바로 고치고, 큰 변경은 제안, 모르면 질문. 진행 로그가 화면 아래 창에 실시간으로 보인다
+- **검토 회차**: 읽으면서 섹션·문구 옆 작은 칸에 적어 **초안**으로 모으고(요청 문구가 고민되면 "이렇게 바꿔"로 바꿀 글을 직접, ★ 급함), 다 읽은 뒤 고른 것을 **한 번에 보낸다** — 묶음에 붙일 말 한 줄과 함께. Claude 가 한 일은 **볼 것**에 회차별로 모여 확인·되돌리기·다시 요청을 고른다. 피드백 하나마다 대화가 오가지 않는다
+- **양방향**: **Claude 검토**로 내가 읽기 전에 Claude 가 먼저 제안·질문을 올리거나, 긴 문서의 **읽기 정리**(접을 곳·먼저 볼 곳)를 준다
+- **Claude 작업**: 이 PC 의 DocBench 앱이 **백그라운드에서**(모델·노력 선택) 처리하고 진행 로그가 아래 창에 보인다. 앱 없이 **터미널 한 줄**로 지금 쓰는 Claude Code 에 맡길 수도 있다(설치 없음)
 - **편집**: 섹션 단위 편집 → 미리보기 → 차이 → 저장. 그 사이 바뀌었으면 다른 섹션은 자동 재적용, 같은 섹션은 내 글을 지키고 차이를 보여 준다
 - **기록**: 마지막으로 본 뒤 바뀐 글을 문서 위에 바로 표시(더한 글 초록 · 지운 글 취소선 · 누가·언제), 섹션별 변경 이력, 커밋본(git HEAD) 대비 차이, 폴더 지도. 에디터·터미널 등 도구 밖에서 고쳐도 몇 초 안에(창으로 돌아오면 바로) 따라온다
 
-열자마자 쓴다. 처음 열면 이름도 폴더도 묻지 않고 연습용 문서가 든 "시작하기" 작업대가 뜬다 — 여기서는 흉내 Claude 가 답해 넘기기 한 바퀴(되묻기 → 답글 → 고침)를 미리 해 볼 수 있다(휴대폰에서도). 계정은 저절로 생기고(표시 이름은 오른쪽 위 "나"에서), 기록 자리는 처음 저장할 때, Claude 연결은 처음 맡길 때 그 자리에서 묻는다. 내 문서와 진짜 Claude 작업은 PC 의 엣지·크롬에서(휴대폰 브라우저는 폴더에 쓰지 못한다).
+열자마자 쓴다. 처음 열면 이름도 폴더도 묻지 않고 연습용 문서가 든 "시작하기" 작업대가 뜬다 — 여기서는 흉내 Claude 가 답해 한 회차(초안 모으기 → 보내기 → 볼 것에서 되돌리기 → Claude 검토)를 미리 해 볼 수 있다(휴대폰에서도). 계정은 저절로 생기고(표시 이름은 오른쪽 위 "나"에서), 기록 자리는 처음 저장할 때, Claude 연결은 처음 맡길 때 그 자리에서 묻는다. 내 문서와 진짜 Claude 작업은 PC 의 엣지·크롬에서(휴대폰 브라우저는 폴더에 쓰지 못한다).
 
 문서 원본은 언제나 **문서 폴더의 `.md` 파일**이다. 피드백·이력은 사람도 읽을 수 있는 JSON 으로 **기록 폴더**에 남는다 — 기본은 문서 폴더 밖의 "기록 보관함"이라 문서 폴더에는 문서만 있다(같은 폴더에서 일하는 다른 프로그램·다른 Claude 세션이 헷갈리지 않게). 팀이 git 으로 함께 쓰려면 문서 폴더 안 `.docbench/` 에 둘 수도 있다.
 
@@ -20,7 +21,7 @@
 |---|---|---|
 | **파일 하나 (서버 없음)** | 설치 없이 바로 | [`release/docbench.html`](release/docbench.html) 을 엣지·크롬으로 연다 → 왼쪽 위 메뉴의 **폴더 열기**. 보기만 할 때는 아무것도 만들지 않고, 처음 저장할 때 기록 보관함(예: HTML 옆 빈 폴더)을 한 번 고른다 |
 | **DocBench 앱** | 이 PC 의 여러 폴더를 한곳에서, Claude 작업까지 | `docbench app --open` — 이 PC 에 하나 켜 두는 작은 서비스. 고르기 창 없이 폴더를 둘러보고 더한다(드라이브도 바로). 로그인 때 켜기(`--startup on`) |
-| **대시보드 탭** | 사내 대시보드에 VS Code 확장처럼 (백엔드 언어 무관) | 앱의 `host.js` 를 싣고 `DocBenchHost.mount(탭, { root, key })` — 테마·할 일 배지·"Claude 에게 넘기기"를 대시보드 터미널로 → [docs/PORTING.md §2](docs/PORTING.md) · [examples/dashboard-tab](examples/dashboard-tab) · Claude Code 스킬 `docbench-setup` 이 대신 붙인다 |
+| **대시보드 탭** | 사내 대시보드에 VS Code 확장처럼 (백엔드 언어 무관) | 앱의 `host.js` 를 싣고 `DocBenchHost.mount(탭, { root, key })` — 테마·할 일 배지·보내기를 대시보드 터미널로 → [docs/PORTING.md §2](docs/PORTING.md) · [examples/dashboard-tab](examples/dashboard-tab) · Claude Code 스킬 `docbench-setup` 이 대신 붙인다 |
 | **대시보드에 직접 끼우기** | Node 대시보드에 같은 출처로, 대시보드 인증 그대로 | `<doc-bench api="/docbench/api">` + 처리기·프록시 → [docs/PORTING.md §3](docs/PORTING.md) |
 | **claude.ai 아티팩트** | 로컬 없이 공유·코멘트 | `createArtifactAdapters()` → [docs/claude-artifact.md](docs/claude-artifact.md) |
 
@@ -44,22 +45,23 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 
 ## 사람 ↔ Claude 한 바퀴
 
-**화면에서 (Claude 작업)** — 피드백을 "Claude가 처리"로 남기고 위쪽 **"Claude에게 넘기기"** → 아래 창에서 모델·노력·방식을 고르고 **시작**.
+**화면에서** — 읽으며 초안을 모으고, 다 읽은 뒤 검토 패널에서 **보내기**(어디로 · 바로 고치기/제안만 · 이번 묶음에 붙일 말).
 
 ```
 화면                                       DocBench 앱 · serve (이 PC 에서)
 ────                                       ─────────────────────────────────
-넘기기 (모델 sonnet · 노력 high)  ──▶  <기록 폴더>/runs/<id>.req.json
+초안 3개 + 붙일 말 → 보내기       ──▶  <기록 폴더>/runs/<id>.req.json
                                           claude -p --restricted --safe-mode --permission-mode dontAsk
                                                     --tools Read,Grep,Glob --add-dir <문서 폴더>   (문서 폴더 밖에서 실행)
 진행 로그 (읽음·찾음·고침…)       ◀──  <기록 폴더>/runs/<id>.log.jsonl
-문서에 바뀐 글 표시 · 카드 회신   ◀──  반영은 DocBench 가: 판 비교·잠금·인코딩 보존·이력
+볼 것: 바뀐 곳 · 되돌리기 · 확인  ◀──  반영은 DocBench 가: 판 비교·잠금·인코딩 보존·이력 (결과는 확인할 때까지 볼 것에)
 ```
 
-- Claude 는 문서 폴더 안을 **읽기만** 한다. 고친 섹션은 정해진 모양으로 돌려주고, 실제 쓰기는 앱·서버가 docbench 규칙으로 한다 — 그 사이 사람이 같은 섹션을 고쳤으면 덮지 않고 제안으로 돌린다. 지켜보는 사람이 없는 실행이라 문서 속 글이 Claude 를 속여도(프롬프트 주입) 명령 실행·폴더 밖 읽기는 할 수 없다([docs/SECURITY.md](docs/SECURITY.md)).
-- 카드의 **"Claude 제안"** 도 같은 길로 — 문서는 건드리지 않고 고친 섹션을 제안으로 올린다. 화면에서 차이를 보고 적용·거절.
+- Claude 는 문서 폴더 안을 **읽기만** 한다. 고친 섹션은 정해진 모양으로 돌려주고, 실제 쓰기는 DocBench 규칙으로 한다 — 그 사이 사람이 같은 섹션을 고쳤으면 덮지 않고 제안으로 돌린다. 지켜보는 사람이 없는 실행이라 문서 속 글이 Claude 를 속여도(프롬프트 주입) 명령 실행·폴더 밖 읽기는 할 수 없다([docs/SECURITY.md](docs/SECURITY.md)).
+- 바로 고친 것도 **되돌리기** 한 번이면 고치기 전 글로(그 뒤 또 바뀐 곳은 저절로 하지 않고 차이를 보여 준다). "제안만"이면 문서는 그대로, 차이를 보고 적용.
 - 구독 로그인(Claude Code)을 그대로 쓰며 API 키가 필요 없다. 로그인하지 않았거나 필요한 플래그가 없는 옛 Claude Code 면 실행하지 않고 그 자리에서 할 일(`claude auth login`·`claude update`)을 알려 준다.
-- 단일 HTML 은 페이지가 PC 프로그램을 켤 수 없어서, 처음 맡길 때 Claude 작업 창이 **연결 문구**를 준다. Claude Code 에 붙여 넣으면 CLI 파일 하나([`release/docbench.mjs`](release/docbench.mjs))를 받아 지문을 확인하고, 앱을 켜고, 이 화면의 계정과 짝짓는다(`docbench link --owner`). 연결되면 하던 넘기기를 이어 간다. 짝지은(또는 이름이 같은) 앱만 저절로 고른다 — 폴더를 함께 쓰는 동료의 PC·구독으로 돌지 않게.
+- **설치 없이 터미널 한 줄**: 앱이 없으면 "어디로 = 터미널 한 줄". 화면이 기록 폴더에 요청 파일을 쓰고 한 줄을 준다 — `Set-Location '<기록 폴더>'; claude 'DocBench 요청 <id> 를 처리해 줘 …'`. 기록 폴더를 Claude 의 자리로 쓰는 것은, Claude Code 가 **켠 폴더**의 지시(CLAUDE.md)·권한·대화 기록을 쓰기 때문이다 — DocBench 가 거기 둔 지시·권한(결과 파일만 쓰기)으로 돌고, 내 문서 폴더의 설정·훅이 섞이지 않는다. Claude 가 결과 파일을 남기면 열린 화면이 받아 같은 규칙으로 반영한다.
+- 앱으로 잇고 싶으면 Claude 작업 창의 **연결 문구**를 Claude Code 에 붙여 넣는다 — CLI 파일 하나([`release/docbench.mjs`](release/docbench.mjs))를 받아 지문을 확인하고, 앱을 켜고, 이 화면의 계정과 짝짓는다(`docbench link --owner`). 짝지은(또는 이름이 같은) 앱만 저절로 고른다 — 폴더를 함께 쓰는 동료의 PC·구독으로 돌지 않게.
 - 앱·`docbench serve` 는 Claude 작업을 기본으로 켠다(`serve --no-claude` 로 끔). 대시보드에 직접 끼우는 처리기는 기본 끔 — 이 PC 사람 한 명이 쓰는 대시보드면 `runs: true`.
 
 **터미널에서 (Claude Code)** — 대화하며 처리하고 싶을 때:
@@ -67,11 +69,11 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 ```
 사람 (브라우저)                         Claude Code (터미널)
 ───────────────                         ────────────────────
-섹션에 피드백 "근거 보강해"   ──파일──▶  docbench fb list --waiting assistant
+초안 → 보내기 "근거 보강해" ──파일──▶  docbench fb list --waiting assistant
                                          docbench fb show <id>        # 피드백 + 지금 섹션 원문
                                          docbench doc write <문서> --section "<키>" --base <판> --file new.md --fb <id>
 화면에 바뀐 글 표시          ◀──감시──   docbench fb reply <id> -m "보강함" --resolve
-카드가 '반영됨' 으로
+'볼 것'에서 확인·되돌리기
 ```
 
 - Claude Code 플러그인으로 스킬 둘과 CLI 를 깐다: `claude plugin marketplace add d-j-lee/docbench` → `claude plugin install docbench@docbench`

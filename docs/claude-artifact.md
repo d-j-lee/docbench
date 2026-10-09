@@ -33,13 +33,13 @@
 - **저장**: 짧은 임대(`acquire`)를 잡고 현재 판을 다시 읽어, 편집을 시작한 판과 다르면 충돌로 돌려보낸다. 같으면 판 기록 → 편집본 → 이력 순으로 쓴다.
   임대는 화면끼리만 맞춘다. Claude 의 `ArtifactData` 쓰기는 `if_version` 으로 따로 지킨다.
 - **변경 알림**: `docs` 구독으로 다른 사람·Claude 의 저장을 받아 "바뀐 섹션"을 표시한다. 내 저장(확정 전)은 알리지 않는다.
-- **Claude 제안**: `sample.json` 으로 그 섹션만 보내고 `{ after, rationale }` 를 받는다. 옛 뷰어(`capability_removed`)면 글로 받아 JSON 만 떼어 낸다.
-- **Claude에게 넘기기**: 편집자면 `comments.sendToClaude` 로 이 대화에 요청을 남긴다(클릭에서만). 안 되면 요청 문구를 복사해 준다.
+- **보내기**(검토 회차, D73): 적은 피드백은 초안으로 모이고, 검토 패널에서 고른 것을 한 번에 보낸다 — 편집자면 `comments.sendToClaude` 로 이 대화에 요청 한 줄(`DocBench 검토 — 보낸 피드백 N건 (문서…) · 붙인 말`)을 남긴다(클릭에서만). 안 되면 요청 문구를 복사해 준다.
+- 어댑터의 `assistant.propose`(`sample.json` 으로 그 섹션만 보내고 `{ after, rationale }` 를 받음)는 남아 있지만 화면은 부르지 않는다(D78, 씨앗 S21).
   전송 결과가 불확실한 오류면 중복을 막으려고 다시 보내지 않고 댓글 패널을 확인하라고 안내한다.
 
 ## Claude 가 피드백을 처리하는 법 (대화 세션)
 
-1. `ArtifactData list feedback` → `status: open` 이고 `waitingOn: assistant` 인 것.
+1. `ArtifactData list feedback` → `status: open` 이고 `waitingOn: assistant` 인 것(보낸 것). `status: draft` 는 사람의 메모 — 건드리지 않는다.
 2. 대상 문서 읽기: `ArtifactData get docs/<key>` 가 있으면 그 `md`(판 = 본문 `version`), 없으면 `Artifact read path=docs/<id>.md`(판 0).
 3. 섹션만 고친다. 섹션 경계·키 규칙은 DocBench 코어와 같아야 하니, 로컬에서 `dist/core.mjs` 의 `replaceSection` 을 쓴다:
    ```js
@@ -51,8 +51,8 @@
    - `set docs/<key>` `{ docId, md: next, version: v+1, updatedAt, updatedBy: { kind: 'assistant', name: 'Claude' } }`
    - `set revisions/<key>~<v+1>` `{ docId, version: v+1, md: next, at, by, summary }`
    - `set changes/<새 id>` `{ at, docId, by, summary, fromVersion: 'v', toVersion: 'v+1', feedbackIds, sections }`
-   - `update feedback/<id>` `{ status: 'resolved', version: n+1, updatedAt, thread: [...기존, { author: Claude, text: 한두 문장, at }] }`
-5. 되물을 때는 `update feedback/<id>` 로 `waitingOn: 'owner'` 와 질문 한 줄만.
+   - `update feedback/<id>` `{ waitingOn: 'owner', result: { kind: 'edit', at, run: 'chat', change: { docId, section: <키>, from: 'v', to: 'v+1' } }, version: n+1, updatedAt, thread: [...기존, { author: Claude, text: 한두 문장, at }] }` — 닫지 않는다(사람이 "볼 것"에서 확인·되돌리기)
+5. 되물을 때는 `update feedback/<id>` 로 `waitingOn: 'owner'`, `result: { kind: 'ask', at, run: 'chat' }` 와 질문 한 줄. 제안만이면 `proposal` 과 `result.kind: 'propose'`.
 
 화면이 열려 있으면 구독으로 바로 반영되고, 고친 섹션에 "바뀜" 표시가 뜬다.
 

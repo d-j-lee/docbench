@@ -39,7 +39,7 @@
   <b>운영 대시보드</b><span>· 예제</span>
   <div role="tablist" id="tabs" aria-label="문서 폴더"></div>
   <span class="sp"></span>
-  <label><input type="checkbox" id="take" checked> 넘기기를 이 대시보드 터미널로</label>
+  <label><input type="checkbox" id="take" checked> 보내기를 이 대시보드 터미널로</label>
   <button id="theme" type="button">테마: 자동</button>
 </header>
 <main>
@@ -69,14 +69,15 @@
       key: cfg.key,            // 앱 열쇠 (app-token) — 백엔드가 넣었다
       root: tab.root,          // 이 탭이 보여 줄 폴더(전체 경로)
       theme,
-      onTodo: (c) => {         // 사람 차례·Claude 차례 수 — 바뀔 때만 온다
-        badge.textContent = c.owner + c.assistant || '';
-        badge.title = `내 차례 ${c.owner} · Claude 차례 ${c.assistant}`;
+      onTodo: (c) => {         // 볼 것·보냄·초안 수 — 바뀔 때만 온다
+        badge.textContent = c.owner || '';
+        badge.title = `볼 것 ${c.owner} · 보냄 ${c.assistant} · 초안 ${c.draft}`;
       },
       onHandoff: async (req) => {
-        // 실제 대시보드: 떠 있는 Claude Code 터미널에 req.prompt 를 밀어 넣는다(Enter 가 필요하면 '\r' 를 붙여)
-        if (!document.getElementById('take').checked) return { handled: false };   // → 작업대의 Claude 작업 창이 맡는다
-        log(`$ ${req.prompt}`);
+        // 실제 대시보드: 셸 터미널이면 req.command(설치 없이 기록 폴더에서 새 Claude Code),
+        // 떠 있는 Claude Code 대화면 req.prompt(플러그인)를 밀어 넣는다(Enter 가 필요하면 '\r' 를 붙여)
+        if (!document.getElementById('take').checked) return { handled: false };   // → 작업대가 스스로(Claude 작업 창·터미널 안내)
+        log(`$ ${req.command || req.prompt}`);
         return { handled: true, message: '대시보드 터미널로 보냈습니다' };
       },
       onEvent: (ev) => log(`[${tab.name}] ${ev.type} ${JSON.stringify(ev)}`),   // id·상태만 온다 — 문서·피드백 본문은 없다

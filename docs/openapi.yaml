@@ -154,11 +154,24 @@ components:
         body: { type: string }
         kind: { type: string }
         severity: { enum: [high, medium, low] }
-        status: { enum: [open, resolved, declined] }
+        status: { enum: [draft, open, resolved, declined], description: 'draft = 보내기 전 사람의 메모(D73 — 쓴 사람만 보고, waitingOn 은 owner 로 읽는다). open + waitingOn assistant = 보냄, open + owner = 볼 것' }
         waitingOn: { enum: [owner, assistant] }
+        suggestion: { type: string, maxLength: 60000, description: '사람이 "이렇게 바꿔"로 직접 쓴 글 — 고른 문구면 그 문구, 섹션이면 본문' }
+        result:
+          type: object
+          description: Claude 가 한 일 — 사람이 확인할 때까지 "볼 것"
+          properties:
+            kind: { enum: [edit, propose, answer, ask, decline, review, failed], description: 'failed = 반영하지 못함(까닭은 problem) — 사람이 다시 보내거나 초안으로 가져간다' }
+            at: { type: string }
+            run: { type: string, description: 'Claude 작업 id (회차) — CLI 로 회신했으면 cli, 대화창이면 chat' }
+            change: { type: object, description: 'edit 일 때 전·후 판 — 차이·되돌리기의 근거', properties: { docId: { type: string }, section: { type: string, description: 없으면 문서 전체 }, from: { type: string }, to: { type: string } }, required: [docId, from, to] }
+            reverted: { type: string, description: 되돌린 시각 }
+            problem: { type: string, maxLength: 500, description: 'failed 의 까닭(사람이 읽는 말) — 고친 글이 섹션을 자름, Claude 가 이 피드백에 답하지 않음 등' }
+          required: [kind, at]
         author: { $ref: '#/components/schemas/Person' }
         thread: { type: array, items: { type: object, properties: { author: { $ref: '#/components/schemas/Person' }, text: { type: string }, at: { type: string } } } }
         proposal: { type: object, properties: { path: { type: array, items: { type: string } }, before: { type: string }, after: { type: string }, rationale: { type: string }, author: { $ref: '#/components/schemas/Person' }, at: { type: string }, state: { enum: [pending, applied, rejected] } } }
+        drafter: { type: string, description: '초안의 주인(사람 id) — 남이 쓴 것(Claude 의 제안 등)을 내 초안으로 가져왔을 때. 함께 쓰는 기록에서 남의 초안은 보이지 않는다. draft 가 아니면 읽지 않는다' }
         wasCollapsed: { type: boolean }
         createdAt: { type: string }
         updatedAt: { type: string }
@@ -177,30 +190,50 @@ components:
     RunStartInput:
       type: object
       properties:
-        kind: { enum: [handoff, propose] }
-        feedbackIds: { type: array, items: { type: string }, minItems: 1, maxItems: 40, description: propose 는 한 건 }
+        kind: { enum: [handoff, propose, review], description: 'handoff = 보낸 묶음, propose = 한 건에 제안, review = Claude 가 먼저 검토(D74)' }
+        feedbackIds: { type: array, items: { type: string }, maxItems: 40, description: 'handoff 는 1건 이상, propose 는 한 건, review 는 빈 배열' }
+        note: { type: string, maxLength: 4000, description: 이번 묶음 전체에 붙는 지시 }
+        docIds: { type: array, items: { type: string }, minItems: 1, maxItems: 10, description: review 에서 읽을 문서 }
+        sections: { type: array, items: { type: string }, description: 'review 에서 문서가 하나일 때 볼 섹션 키(하위 포함)' }
+        goal: { enum: [suggest, view], description: 'review: suggest = 제안·질문, view = 읽기 정리(접을 곳·먼저 볼 곳 — 문서는 그대로)' }
         model: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._\[\]-]{0,63}$', description: "'opus' 'sonnet' 'haiku' 'fable' 같은 별칭이나 전체 이름. 비우면 Claude Code 기본" }
         effort: { enum: [low, medium, high, xhigh, max] }
         mode: { enum: [auto, propose], description: auto = Claude 가 판단(바로 고치기 포함), propose = 제안만 }
       required: [kind, feedbackIds]
+    ReadingPlan:
+      type: object
+      properties:
+        docId: { type: string }
+        fold: { type: array, items: { type: string }, description: 접을 섹션 키 }
+        focus: { type: array, items: { type: string }, description: 먼저 볼 섹션 키(순서대로) }
+        guide: { type: string }
+      required: [docId, fold]
     RunStatus:
       type: object
       description: src/types.ts RunStatus
       properties:
         id: { type: string }
-        kind: { enum: [handoff, propose] }
+        kind: { enum: [handoff, propose, review] }
         feedbackIds: { type: array, items: { type: string } }
+        note: { type: string }
+        docIds: { type: array, items: { type: string } }
+        sections: { type: array, items: { type: string } }
+        goal: { enum: [suggest, view] }
         model: { type: string }
         effort: { type: string }
         mode: { enum: [auto, propose] }
-        runner: { type: string, description: 이 요청을 실행할 엔진 id }
+        runner: { type: string, description: '이 요청을 실행할 엔진 id, 또는 terminal:<계정> — 터미널 Claude 가 결과 파일을 남기고 그 계정의 화면·앱이 반영(D76)' }
         by: { $ref: '#/components/schemas/Person' }
         at: { type: string }
         state: { enum: [queued, running, done, failed, canceled] }
         startedAt: { type: string }
         endedAt: { type: string }
         progress: { type: object, properties: { phase: { enum: [starting, thinking, reading, writing, applying] }, tokens: { type: integer }, at: { type: string } } }
-        summary: { type: object, properties: { edited: { type: integer }, proposed: { type: integer }, answered: { type: integer }, asked: { type: integer }, declined: { type: integer }, skipped: { type: integer }, failed: { type: integer } } }
+        summary: { type: object, properties: { edited: { type: integer }, proposed: { type: integer }, answered: { type: integer }, asked: { type: integer }, declined: { type: integer }, created: { type: integer, description: review 가 올린 피드백 수 }, skipped: { type: integer }, failed: { type: integer } } }
+        overview: { type: string, description: Claude 의 한두 문장 요약 }
+        created: { type: array, items: { type: string }, description: review 가 올린 피드백 id }
+        view: { type: array, items: { $ref: '#/components/schemas/ReadingPlan' }, description: 'review·view 의 읽기 정리 — 화면이 보기 상태(접기)로만 받아들인다' }
+        terminal: { type: object, description: '터미널 Claude 를 기다리는 요청(queued, runner terminal:…)에만 — 서버가 아는 기록 자리로 붙이는 안내(POST /runs/terminal 의 terminal 과 같은 모양). 파일에 적지 않는다', properties: { room: { type: string }, roomName: { type: string }, command: { type: object }, resume: { type: object } } }
         docs: { type: array, items: { type: string } }
         error: { type: string }
         usage: { type: object, description: '모델·시간·토큰·(구독) 5시간 한도 몫 — Claude Code 가 알려 준 값' }
@@ -238,7 +271,7 @@ components:
       type: object
       properties:
         available: { type: boolean }
-        reason: { enum: [no-runner, not-mine, no-claude, old-claude, not-logged-in, read-only, disabled], description: 'not-mine = 켜진 실행기가 내 것이 아니어서(짝지은 계정 owners 에 없고 이름도 다름) 저절로 고르지 않음(단일 HTML), not-logged-in = Claude Code 에 로그인하지 않음(claude auth status — 구독 로그인 /login)' }
+        reason: { enum: [no-runner, old-runner, not-mine, no-claude, old-claude, not-logged-in, read-only, disabled], description: 'old-runner = 내 앱이 켜져 있지만 예전 판(작업 약속 protocol 이 낮음 — 맡기지 않고 새 판으로 바꾸라고 안내), not-mine = 켜진 실행기가 내 것이 아니어서(짝지은 계정 owners 에 없고 이름도 다름) 저절로 고르지 않음(단일 HTML), not-logged-in = Claude Code 에 로그인하지 않음(claude auth status — 구독 로그인 /login)' }
         message: { type: string }
         runner: { $ref: '#/components/schemas/RunnerInfo' }
         others: { type: array, items: { $ref: '#/components/schemas/RunnerInfo' } }
@@ -304,7 +337,7 @@ paths:
                   notify: { type: [object, 'null'], properties: { label: { type: string } } }
                   identity: { enum: [pc, host], description: '사람이 어디서 왔나. pc = 이 PC 의 로그인 — 화면의 "나"에서 표시 이름을 바꾼다(PUT /me). host 또는 없음 = 대시보드 로그인처럼 호스트가 정한 사람 — 이름 바꾸기를 숨긴다. docbench serve·앱은 pc, 대시보드에 끼운 처리기는 기본 host(createDocBenchHandler 의 identity 옵션)' }
                   workspace: { type: object, description: '서버 방식(docbench serve·처리기)만', properties: { root: { type: string, description: 문서 폴더 }, git: { type: boolean }, data: { type: object, properties: { mode: { enum: [inside, outside], description: 'inside = 문서 폴더 안 .docbench, outside = 문서 폴더 밖 기록 폴더(D57)' }, dir: { type: string, description: 기록 폴더 } } } } }
-                  features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean }, runs: { type: boolean, description: 'Claude 작업(/runs) — 없거나 false 면 화면이 작업 창을 숨긴다. docbench serve 는 기본 켬(--no-claude 로 끔), 대시보드에 끼우는 처리기는 기본 끔(runs: true 로 켬), 앱은 작업 공간의 엔진이 켜졌으면 켬' }, tree: { type: boolean, description: '펼친 폴더만 읽기(GET /tree) — 없거나 false 면 화면이 manifest.docs 로만 목록을 그린다(예전 방식)' } } }
+                  features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean }, runs: { type: boolean, description: 'Claude 작업(/runs) — 없거나 false 면 화면이 작업 창을 숨긴다. docbench serve 는 기본 켬(--no-claude 로 끔), 대시보드에 끼우는 처리기는 기본 끔(runs: true 로 켬), 앱은 작업 공간의 엔진이 켜졌으면 켬' }, tree: { type: boolean, description: '펼친 폴더만 읽기(GET /tree) — 없거나 false 면 화면이 manifest.docs 로만 목록을 그린다(예전 방식)' }, terminal: { type: boolean, description: '터미널 한 줄(POST /runs/terminal, D76)' }, instructions: { type: boolean, description: '늘 지킬 지시(GET·PUT /instructions)' } } }
   /me:
     put:
       tags: [workspace]
@@ -403,9 +436,10 @@ paths:
     patch:
       tags: [workspace]
       summary: 피드백 고치기 (판 비교)
+      description: 'patch 에 준 키만 바꾼다. 값이 null 이면 그 값을 지운다(★ 끄기 = severity null, 바꿀 글 지우기 = suggestion null) — JSON 에는 undefined 가 없어 빠진 키는 그대로 둔다. id·createdAt·version 은 무시.'
       requestBody:
         required: true
-        content: { application/json: { schema: { type: object, properties: { patch: { type: object }, version: { type: integer } }, required: [patch] } } }
+        content: { application/json: { schema: { type: object, properties: { patch: { type: object, description: 'Feedback 의 일부. null = 지움' }, version: { type: integer } }, required: [patch] } } }
       responses:
         '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Feedback' } } } }
         '409': { description: 판 다름 — current }
@@ -428,13 +462,13 @@ paths:
   /notify:
     post:
       tags: [workspace]
-      summary: "AI 에게 넘기기"
-      requestBody: { content: { application/json: { schema: { type: object, properties: { count: { type: integer }, docs: { type: array, items: { type: string } }, feedbackIds: { type: array, items: { type: string } } } } } } }
-      responses: { '200': { description: '{ delivered, queued?, message? } — delivered = 넘기기 명령을 실제로 시작함, queued = 요청함(기록 폴더 inbox/)에 남김, message 가 있으면 화면이 그대로 보여 준다(없으면 화면 문구)' } }
+      summary: 요청함으로 보내기 (Claude 작업이 없을 때)
+      requestBody: { content: { application/json: { schema: { type: object, properties: { count: { type: integer }, docs: { type: array, items: { type: string } }, feedbackIds: { type: array, items: { type: string } }, note: { type: string } } } } } }
+      responses: { '200': { description: '{ delivered, queued?, message? } — delivered = 알림 명령(notify.command)을 실제로 시작함, queued = 요청함(기록 폴더 inbox/)에 남김, message 가 있으면 화면이 그대로 보여 준다(없으면 화면 문구)' } }
   /assistant/propose:
     post:
       tags: [workspace]
-      summary: 섹션 수정 제안 (서버가 AI 호출)
+      summary: 섹션 수정 제안 (서버가 AI 호출) — 호환을 위해 남김, 화면은 부르지 않는다(D78)
       requestBody: { content: { application/json: { schema: { type: object, properties: { feedbackId: { type: string }, sectionPath: { type: array, items: { type: string } } }, required: [feedbackId] } } } }
       responses:
         '200': { description: '{ after, rationale? }' }
@@ -458,11 +492,13 @@ paths:
       responses: { '200': { description: OK, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/RunStatus' } } } } } } } }
     post:
       tags: [workspace]
-      summary: 작업 시작 — Claude 차례 피드백을 넘기거나(handoff) 한 건에 제안(propose)
+      summary: 작업 시작 — 보낸 묶음(handoff), 한 건에 제안(propose), 먼저 검토(review)
       description: |
         서버가 요청 파일(기록 폴더 runs/<id>.req.json)을 남기고 줄에 세운다. 한 번에 하나씩 돈다.
         Claude 는 문서 폴더 밖에서 --restricted --safe-mode --permission-mode dontAsk --tools Read,Grep,Glob --add-dir <폴더> 로 실행되고,
-        반영(고침·제안·회신)은 서버가 판 비교로 한다. 진행은 /runs/{id}/log, 끝나면 SSE runs 이벤트.
+        반영(고침·제안·회신)은 서버가 판 비교로 한다(core/apply.ts, D75). 결과는 피드백을 닫지 않고 result 를 붙여 "볼 것"으로(D73).
+        review 는 제안·질문을 작성자 Claude 의 피드백으로 만들거나(goal suggest), 읽기 정리(RunStatus.view)를 돌려준다(goal view).
+        진행은 /runs/{id}/log, 끝나면 SSE runs 이벤트.
       requestBody:
         required: true
         content: { application/json: { schema: { $ref: '#/components/schemas/RunStartInput' } } }
@@ -471,6 +507,40 @@ paths:
         '400': { description: 잘못된 요청 (kind·피드백·모델 이름·노력) }
         '422': { description: 읽기 전용 작업 폴더 }
         '503': { description: 'UNAVAILABLE — claude 없음·옛 판·로그인 안 됨·엔진 꺼짐 (message)' }
+  /runs/terminal:
+    post:
+      tags: [workspace]
+      summary: 터미널 한 줄 (설치 없음, D76 — session.features.terminal)
+      description: |
+        엔진 대신 사람이 켠 Claude Code 가 처리할 요청을 만든다. 기록 폴더에 runs/<id>.req.json(runner terminal:<계정>)·<id>.prompt.md(지시·결과 모양·고칠 글)·<id>.ctx.json 과
+        Claude 자리 파일(CLAUDE.md·.claude/settings.json·instructions.md — DocBench 표시가 있을 때만 다시 씀)을 쓰고, 칠 한 줄을 돌려준다.
+        Claude 가 runs/<id>.result.json 을 쓰면 서버가 받아 /runs 와 같은 규칙으로 반영한다. 다른 길로 이미 처리되었거나 취소되면 저절로 닫는다.
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/RunStartInput' } } }
+      responses:
+        '202':
+          description: 요청을 남김
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - { $ref: '#/components/schemas/RunStatus' }
+                  - type: object
+                    properties:
+                      terminal: { type: object, properties: { room: { type: string, description: 기록 폴더(절대 경로) }, roomName: { type: string }, command: { type: object, properties: { pwsh: { type: string }, sh: { type: string } } }, resume: { type: object, description: '같은 줄에 claude -c(지난 대화 이어서)', properties: { pwsh: { type: string }, sh: { type: string } } } } }
+        '400': { description: 잘못된 요청 또는 처리할 것이 없음 }
+        '422': { description: 읽기 전용 작업 폴더 }
+  /instructions:
+    get:
+      tags: [workspace]
+      summary: 늘 지킬 지시 (기록 폴더 instructions.md 에서 주석을 뺀 글)
+      responses: { '200': { description: OK, content: { application/json: { schema: { type: object, properties: { text: { type: string } } } } } } }
+    put:
+      tags: [workspace]
+      summary: 늘 지킬 지시 바꾸기 (4000자까지) — 요청마다 프롬프트에 붙는다
+      requestBody: { content: { application/json: { schema: { type: object, properties: { text: { type: string, maxLength: 4000 } }, required: [text] } } } }
+      responses: { '204': { description: OK } }
   /runs/{id}/log:
     parameters: [{ name: id, in: path, required: true, schema: { type: string, pattern: '^run-\d{8}-\d{6}-[a-z0-9]{1,8}$' } }]
     get:
@@ -482,7 +552,7 @@ paths:
     parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
     post:
       tags: [workspace]
-      summary: 취소 (줄 서 있으면 빼고, 돌고 있으면 claude 를 멈춘다 — 반영 전이면 아무것도 바꾸지 않는다)
+      summary: 취소 (줄 서 있으면 빼고, 돌고 있으면 claude 를 멈춘다 — 반영 전이면 아무것도 바꾸지 않는다. 터미널 요청은 닫는다)
       responses: { '204': { description: OK } }
 
   # ---------------------------------------------------------------- DocBench 앱 (server/app.mjs, D67·D68·D70)
@@ -658,7 +728,7 @@ paths:
         보통 /host.js 의 DocBenchHost.mount 가 만든다. 열쇠는 ?t= — 교차 출처 iframe 은 헤더를 달 수 없고, 그 열쇠는 iframe 을 만든 대시보드가 이미 가진 것.
         서버는 그 열쇠와 허용한 출처 목록을 화면에 넣는다(Referrer-Policy no-referrer). CSP frame-ancestors 는 'self' 와 허용한 출처(app.allowOrigins)만 — 다른 출처는 끼우지 못한다.
         화면은 POST /api/app/workspaces { path: root } 로 그 폴더를 열고(합치기가 필요한 넓은 폴더면 안내만) /api/w/{id} 를 쓴다.
-        postMessage 는 허용한 출처와만 주고받는다 — 테마·이동·할 일 수·넘기기. 대시보드로 가는 이벤트에는 id·상태만(문서·피드백 본문 없음).
+        postMessage 는 허용한 출처와만 주고받는다 — 테마·이동·할 일 수·보내기. 대시보드로 가는 이벤트에는 id·상태만(문서·피드백 본문 없음).
       security: [{ embedKey: [] }]
       parameters:
         - { name: root, in: query, description: 보여 줄 문서 폴더의 절대 경로 (없으면 안내만), schema: { type: string } }

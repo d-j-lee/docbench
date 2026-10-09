@@ -106,7 +106,7 @@ describe('이름과 계정 (D63)', () => {
 
 describe('실행기 고르기 (D63·D67)', () => {
   const now = Date.parse('2026-10-08T12:00:00Z');
-  const r = (o: Partial<RunnerInfo>): RunnerInfo => ({ id: 'runner:x@h', kind: 'runner', user: 'x', host: 'h', pid: 1, version: 't', protocol: 1, startedAt: '2026-10-08T11:00:00Z', seenAt: '2026-10-08T11:59:55Z', claude: { ok: true }, ...o }) as RunnerInfo;
+  const r = (o: Partial<RunnerInfo>): RunnerInfo => ({ id: 'runner:x@h', kind: 'runner', user: 'x', host: 'h', pid: 1, version: 't', protocol: 2, startedAt: '2026-10-08T11:00:00Z', seenAt: '2026-10-08T11:59:55Z', claude: { ok: true }, ...o }) as RunnerInfo;
   it('화면의 계정과 짝지은(owners) 앱을 이름이 달라도 고른다', () => {
     const app = r({ id: 'app:dj-pc@h', kind: 'app', user: 'dj-pc', owners: ['u-0a1b2c3d4e'] });
     expect(runnerIsMine(app, { me: '디제이', meId: 'u-0a1b2c3d4e' })).toBe(true);

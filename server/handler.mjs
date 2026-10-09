@@ -104,8 +104,8 @@ export function createDocBenchHandler(ws, opts = {}) {
       return send(res, 200, {
         me: ws.me, permissions: perms,
         assistant: ws.config.assistant ? { name: ws.config.assistantName || 'Claude' } : null,
-        notify: ws.config.notify?.inbox !== false || ws.config.notify?.command ? { label: (ws.config.assistantName || 'AI') + '에게 넘기기' } : null,
-        features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn, tree: true },
+        notify: ws.config.notify?.inbox !== false || ws.config.notify?.command ? { label: /** @type {any} */ (ws.config).locale === 'en' ? 'Request inbox (/docbench-feedback)' : '요청함 (/docbench-feedback)' } : null,
+        features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn, tree: true, terminal: runsOn, instructions: true },
         identity: opts.identity === 'pc' ? 'pc' : 'host',
         workspace: { root: ws.root, git: !!ws.git, data: { mode: ws.dataMode, dir: ws.dir } },
       });
@@ -143,6 +143,9 @@ export function createDocBenchHandler(ws, opts = {}) {
     if (m === 'POST' && p === '/notify') return notify(req, res);
     if (m === 'POST' && p === '/assistant/propose') return propose(req, res);
     if (p === '/runs' || p.startsWith('/runs/')) return runs(req, res, url, p, m);
+    // 늘 지킬 지시 — 기록 폴더(Claude 자리)의 instructions.md. Claude 작업·터미널 Claude 가 요청마다 붙인다
+    if (p === '/instructions' && m === 'GET') return send(res, 200, { text: await ws.standing() });
+    if (p === '/instructions' && m === 'PUT') { const b = /** @type {any} */ (await body(req)); await ws.saveStanding(String(b?.text || '')); await ws.ensureRoom().catch(() => undefined); return send(res, 204, null); }
     return send(res, 404, { error: 'NOT_FOUND', message: m + ' ' + p });
   }
 
@@ -217,6 +220,11 @@ export function createDocBenchHandler(ws, opts = {}) {
       if (ws.config.readOnly) return send(res, 422, { error: 'READ_ONLY', reason: 'config', message: '읽기 전용 작업 폴더' });
       const st = await engine.submit(await body(req), ws.me);
       return send(res, 202, st);
+    }
+    // 터미널 Claude 에게 맡긴다(설치 없음, D76) — 요청·맥락·지시 파일을 기록 폴더(Claude 자리)에 쓰고 칠 한 줄을 돌려준다
+    if (m === 'POST' && p === '/runs/terminal') {
+      if (ws.config.readOnly) return send(res, 422, { error: 'READ_ONLY', reason: 'config', message: '읽기 전용 작업 폴더' });
+      return send(res, 202, await engine.submitTerminal(await body(req), ws.me));
     }
     const lm = p.match(/^\/runs\/([\w-]+)\/(log|cancel)$/);
     if (lm && m === 'GET' && lm[2] === 'log') return send(res, 200, await engine.readLog(lm[1], Number(url.searchParams.get('from')) || 0));

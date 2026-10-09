@@ -1,5 +1,7 @@
 /**
  * 실제 브라우저(Chromium) + 실제 서버 + 임시 작업 폴더로 사람·AI 왕복을 확인한다.
+ * 검토 회차(0.6.0): 그 자리에서 적기(초안) → 고른 초안을 붙일 말과 함께 한 번에 보내기(서버 엔진·터미널 한 줄) →
+ * 결과는 "볼 것"(고침·제안·질문) → 되돌리기·적용·확인. Claude 는 test/fixtures/fake-claude.mjs 가 대신한다.
  * 필요: npx playwright install chromium (한 번)
  */
 import { test, before, after } from 'node:test';
@@ -38,6 +40,54 @@ async function open(t, { width = 1360, height = 900, scheme = 'light', hash = ''
   return page;
 }
 const sec = (page, key) => page.locator(`.db-sec[data-key="${key}"]`);
+const reqFiles = async () => (await fs.readdir(path.join(dir, '.docbench/runs')).catch(() => [])).filter((n) => n.endsWith('.req.json')).sort();
+/** 문서 도구 막대의 깊이(목차·전부…) — 검토 패널의 보내기 막대에도 .db-seg 가 있다 */
+const depth = (root) => root.locator('.db-toolbar .db-seg button');
+
+/** 섹션 옆 말풍선 → 그 자리의 적는 칸(.db-cmp) */
+async function composer(page, key) {
+  const head = sec(page, key).locator('> .db-sec-head');
+  await head.hover();
+  await head.locator('.db-act').first().click();
+  const cmp = page.locator('.db-cmp');
+  await cmp.waitFor();
+  return cmp;
+}
+/** 적어 두기: 요청을 쓰고 Ctrl+Enter(초안에 두기) → 디스크의 그 초안 */
+async function jot(page, key, text) {
+  const cmp = await composer(page, key);
+  const ta = cmp.locator('.db-cmp-ta:not(.rw)');
+  await ta.fill(text);
+  await ta.press('Control+Enter');
+  await cmp.waitFor({ state: 'detached' });
+  let f;
+  await until(async () => (f = (await readFb()).find((x) => x.body === text)), 5000);
+  return f;
+}
+/** 카드 아래 단추(이름이 정확히 같은 것 — 섹션 이름 단추와 헷갈리지 않게) */
+const cardBtn = (card, label) => card.locator('.db-c-act button', { hasText: new RegExp(`^\\s*${label}\\s*$`) });
+/**
+ * 초안 탭의 보내기 막대: ids 만 고르고(다른 시험이 남긴 초안은 빼고) 반영 방식·어디로·붙일 말·모델을 정해 한 번에 보낸다
+ */
+async function sendDrafts(page, { ids, mode, via, note, model } = {}) {
+  await page.locator('.db-pill.draft').click();
+  const bar = page.locator('.db-sendbar');
+  await bar.waitFor();
+  if (ids) {
+    await page.locator('.db-dtools button', { hasText: '하나도 안 고름' }).click();
+    for (const id of ids) await page.locator(`.db-card[data-id="${id}"] .db-pick`).check();
+  }
+  if (mode) await bar.locator('.db-seg button', { hasText: mode === 'propose' ? '제안만' : '바로 고치기' }).click();
+  if (via) await bar.locator('select[aria-label="어디로"]').selectOption(via);
+  if (note != null) await bar.locator('.db-note').fill(note);
+  if (model) {
+    await bar.locator('details.db-adv > summary').click();
+    await bar.locator('.db-adv .db-dock-opt select').nth(0).selectOption(model);
+  }
+  const go = bar.locator('.db-sendbtn');
+  if (ids) assert.equal((await go.innerText()).trim(), `${ids.length}개 보내기`);
+  await go.click();
+}
 
 test('접기 상태는 다시 열어도 남는다 (서버 보기 상태)', async (t) => {
   const key = '알림 서비스 질의응답 › 운영';
@@ -59,23 +109,20 @@ test('접기 상태는 다시 열어도 남는다 (서버 보기 상태)', async
   assert.equal(await sec(page, key).getAttribute('data-collapsed'), 'true', '로컬 저장소를 지워도 서버 보기 상태로 복원');
 });
 
-test('접힌 섹션 통째로 피드백 → 파일 한 건, AI 차례', async (t) => {
+test('접힌 섹션 통째로 적기 → 초안 파일 한 건 — 보내기 전에는 Claude 에게 아무것도 가지 않는다', async (t) => {
   const page = await open(t, { hash: 'docs/질의응답.md' });
   const key = '알림 서비스 질의응답 › 구조 › 왜 큐를 하나만 쓰나요?';
-  await sec(page, key).locator('> .db-sec-head').hover();
-  await sec(page, key).locator('> .db-sec-head .db-act').first().click();
-  const dlg = page.locator('dialog.db-dialog[open]');
-  await dlg.locator('textarea').fill('하위 문답까지 한 번에 다듬어 줘');
-  await dlg.locator('.db-btn.primary').click();
-  await until(async () => (await readFb()).some((f) => f.body === '하위 문답까지 한 번에 다듬어 줘'));
-  const f = (await readFb()).find((x) => x.body === '하위 문답까지 한 번에 다듬어 줘');
-  assert.equal(f.waitingOn, 'assistant');
+  const reqs0 = await reqFiles();
+  const f = await jot(page, key, '하위 문답까지 한 번에 다듬어 줘');
+  assert.deepEqual([f.status, f.waitingOn], ['draft', 'owner']);
   assert.equal(f.wasCollapsed, true);
   assert.deepEqual(f.target.path, ['알림 서비스 질의응답', '구조', '왜 큐를 하나만 쓰나요?']);
-  await page.locator(`.db-card[data-id="${f.id}"]`).waitFor();
+  await page.locator(`.db-card[data-id="${f.id}"].t-draft`).waitFor();
+  assert.deepEqual(await reqFiles(), reqs0, '초안은 요청을 만들지 않는다');
+  assert.equal(await page.locator('.db-pill.draft .n').innerText(), '1');
 });
 
-test('문구 선택 피드백 → 인용 표시, 터미널(CLI) 회신이 화면에 바로', async (t) => {
+test('문구 선택 → 적는 칸(인용) → 초안 표시 → 터미널 한 줄로 보냄 → 터미널(CLI) 회신이 볼 것에 바로', async (t) => {
   const page = await open(t, { hash: 'docs/설계-노트.md' });
   const p = sec(page, '알림 서비스 설계 노트 › 배경').locator('.db-sec-body p').first();
   await p.evaluate((el) => {
@@ -85,16 +132,36 @@ test('문구 선택 피드백 → 인용 표시, 터미널(CLI) 회신이 화면
     el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
   });
   await page.locator('.db-selbtn:not([hidden])').click();
-  const dlg = page.locator('dialog.db-dialog[open]');
-  await dlg.locator('textarea').fill('중복 발송 건수 근거?');
-  await dlg.locator('.db-btn.primary').click();
-  await page.locator('mark.db-fbq', { hasText: '중복 발송' }).waitFor();
-  const f = (await readFb()).find((x) => x.body === '중복 발송 건수 근거?');
-  assert.equal(f.selector.exact, '중복 발송');
-  // 터미널의 Claude 가 CLI 로 되묻는다 → 화면 카드가 사람 차례로 바뀐다
+  const cmp = page.locator('.db-cmp');
+  await cmp.waitFor();
+  assert.equal(await cmp.locator('.db-cmp-q').innerText(), '중복 발송');
+  await cmp.locator('.db-cmp-ta:not(.rw)').fill('중복 발송 건수 근거?');
+  await cmp.locator('.db-cmp-ta:not(.rw)').press('Control+Enter');
+  await page.locator('mark.db-fbq.draft', { hasText: '중복 발송' }).waitFor();
+  let f;
+  await until(async () => (f = (await readFb()).find((x) => x.body === '중복 발송 건수 근거?')));
+  assert.deepEqual([f.selector.exact, f.status], ['중복 발송', 'draft']);
+  // 초안은 아직 사람의 메모 — 터미널의 Claude 가 CLI 로 회신할 수 없다
+  await assert.rejects(cli('fb', 'reply', f.id, '-m', '미리 답'), (e) => /초안은 아직 보내지 않은/.test(e.stderr));
+
+  // 터미널 한 줄로 보낸다 — 서버는 기록 폴더의 경로를 알아 그 자리로 옮겨 켜는 한 줄을 준다
+  await sendDrafts(page, { ids: [f.id], via: 'terminal' });
+  const term = page.locator('dialog[open] .db-term');
+  await term.waitFor();
+  const cmd = await term.locator('.db-cmdbox').innerText();
+  const id = /요청 (run-[\w-]+) /.exec(cmd)?.[1];
+  assert.ok(id && cmd.includes(path.join(dir, '.docbench')), cmd);
+  for (const x of ['.req.json', '.prompt.md', '.ctx.json']) await fs.access(path.join(dir, '.docbench/runs', id + x));
+  assert.match(JSON.parse(await fs.readFile(path.join(dir, '.docbench/runs', id + '.req.json'), 'utf8')).runner, /^terminal:/);
+  await term.getByRole('button', { name: '닫기' }).click();
+  assert.equal((await readFb()).find((x) => x.id === f.id).waitingOn, 'assistant', '보냄');
+
+  // 터미널의 Claude 가 CLI 로 되묻는다 → 화면 카드가 "볼 것"의 질문으로
   await cli('fb', 'reply', f.id, '-m', '장애 보고서 두 건이 근거입니다. 링크를 달까요?', '--ask');
-  await page.locator(`.db-card[data-id="${f.id}"].t-owner`).waitFor({ timeout: 5000 });
-  await page.locator(`.db-card[data-id="${f.id}"] .db-msg.assistant`, { hasText: '장애 보고서' }).waitFor();
+  await page.locator('.db-pill.owner').click();
+  await page.locator(`.db-card[data-id="${f.id}"].r-ask .db-msg.assistant`, { hasText: '장애 보고서' }).waitFor({ timeout: 5000 });
+  const g = (await readFb()).find((x) => x.id === f.id);
+  assert.deepEqual([g.status, g.waitingOn, g.result.kind], ['open', 'owner', 'ask'], '끝내는 것은 사람 — 볼 것에 남는다');
 });
 
 test('섹션 편집 → 차이 미리보기 → 저장: 파일·이력·바뀐 섹션', async (t) => {
@@ -118,44 +185,141 @@ test('섹션 편집 → 차이 미리보기 → 저장: 파일·이력·바뀐 �
   await page.locator('.db-editor').waitFor({ state: 'detached' });
 });
 
-test('AI 제안(헤드리스 claude) → 차이 보고 적용 → 문서 반영·해결', async (t) => {
+test('제안만으로 보내기(헤드리스 claude) → 볼 것의 제안 차이 → 적용 → 그 섹션에 한 번 반영·끝남', async (t) => {
   const page = await open(t, { hash: 'docs/설계-노트.md' });
-  const created = JSON.parse((await cli('fb', 'add', '--as', 'human:dj', '--doc', 'docs/설계-노트.md', '--section', '알림 서비스 설계 노트 › 구조 › 메모', '-m', '근거 한 줄 보강', '--json')).stdout);
-  const card = page.locator(`.db-card[data-id="${created.id}"]`);
-  await card.waitFor({ timeout: 5000 });
-  await card.locator('.db-c-act .db-btn', { hasText: '제안' }).click();
-  await card.locator('.db-prop .db-dl.add, .db-diff .db-dl.add').first().waitFor({ timeout: 15000 });
-  await card.locator('.db-btn.primary', { hasText: '적용' }).click();
-  await until(async () => (await fs.readFile(path.join(dir, 'docs/설계-노트.md'), 'utf8')).includes('(제안) 한 줄 추가'), 6000);
-  await until(async () => (await readFb()).find((x) => x.id === created.id).status === 'resolved', 6000);
-  const md = await fs.readFile(path.join(dir, 'docs/설계-노트.md'), 'utf8');
+  const file = path.join(dir, 'docs/설계-노트.md');
+  const f = await jot(page, '알림 서비스 설계 노트 › 구조 › 메모', '근거 한 줄 보강');
+  await sendDrafts(page, { ids: [f.id], mode: 'propose', via: 'app' });
+  const done = page.locator('.db-toast', { hasText: 'Claude 가 끝냈습니다' });
+  await done.waitFor({ timeout: 15000 });
+  assert.match(await done.innerText(), /제안 1/);
+  await done.getByRole('button', { name: '볼 것 보기' }).click();
+  const card = page.locator(`.db-card[data-id="${f.id}"].r-propose`);
+  await card.locator('.db-prop .db-dl.add', { hasText: '(제안) 한 줄 추가' }).first().waitFor({ timeout: 8000 });
+  assert.ok(!(await fs.readFile(file, 'utf8')).includes('(제안) 한 줄 추가'), '제안만 — 문서는 그대로');
+  await cardBtn(card, '적용').click();
+  await until(async () => (await fs.readFile(file, 'utf8')).includes('(제안) 한 줄 추가'), 6000);
+  await until(async () => { const g = (await readFb()).find((x) => x.id === f.id); return g.status === 'resolved' && g.proposal?.state === 'applied'; }, 6000);
+  const md = await fs.readFile(file, 'utf8');
   assert.equal(md.split('(제안) 한 줄 추가').length, 2, '정확히 한 번, 그 섹션에만');
   assert.ok(md.indexOf('(제안) 한 줄 추가') < md.indexOf('## 위험'));
 });
 
-test('Claude 작업(서버): 넘기기 → 모델 골라 시작 → 진행 로그 → 문서에 바뀐 글(누가: Claude)·피드백 반영', async (t) => {
+test('검토 회차(서버 엔진): 초안이 모여도 보내지 않는다 → 붙일 말·모델과 함께 한 번에 → 볼 것(고침·바뀐 곳, 누가: Claude) → 되돌리면 그 섹션 글만 돌아오고 초안으로 → 확인하면 끝남', async (t) => {
   const page = await open(t, { hash: 'docs/운영-런북.md' });
-  const created = JSON.parse((await cli('fb', 'add', '--as', 'human:dj', '--doc', 'docs/운영-런북.md', '--section', '알림 서비스 운영 런북 › 연락처', '-m', '연락처 형식을 맞춰 줘', '--to', 'assistant', '--json')).stdout);
-  await page.locator(`.db-card[data-id="${created.id}"]`).waitFor({ timeout: 6000 });
-  await page.locator('.db-send').click();
-  await page.locator('.db-dock-state.ok', { hasText: '서버' }).waitFor({ timeout: 8000 });
-  await page.locator('.db-dock-opt select').nth(0).selectOption('haiku');
-  await page.locator('.db-dock .compose .db-btn.primary').click();
-  await page.locator('.db-run[data-state="done"]').first().waitFor({ timeout: 15000 });
-  await page.locator('.db-runlog .db-ll.good', { hasText: '고침 —' }).first().waitFor();
-  await until(async () => (await readFb()).find((x) => x.id === created.id).status === 'resolved', 6000);
-  assert.match(await fs.readFile(path.join(dir, 'docs/운영-런북.md'), 'utf8'), /\(고침\) 한 줄 추가/);
-  await page.locator('ins.db-chg-ins', { hasText: '한 줄 추가' }).waitFor({ timeout: 8000 });
-  await page.locator('.db-sec[data-key="알림 서비스 운영 런북 › 연락처"] .db-badge.chg', { hasText: 'Claude' }).waitFor({ timeout: 6000 });
+  const file = path.join(dir, 'docs/운영-런북.md');
+  const kA = '알림 서비스 운영 런북 › 연락처', kB = '알림 서비스 운영 런북 › 배포 전 확인';
+  const reqs0 = await reqFiles();
+  // 1) 읽으며 적는다 — 초안만 쌓이고 아무 요청도 생기지 않는다
+  const a = await jot(page, kA, '연락처 형식을 맞춰 줘');
+  const b = await jot(page, kB, '확인 순서를 정리해 줘');
+  assert.deepEqual([a.status, b.status, a.waitingOn, b.waitingOn], ['draft', 'draft', 'owner', 'owner']);
+  assert.deepEqual(await reqFiles(), reqs0, '적기만 해서는 아무것도 가지 않는다');
+  assert.equal(await page.locator('.db-tabs .tab-sent .n').innerText(), '0');
+  const orig = await fs.readFile(file, 'utf8');
+
+  // 2) 고른 둘을 붙일 말·모델과 함께 한 번에 — 요청 하나
+  await sendDrafts(page, { ids: [a.id, b.id], mode: 'auto', via: 'app', note: '표 모양은 그대로', model: 'haiku' });
+  await page.locator('.db-toast', { hasText: '2개를 보냈습니다.' }).waitFor();
+  const reqName = await until(async () => (await reqFiles()).find((n) => !reqs0.includes(n)), 5000);
+  const req = JSON.parse(await fs.readFile(path.join(dir, '.docbench/runs', reqName), 'utf8'));
+  assert.deepEqual([req.kind, req.mode, req.model, req.note, [...req.feedbackIds].sort()], ['handoff', 'auto', 'haiku', '표 모양은 그대로', [a.id, b.id].sort()]);
+
+  // 3) 끝나면 결과는 "볼 것" — 한 회차(보낸 2개·붙인 말), 둘 다 고침. 엔진은 끝내지 않는다(사람이 확인)
+  const done = page.locator('.db-toast', { hasText: 'Claude 가 끝냈습니다' });
+  await done.waitFor({ timeout: 15000 });
+  assert.match(await done.innerText(), /고침 2/);
+  await done.getByRole('button', { name: '볼 것 보기' }).click();
+  assert.match(await page.locator('.db-round', { hasText: '보낸 2개' }).innerText(), /표 모양은 그대로/);
+  const cardA = page.locator(`.db-card[data-id="${a.id}"].r-edit`), cardB = page.locator(`.db-card[data-id="${b.id}"].r-edit`);
+  await cardA.waitFor();
+  await cardB.waitFor();
+  for (const x of [a, b]) {
+    const g = (await readFb()).find((y) => y.id === x.id);
+    assert.deepEqual([g.status, g.waitingOn, g.result.kind, g.result.run], ['open', 'owner', 'edit', req.id]);
+    assert.ok(g.result.change?.from && g.result.change?.to, '되돌릴 판을 적어 둔다');
+  }
+  const mid = await fs.readFile(file, 'utf8');
+  assert.equal(mid.split('(고침) 한 줄 추가').length, 3, '두 섹션에 하나씩');
+  // 문서에 바뀐 글(누가: Claude)
+  await page.locator('ins.db-chg-ins', { hasText: '한 줄 추가' }).first().waitFor({ timeout: 8000 });
+  await page.locator(`.db-sec[data-key="${kA}"] .db-badge.chg`, { hasText: 'Claude' }).waitFor({ timeout: 6000 });
   await page.locator('.db-banner:not([hidden])', { hasText: 'Claude' }).waitFor();
+  // Claude 창: 서버 엔진·진행 로그
+  await page.locator('.db-claude').click();
+  await page.locator('.db-dock-state.ok', { hasText: '서버' }).waitFor({ timeout: 8000 });
+  await page.locator('.db-run[data-state="done"]').first().waitFor();
+  await page.locator('.db-runlog .db-ll.good', { hasText: '고침 —' }).first().waitFor();
+
+  // 4) 바뀐 곳 → 되돌리기(A): 그 섹션만 고치기 전 글로, 요청은 초안으로 — B 는 그대로
+  await cardBtn(cardA, '바뀐 곳').click();
+  await cardA.locator('.db-diffslot .db-dl.add', { hasText: '(고침) 한 줄 추가' }).waitFor();
+  await cardBtn(cardA, '되돌리기').click();
+  await page.locator('.db-toast', { hasText: '요청은 초안으로 돌아왔습니다' }).waitFor();
+  let after;
+  await until(async () => (after = await fs.readFile(file, 'utf8')).split('(고침) 한 줄 추가').length === 2, 6000);
+  const { core } = await import('../../server/core.mjs');
+  assert.equal(core.getSectionText(after, kA), core.getSectionText(orig, kA), 'A 는 고치기 전 글 그대로');
+  assert.equal(core.getSectionText(after, kB), core.getSectionText(mid, kB), 'B 는 Claude 가 고친 그대로');
+  assert.equal(after.replace(core.getSectionText(mid, kB), core.getSectionText(orig, kB)), orig, '되돌린 곳 말고는 한 글자도 그대로');
+  const ga = (await readFb()).find((x) => x.id === a.id);
+  assert.equal(ga.status, 'draft');
+  assert.ok(ga.result.reverted);
+  const ch = (await fs.readFile(path.join(dir, '.docbench/changes.jsonl'), 'utf8')).trim().split('\n').map((l) => JSON.parse(l)).at(-1);
+  assert.deepEqual([ch.by.kind, ch.sections, ch.feedbackIds], ['human', [kA], [a.id]], '되돌림도 이력에 — 사람이, 그 섹션');
+
+  // 5) 확인(B) → 끝남
+  await cardBtn(cardB, '확인').click();
+  await until(async () => (await readFb()).find((x) => x.id === b.id).status === 'resolved', 6000);
+  await page.locator('.db-tabs .tab-done').click();
+  await page.locator(`.db-card[data-id="${b.id}"].t-resolved`).waitFor();
   const st = await (await fetch(url + 'api/runs/status')).json();
   assert.equal(st.runner.kind, 'server');
+});
+
+test('Claude 검토(서버 엔진): 먼저 읽고 제안·질문을 볼 것에 → 제안 적용·질문 닫기 / 읽기 정리는 내 화면 접기만(문서 그대로)', async (t) => {
+  const page = await open(t, { hash: 'docs/설계-노트.md' });
+  const file = path.join(dir, 'docs/설계-노트.md');
+  const before = await fs.readFile(file, 'utf8');
+  await page.locator('.db-review-btn').click();
+  const dlg = page.locator('dialog[open]', { has: page.locator('.db-radios') });
+  await dlg.waitFor();
+  await dlg.locator('.db-sheet-act .db-btn.primary', { hasText: '부탁하기' }).click();
+  const done = page.locator('.db-toast', { hasText: 'Claude 검토 끝' });
+  await done.waitFor({ timeout: 15000 });
+  await done.getByRole('button', { name: '볼 것 보기' }).click();
+  assert.equal(await fs.readFile(file, 'utf8'), before, '검토는 문서를 바꾸지 않는다');
+  const sugg = page.locator('.db-card.r-suggest', { hasText: '한 줄 요약 더하기' });
+  const ques = page.locator('.db-card.r-question', { hasText: '기준이 무엇인가요?' });
+  await sugg.waitFor();
+  await ques.waitFor();
+  assert.match(await page.locator('.db-round', { hasText: 'Claude 검토' }).innerText(), /먼저 읽었습니다/, '회차 머리에 총평');
+  await sugg.locator('.db-prop .db-dl.add', { hasText: '(선제안) 요약 한 줄' }).waitFor();
+  await cardBtn(sugg, '적용').click();
+  await until(async () => (await fs.readFile(file, 'utf8')).includes('(선제안) 요약 한 줄'), 6000);
+  await cardBtn(ques, '닫기').click();
+  await until(async () => { const rows = (await readFb()).filter((f) => f.author.kind === 'assistant' && f.docId === 'docs/설계-노트.md'); return rows.length === 2 && rows.every((f) => f.status === 'resolved'); }, 6000);
+
+  // 읽기 정리: 문서는 그대로, 내 화면만 — 마지막 섹션 먼저, 나머지는 접고 안내 한 줄
+  const md = await fs.readFile(file, 'utf8');
+  await page.locator('.db-review-btn').click();
+  await dlg.waitFor();
+  await dlg.locator('input[value="view"]').check();
+  await dlg.locator('.db-sheet-act .db-btn.primary').click();
+  await page.locator('.db-toast', { hasText: '읽기 정리를 적용했습니다' }).waitFor({ timeout: 15000 });
+  await page.locator('.db-guide:not([hidden])', { hasText: '일정 부터 읽으세요.' }).waitFor();
+  assert.equal(await sec(page, '알림 서비스 설계 노트 › 배경').getAttribute('data-collapsed'), 'true');
+  assert.equal(await sec(page, '알림 서비스 설계 노트 › 일정').getAttribute('data-collapsed'), 'false');
+  assert.equal(await fs.readFile(file, 'utf8'), md, '읽기 정리는 문서를 바꾸지 않는다');
+  // 되돌리기 → 접기 전으로
+  await page.locator('.db-toast').getByRole('button', { name: '원래대로' }).click();
+  await until(async () => (await sec(page, '알림 서비스 설계 노트 › 배경').getAttribute('data-collapsed')) === 'false', 4000);
 });
 
 test('편집 중 다른 섹션이 바뀌면 최신본에 다시 적용, 같은 섹션이면 겹침 안내', async (t) => {
   const page = await open(t, { hash: 'docs/질의응답.md' });
   const key = '알림 서비스 질의응답 › 일정 › 언제 전환하나요?';
-  await page.locator('.db-seg button').last().click(); // 전부 펼치기
+  await depth(page).last().click(); // 전부 펼치기
   await sec(page, key).locator('> .db-sec-head').hover();
   await sec(page, key).locator('> .db-sec-head .db-act').nth(1).click();
   const area = page.locator('.db-editor textarea.db-ed-area');
@@ -204,7 +368,7 @@ test('<doc-bench> 요소: 대시보드 패널 높이를 채우고 긴 문서는 
     document.body.innerHTML = '<div id="panel" style="height:510px;display:flex;flex-direction:column"><h2 style="margin:0">문서</h2><doc-bench api="/api" doc="docs/질의응답.md" style="flex:1;min-height:0"></doc-bench></div>';
   });
   await page.waitForSelector('doc-bench .db-sec');
-  await page.locator('doc-bench .db-seg button').last().click();   // 전부 펼쳐 문서를 길게
+  await depth(page.locator('doc-bench')).last().click();   // 전부 펼쳐 문서를 길게
   const m = await page.evaluate(() => {
     const el = document.querySelector('doc-bench');
     const main = el.querySelector('.db-main');

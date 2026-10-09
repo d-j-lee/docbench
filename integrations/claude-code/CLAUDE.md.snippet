@@ -5,7 +5,7 @@
 이 폴더의 문서는 DocBench 화면(대시보드 패널·`docbench serve`·단일 HTML)에서 사람이 피드백을 단다. 피드백·변경 이력은 **기록 폴더**에 있다 — 기본은 문서 폴더 밖(기록 보관함), 예전·팀 공유 폴더는 문서 폴더 안 `.docbench/`. `docbench status` 가 어디인지 알려 준다.
 - 하던 일과 관계없으면 기록 폴더(`.docbench/` 포함)는 읽지도 고치지도 않는다 — 사람의 피드백·이력이다.
 
-- 사람이 "피드백 반영해" / "넘긴 거 처리해" 라고 하면 `/docbench-feedback` 스킬 순서를 따른다.
+- 사람이 "피드백 반영해" / "보낸 거 처리해" / "먼저 검토해 줘" 라고 하면 `/docbench-feedback` 스킬 순서를 따른다. 초안(`draft`)은 사람의 메모라 건드리지 않고, 결과는 사람의 "볼 것"으로 간다(닫지 않는다).
 - 문서를 고칠 때는 가능하면 `docbench doc write --section` 을 쓴다 (원래 인코딩·줄바꿈 유지, 바뀐 섹션이 화면에 표시됨). CP949·UTF-16 문서는 Edit 도구로 고치지 않는다.
 - 기록 폴더의 `feedback/*.json` 을 손으로 고치지 않는다. `docbench fb reply|propose` 를 쓴다 (판 번호 관리).
 - DocBench 를 붙이거나 갱신할 때는 `/docbench-setup`.

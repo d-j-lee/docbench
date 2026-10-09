@@ -5,8 +5,9 @@
  *     root: 'D:\\work\\proj',        // 이 탭이 보여 줄 폴더 (지금 프로젝트)
  *     key: '<앱 열쇠>',               // %LOCALAPPDATA%\docbench\app-token — 대시보드 백엔드가 읽어 넘긴다
  *     theme: 'dark',                 // 'auto' | 'light' | 'dark' — 바뀌면 bench.setTheme()
- *     onTodo: (c) => setBadge(c.owner + c.assistant),        // 탭 배지
- *     onHandoff: async (req) => { terminal.send(req.prompt); return { handled: true }; },  // "Claude 에게 넘기기"를 대시보드 터미널로
+ *     onTodo: (c) => setBadge(c.owner),                      // 탭 배지 — 볼 것(c.draft 초안 · c.assistant 보냄)
+ *     onHandoff: async (req) => { terminal.send(req.command || req.prompt); return { handled: true }; },
+ *       // 보내기를 대시보드 터미널로 — req.command = 셸 한 줄(설치 없이 새 Claude Code), req.prompt = 이미 켜진 Claude 대화에 넣을 한 줄(플러그인)
  *     onEvent: (ev) => console.log(ev),
  *   });
  *
@@ -40,9 +41,9 @@
       if (d.type === 'hello') post({ type: 'init', theme: theme, handoff: typeof o.onHandoff === 'function', view: o.view || null, tokens: o.tokens || null });
       else if (d.type === 'event') {
         if (o.onEvent) o.onEvent(d.event);
-        if (d.event && d.event.type === 'todo' && o.onTodo) o.onTodo({ owner: d.event.owner, assistant: d.event.assistant });
+        if (d.event && d.event.type === 'todo' && o.onTodo) o.onTodo({ owner: d.event.owner, assistant: d.event.assistant, draft: d.event.draft || 0 });
       } else if (d.type === 'handoff') {
-        Promise.resolve(o.onHandoff ? o.onHandoff({ feedbackIds: d.feedbackIds, docs: d.docs, prompt: d.prompt }) : { handled: false }).then(
+        Promise.resolve(o.onHandoff ? o.onHandoff({ feedbackIds: d.feedbackIds, docs: d.docs, prompt: d.prompt, command: typeof d.command === 'string' ? d.command : undefined }) : { handled: false }).then(
           function (r) { post({ type: 'handoff:result', id: d.id, handled: !!(r && r.handled), message: r && r.message }); },
           function (err) { post({ type: 'handoff:result', id: d.id, handled: false, message: String((err && err.message) || err) }); });
       }

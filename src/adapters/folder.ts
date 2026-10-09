@@ -11,7 +11,7 @@
  * 서버와 다른 점 (브라우저라서):
  *  - 감시 대신 몇 초마다 확인한다(탭이 보일 때만).
  *  - 잠금 파일을 O_EXCL 로 못 만든다 → "없으면 쓰고 되읽어 내 것인지 확인" 후, 쓰기 직전에 판을 한 번 더 비교한다.
- *  - AI 제안(헤드리스 claude)·git 커밋본 비교는 없다. "넘기기"는 요청함 파일만 남긴다.
+ *  - AI 제안(헤드리스 claude)·git 커밋본 비교는 없다. Claude 는 이 PC 의 앱(요청 파일) 또는 터미널 한 줄(결과 파일을 이 화면이 반영, D76).
  */
 import {
   DocConflictError, DocReadOnlyError, FeedbackConflictError,
@@ -27,8 +27,10 @@ import {
   looksBigRoot, toTreeEntries, SCAN_LIMITS, TREE_MAX,
 } from '../core/workspace';
 import { FsReadOnlyError, subFs, type FsEntry, type FsLike, type FsStat } from './folder-fs';
-import { cleanRunEntry, completeJsonLines, liveRunners, makeRunRequest, pickRunner, runnerAlive, runFiles, validRunId } from '../core/runs';
-import type { RunsAdapter, RunStatus, RunnerInfo, RunLogLine } from '../types';
+import { cleanRunEntry, completeJsonLines, liveRunners, outdatedRunners, runnerIsMine, makeRunRequest, pickRunner, runnerAlive, runFiles, validRunId, normalizeRunInput, buildRunPrompt, buildReviewPrompt, TERMINAL_RUNNER, isTerminalRunner, validDocId, RUN_MAX_DOCS, emptySummary, safeAccountId } from '../core/runs';
+import { buildRunContext, buildReviewContext, applyRunOutput, applyReviewOutput, failUnreadable, type ApplyHost } from '../core/apply';
+import { ROOM_FILES, ROOM_MARK, INBOX_RE, roomSettingsWritable, terminalStep, parseResultText, RESULT_SETTLE_MS, roomClaudeMd, roomSettings, roomInstructionsSeed, standingInstructions, terminalPromptFile, terminalCommands } from '../core/room';
+import type { FeedbackPatch, TerminalHandoff, RunsAdapter, RunStatus, RunSummary, RunnerInfo, RunLogLine, RunStartInput } from '../types';
 
 /** 기록 폴더를 붙일 때 (처음 쓸 때 고르거나, 기억한 자리를 조용히) */
 export interface DataAttach {
@@ -632,14 +634,14 @@ export class FolderWorkspace {
     await this.writeJson(this.fbPath(id), f);
     return f;
   }
-  async updateFeedback(id: string, patch: Partial<Feedback>, version?: number): Promise<Feedback> {
+  async updateFeedback(id: string, patch: FeedbackPatch, version?: number): Promise<Feedback> {
     if (!this.writable) throw new FsReadOnlyError();
     this.fbPath(id);
     await this.ensureData();
     return this.withLock(lockKey.feedback(id), async () => {
       const cur = await this.getFeedback(id);
       if (version != null && cur.version != null && version !== cur.version) throw new FeedbackConflictError(cur);
-      const { id: _i, createdAt: _c, version: _v, ...rest } = patch || {};
+      const { id: _i, createdAt: _c, version: _v, ...rest } = (patch || {}) as FeedbackPatch & { id?: string; createdAt?: string };
       const next = normalizeFeedback({ ...cur, ...rest, version: (cur.version || 1) + 1, updatedAt: new Date().toISOString() } as never, id);
       // 잠금이 최선 노력이라 쓰기 직전에 다시 본다 — 그 사이 CLI 가 회신했으면 덮지 않는다
       const again = await this.getFeedback(id);
@@ -687,6 +689,39 @@ export class FolderWorkspace {
     }
     return out;
   }
+  // ------------------------------------------------------------ Claude 자리 · 터미널 Claude (설치 없음, D76)
+  /** 기록 폴더를 Claude 의 자리로 — CLAUDE.md·.claude/settings.json·instructions.md (DocBench 가 만든 것만 고쳐 쓴다) */
+  async ensureRoom(locale?: 'ko' | 'en'): Promise<void> {
+    if (!this.writable) return;
+    const data = await this.ensureData();
+    await this.withLock(lockKey.room, async () => {
+      const info = { docsName: this.fs.name, inside: this.dataMode === 'inside', locale };
+      const md = await this.readText(ROOM_FILES.claudeMd);
+      const nextMd = roomClaudeMd(info);
+      if (md == null || (md.startsWith(ROOM_MARK) && md !== nextMd)) await data.write(ROOM_FILES.claudeMd, nextMd);
+      const st = await this.readJson<Record<string, unknown> | null>(ROOM_FILES.settings, null);
+      const nextS = roomSettings(info);
+      if (roomSettingsWritable(st, (await data.stat(ROOM_FILES.settings).catch(() => null)) != null, false, nextS)) await data.write(ROOM_FILES.settings, nextS);
+      if ((await this.readText(ROOM_FILES.instructions)) == null) await data.write(ROOM_FILES.instructions, roomInstructionsSeed(locale));
+    });
+  }
+  async standing(): Promise<string> { return this.data ? standingInstructions(await this.readText(ROOM_FILES.instructions)) : ''; }
+  async saveStanding(text: string, locale?: 'ko' | 'en'): Promise<void> {
+    const data = await this.ensureData();
+    const body = String(text || '').replace(/\r\n?/g, '\n').slice(0, 4000).trim();
+    await this.withLock(lockKey.room, () => data.write(ROOM_FILES.instructions, roomInstructionsSeed(locale) + (body ? body + '\n' : '')));
+  }
+  async writeRunFile(name: string, text: string): Promise<void> { await (await this.ensureData()).write(`${P.runs}/${name}`, text); }
+  async readRunText(name: string): Promise<string | null> { return this.data ? this.readText(`${P.runs}/${name}`) : null; }
+  async listRunNames(): Promise<string[]> { return this.data ? ((await this.data.list(P.runs).catch(() => null)) || []).filter((n) => n.kind === 'file').map((n) => n.name) : []; }
+  async removeRunFile(name: string): Promise<void> { if (this.data) await this.data.remove(`${P.runs}/${name}`).catch(() => undefined); }
+  /** 터미널 요청의 상태·로그 — 이 요청은 반영하는 쪽(같은 계정의 화면·앱)이 주인이다. 잠금(lockKey.run) 안에서 부른다 */
+  async writeRunStatus(st: RunStatus): Promise<void> { await this.writeJson(`${P.runs}/${runFiles(st.id).status}`, st); }
+  async appendRunLog(id: string, line: Omit<RunLogLine, 'at'>): Promise<void> {
+    const data = await this.ensureData();
+    await data.append(`${P.runs}/${runFiles(id).log}`, JSON.stringify({ at: new Date().toISOString(), ...line }) + '\n');
+  }
+
   async runLog(id: string, from = 0): Promise<{ lines: RunLogLine[]; next: number }> {
     if (!validRunId(id)) throw new FolderError('BAD_REQUEST', '잘못된 작업 id');
     const f = this.data ? await this.data.read(`${P.runs}/${runFiles(id).log}`).catch(() => null) : null;
@@ -878,15 +913,153 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
   const notifyOn = ws.writable && ws.config.notify?.inbox !== false;
   let chosenRunner: string | null = null;
   const runsStatus = async () => {
-    const list = liveRunners(await ws.listRunners());
+    const raw = await ws.listRunners();
+    const list = liveRunners(raw);
     const r = pickRunner(list, { me: ws.userName, meId: ws.me.id, chosen: chosenRunner });
     const others = list.filter((x) => x.id !== r?.id);
     if (!ws.writable) return { available: false, reason: 'read-only' as const, others };
+    // 내 앱이 켜져 있는데 예전 판이면 "없음"이 아니라 "새 판으로" — 반영 규칙(초안·볼 것)이 달라 맡기지 않는다
+    const old = !r ? outdatedRunners(raw).find((x) => runnerIsMine(x, { meId: ws.me.id })) : undefined;
+    if (old) return { available: false, reason: 'old-runner' as const, runner: old, others };
     // 짝짓지 않은(계정·이름이 다른) 앱·실행기만 켜져 있으면 저절로 맡기지 않는다 — 내 PC 의 것이면 사람이 고른다(D54·D63)
     if (!r) return { available: false, reason: (others.some((x) => x.kind !== 'server') ? 'not-mine' : 'no-runner') as 'not-mine' | 'no-runner', others };
     if (!r.claude?.ok) return { available: false, reason: (r.claude?.reason || 'no-claude') as 'no-claude' | 'old-claude', message: r.claude?.problem, runner: r, others };
     return { available: true, runner: r, others };
   };
+  const actor: Person = { kind: 'assistant', name: ws.config.assistantName || 'Claude' };
+  /** 반영 규칙(core/apply.ts)에 줄 이 폴더 — 로그는 그 요청의 로그 파일로 */
+  const applyHost = (runId: string): ApplyHost => ({
+    readDoc: (id) => ws.readDoc(id),
+    writeDoc: async (id, md, o2) => { const r = await ws.writeDoc(id, md, o2); fire({ type: 'changes' }); return r; },
+    getFeedback: (id) => ws.getFeedback(id),
+    updateFeedback: async (id, patch, v) => { const r = await ws.updateFeedback(id, patch, v); fire({ type: 'feedback' }); return r; },
+    createFeedback: async (input) => { const r = await ws.createFeedback(input as never); fire({ type: 'feedback' }); return r; },
+    titleOf: (id) => ws.titleOf(id),
+    standing: () => ws.standing(),
+    log: (l) => ws.appendRunLog(runId, l),
+    emit: (e) => fire(e as DocEvent),
+  });
+  let picking = false;
+  /**
+   * 터미널 Claude 가 남긴 결과 파일을 반영한다 — 내 계정의 요청(<id>.result.json)과 스스로 올린 제안(inbox-*.result.json).
+   * 이 PC 의 앱도 같은 파일을 볼 수 있어 잠금 안에서 상태를 다시 보고 한 번만.
+   */
+  const pickupTerminal = async () => {
+    if (picking || !ws.writable || !ws.data) return;
+    picking = true;
+    try {
+      const names = await ws.listRunNames();
+      const me = safeAccountId(ws.me.id) || 'me';
+      // 결과를 기다리는 터미널 요청 중 멈춘 것·다른 길로 이미 처리된 것은 닫는다(화면이 "기다리는 중"에 붙잡히지 않게)
+      for (const n of names) {
+        if (!n.endsWith('.req.json')) continue;
+        const id = n.slice(0, -'.req.json'.length);
+        const f = runFiles(id);
+        if (!validRunId(id) || names.includes(f.status) || names.includes(f.result)) continue;
+        const raw = await ws.readJson<Record<string, unknown> | null>(`${P.runs}/${n}`, null);
+        if (!raw || raw.runner !== TERMINAL_RUNNER + ':' + me) continue;
+        const canceled = names.includes(f.cancel);
+        const ids = Array.isArray(raw.feedbackIds) ? raw.feedbackIds.filter((x): x is string => typeof x === 'string') : [];
+        let elsewhere = false;
+        if (!canceled && ids.length) {
+          const rows = await Promise.all(ids.map((x) => ws.getFeedback(x).catch(() => null)));
+          elsewhere = rows.every((r) => !r || r.status !== 'open' || r.waitingOn !== 'assistant');
+        }
+        if (!canceled && !elsewhere) continue;
+        await ws.withLock(lockKey.run(id), async () => {
+          if (await ws.readJson(`${P.runs}/${f.status}`, null)) return;
+          const st = cleanRunEntry(raw, id, 'queued');
+          if (!st) return;
+          if (elsewhere) await applyHost(id).log({ k: 'terminal.elsewhere' });
+          await ws.writeRunStatus({ ...st, state: canceled ? 'canceled' : 'done', endedAt: new Date().toISOString(), ...(elsewhere ? { summary: { ...emptySummary(), skipped: ids.length } } : {}) });
+          fire({ type: 'runs', id });
+        }).catch((e) => console.warn('DocBench: terminal close', id, e));
+      }
+      for (const n of names) {
+        if (!n.endsWith('.result.json')) continue;
+        if (INBOX_RE.test(n)) { await applyInbox(n).catch((e) => console.warn('DocBench: inbox', n, e)); continue; }
+        const id = n.slice(0, -'.result.json'.length);
+        if (!validRunId(id)) continue;
+        const f = runFiles(id);
+        const raw = await ws.readJson<Record<string, unknown> | null>(`${P.runs}/${f.req}`, null);
+        if (!raw || !isTerminalRunner(raw.runner) || raw.runner !== TERMINAL_RUNNER + ':' + me) continue;
+        await ws.withLock(lockKey.run(id), async () => {
+          const cur = await ws.readJson<RunStatus | null>(`${P.runs}/${f.status}`, null);
+          const step = terminalStep(cur, (await ws.listRunNames()).includes(f.cancel));
+          if (step === 'skip') return;
+          if (step === 'apply') { await applyTerminal(id, raw); return; }
+          // 서버(server/runs.mjs pickupResults)와 같은 규칙: 멈춤 요청이 있으면 반영하지 않고 닫고, 반영 중에 멈춘 것은 실패로
+          const base = cur || cleanRunEntry(raw, id, 'queued');
+          if (!base) return;
+          const error = step === 'stale' ? (en ? 'Stopped while applying — check what you sent and send again.' : '반영 중에 멈췄습니다 — 보낸 것을 확인하고 다시 보내 주세요') : undefined;
+          if (error) await applyHost(id).log({ k: 'error', v: { message: error } }).catch(() => undefined);
+          await ws.writeRunStatus({ ...base, state: step === 'cancel' ? 'canceled' : 'failed', endedAt: new Date().toISOString(), progress: undefined, ...(error ? { error } : {}) });
+          fire({ type: 'runs', id });
+        }).catch((e) => console.warn('DocBench: terminal result', id, e));
+      }
+    } finally { picking = false; }
+  };
+  const parseResult = parseResultText;
+  /** 결과 파일이 막 쓰였나 — 아직 JSON 이 아니면 잠깐 기다린다(쓰는 중) */
+  const fresh = async (name: string) => { const st = await ws.data?.stat(`${P.runs}/${name}`).catch(() => null); return !!st && Date.now() - st.mtimeMs < RESULT_SETTLE_MS; };
+  const applyTerminal = async (id: string, raw: Record<string, unknown>) => {
+    const f = runFiles(id);
+    let req: RunStatus & RunStartInput;
+    try { req = { ...cleanRunEntry(raw, id, 'queued')!, ...normalizeRunInput(raw), id, runner: String(raw.runner) } as RunStatus & RunStartInput; } catch (e) { console.warn('DocBench: terminal request', id, e); return; }
+    const saved = parseResult(await ws.readRunText(f.ctx)) as { ctx?: unknown } | null;
+    const t0 = Date.now();
+    const payload = parseResult(await ws.readRunText(f.result));
+    if (!payload && (await fresh(f.result))) return;   // 쓰는 중 — 상태를 쓰지 않고 다음에 다시
+    const st: RunStatus = { ...req, state: 'running', startedAt: new Date().toISOString(), progress: { phase: 'applying', at: new Date().toISOString() } };
+    await ws.writeRunStatus(st);
+    const host = applyHost(id);
+    await host.log({ k: 'terminal' });
+    if (!payload || !saved?.ctx) {
+      const error = !saved?.ctx ? (en ? 'The request context file is missing.' : '요청의 맥락 파일이 없어 반영하지 못했습니다') : (en ? 'The result file is not valid JSON.' : '결과 파일이 정해진 모양(JSON)이 아닙니다');
+      await host.log({ k: 'error', v: { message: error } });
+      await ws.writeRunStatus({ ...st, state: 'failed', endedAt: new Date().toISOString(), progress: undefined, error });
+      fire({ type: 'runs', id });
+      return;
+    }
+    let r: { summary: RunSummary; extra: Partial<RunStatus> };
+    try {
+      r = req.kind === 'review'
+        ? await applyReviewOutput(host, req, saved.ctx as never, payload, actor).then((x) => ({ summary: x.summary, extra: { overview: x.overview || undefined, created: x.created, view: x.view.length ? x.view : undefined } }))
+        : await applyRunOutput(host, req, saved.ctx as never, payload, actor).then((x) => ({ summary: x.summary, extra: { overview: x.overview || undefined } }));
+    } catch (e) {
+      // "반영 중"에 멈춰 있지 않게 — 실패로 남기면 보낸 것은 그대로(다시 보낼 수 있다)
+      const error = String((e as Error)?.message || e).slice(0, 300);
+      await host.log({ k: 'error', v: { message: error } }).catch(() => undefined);
+      await ws.writeRunStatus({ ...st, state: 'failed', endedAt: new Date().toISOString(), progress: undefined, error });
+      fire({ type: 'runs', id });
+      return;
+    }
+    await host.log({ k: 'done', v: { ms: Date.now() - t0, ...r.summary } });
+    await ws.writeRunStatus({ ...st, ...r.extra, state: 'done', endedAt: new Date().toISOString(), progress: undefined, summary: r.summary });
+    fire({ type: 'runs', id });
+  };
+  const applyInbox = async (name: string) => {
+    await ws.withLock(lockKey.run(name), async () => {
+      const payload = parseResult(await ws.readRunText(name)) as { items?: unknown[] } | null;
+      // 쓰는 중이면 다음에 · 오래도록 모양이 아니면 치운다(계속 집지 않게)
+      if (!payload) { if (!(await fresh(name))) await ws.removeRunFile(name); return; }
+      const docIds = [...new Set((Array.isArray(payload.items) ? payload.items : []).map((x) => (x as { docId?: unknown })?.docId).filter(validDocId))].slice(0, RUN_MAX_DOCS);
+      // 반영하기 전에 치운다 — 도중에 꺼져도 같은 제안을 두 번 올리지 않게(내용은 이미 읽었다). 문서를 가리키지 않으면 반영할 것도 없다
+      await ws.removeRunFile(name);
+      if (!docIds.length) return;
+      const req = { ...makeRunRequest({ kind: 'review', feedbackIds: [], docIds, goal: 'suggest' }, { runner: TERMINAL_RUNNER + ':' + (safeAccountId(ws.me.id) || 'me'), by: actor }), docIds };
+      await ws.writeJson(`${P.runs}/${runFiles(req.id).req}`, req);
+      const host = applyHost(req.id);
+      const { ctx } = await buildReviewContext(host, req, { root: fs.name });
+      await host.log({ k: 'terminal' });
+      const x = await applyReviewOutput(host, req, ctx, payload, actor);
+      await host.log({ k: 'done', v: { ms: 0, ...x.summary } });
+      await ws.writeRunStatus({ ...req, state: 'done', startedAt: req.at, endedAt: new Date().toISOString(), summary: x.summary, overview: x.overview || undefined, created: x.created });
+      fire({ type: 'runs', id: req.id });
+    });
+  };
+  /** 터미널 안내 — 기록 자리 이름(안쪽이면 "<문서 폴더>/.docbench")·보관함·칠 줄(새 대화·이어서) */
+  const termHandoff = (r: { id: string; model?: string; effort?: string }): TerminalHandoff => ({ roomName: ws.dataLabel, homeName: ws.dataHomeName, ...terminalCommands({ id: r.id, model: r.model, effort: r.effort, locale: en ? 'en' : 'ko' }) });
   const runs: RunsAdapter = {
     status: runsStatus,
     async start(input) {
@@ -903,8 +1076,35 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
       await (await ws.ensureData()).write(`${P.runs}/${runFiles(id).cancel}`, new Date().toISOString());
       fire({ type: 'runs', id });
     },
-    list: (limit) => ws.listRuns(limit),
+    // 기다리는 터미널 요청에는 칠 한 줄을 이 화면이 아는 것(기록 자리)으로 붙인다 — 다시 열어도 안내가 맞게. 함께 쓰는 파일에서 읽지 않는다
+    list: async (limit) => {
+      await pickupTerminal().catch(() => undefined);
+      const rows = await ws.listRuns(limit);
+      return rows.map((r) => (r.state === 'queued' && isTerminalRunner(r.runner) && ws.hasData ? { ...r, terminal: termHandoff(r) } : r));
+    },
     log: (id, from) => ws.runLog(id, from),
+    async startTerminal(input) {
+      await ws.ensureData();
+      const locale = en ? 'en' as const : 'ko' as const;
+      const owner = safeAccountId(ws.me.id) || 'me';
+      const req = makeRunRequest(input, { runner: TERMINAL_RUNNER + ':' + owner, by: ws.me });
+      const host = applyHost(req.id);
+      // 터미널 Claude 는 문서 폴더의 경로를 모른다 — 고칠 글은 프롬프트 안에 다 넣는다
+      const prep = req.kind === 'review' ? await buildReviewContext(host, req, { root: fs.name }) : await buildRunContext(host, req, { root: fs.name, inline: true });
+      const ctx = prep.ctx;
+      const empty = req.kind === 'review' ? !(ctx as { docs: unknown[] }).docs.length : !(ctx as { items: unknown[] }).items.length;
+      if (empty) throw new FolderError('BAD_REQUEST', en ? 'Nothing to hand over (already closed or the document could not be read).' : '처리할 것이 없습니다(이미 닫혔거나 문서를 읽지 못함).');
+      const prompt = req.kind === 'review' ? buildReviewPrompt(ctx as never) : buildRunPrompt(ctx as never);
+      await ws.ensureRoom(locale);
+      const f = runFiles(req.id);
+      await ws.writeRunFile(f.ctx, JSON.stringify({ req, ctx }));
+      await ws.writeRunFile(f.prompt, terminalPromptFile(req.id, req, prompt, locale, { noFolder: true }));
+      await ws.writeJson(`${P.runs}/${f.req}`, req);
+      // 문서를 읽지 못해 뺀 것은 볼 것에 못 함으로 — 요청을 만든 뒤(만들지 못하면 화면이 모두 초안으로 되돌린다)
+      if (req.kind !== 'review') await failUnreadable(host, req, prep.skipped);
+      fire({ type: 'runs', id: req.id });
+      return { ...req, state: 'queued' as const, terminal: termHandoff(req) };
+    },
     choose(id) { chosenRunner = id || null; },
     prepare: async () => { await ws.ensureData(); },
   };
@@ -951,6 +1151,7 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
       mode: () => 'poll',
     },
     viewState: { load: () => ws.viewState(), save: (s) => ws.saveViewState(s) },
+    instructions: ws.writable ? { load: () => ws.standing(), save: async (text) => { await ws.saveStanding(text, en ? 'en' : 'ko'); await ws.ensureRoom(en ? 'en' : 'ko'); } } : undefined,
     identity: {
       source: 'browser',
       me: async () => ws.me,
@@ -965,7 +1166,7 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
       },
     },
     notifier: notifyOn ? {
-      label: (ws.config.assistantName || 'Claude') + (en ? '' : '에게 넘기기'),
+      label: en ? 'Request inbox (/docbench-feedback)' : '요청함 (/docbench-feedback)',
       async send(s) {
         await ws.addRequest({ count: s.count, docs: s.docs, feedbackIds: s.feedbackIds });
         return { delivered: false, queued: true, message: ws.config.notify?.message || undefined };

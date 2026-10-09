@@ -84,6 +84,12 @@ test('피드백 REST 와 판 충돌', async (t) => {
   assert.equal(stale.status, 409);
   assert.equal(stale.data.current.status, 'resolved');
   assert.equal((await api('GET', '/feedback')).data.items.length, 1);
+  // null = 그 값을 지운다(★ 끄기·바꿀 글 지우기) — JSON 에서 undefined 는 사라져 지울 수 없다
+  const s1 = await api('PATCH', '/feedback/' + c.data.id, { patch: { severity: 'high', suggestion: '새 글' }, version: 2 });
+  assert.deepEqual([s1.data.severity, s1.data.suggestion], ['high', '새 글']);
+  const s2 = await api('PATCH', '/feedback/' + c.data.id, { patch: { severity: null, suggestion: null }, version: 3 });
+  assert.equal(s2.status, 200);
+  assert.deepEqual([s2.data.severity, s2.data.suggestion, s2.data.body], [undefined, undefined, '안내 보강']);
   assert.equal((await api('DELETE', '/feedback/' + c.data.id)).status, 204);
 });
 

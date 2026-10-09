@@ -3,7 +3,7 @@
 이 PC 에 켜 둔 DocBench 앱을 대시보드의 탭에 끼우는 가장 작은 예다(의존성 없음, Node 20+). 자세한 설명은 [docs/PORTING.md §2](../../docs/PORTING.md#2-앱-탭-권장).
 
 - `server.mjs` — 대시보드 백엔드 흉내. 이 PC 의 설정 폴더에서 앱 주소(`app.json`)와 열쇠(`app-token`)를 읽어 페이지에 넣는다. 앱이 답하는지·이 출처를 허용했는지도 본다.
-- `index.html` — 대시보드 페이지. 앱의 `host.js` 를 싣고 폴더마다 탭을 만들어 `DocBenchHost.mount(…)` 한다. 배지(`onTodo`), 테마(`setTheme`), 넘기기(`onHandoff` → 오른쪽 "터미널"), 이벤트(`onEvent`)를 보여 준다.
+- `index.html` — 대시보드 페이지. 앱의 `host.js` 를 싣고 폴더마다 탭을 만들어 `DocBenchHost.mount(…)` 한다. 배지(`onTodo`), 테마(`setTheme`), 보내기(`onHandoff` → 오른쪽 "터미널" — 셸 한 줄 `command` 또는 켜진 Claude 대화용 `prompt`), 이벤트(`onEvent`)를 보여 준다.
 
 ## 세 단계
 
@@ -18,7 +18,7 @@ node examples\dashboard-tab\server.mjs D:\work\docs D:\work\spec    # 3) 폴더 
 포트를 바꾸려면 `--port <번호>` — 그 출처를 2) 에서 허용한다. 끝나면 `node bin\docbench.mjs app --stop`.
 
 - 탭으로 연 폴더는 앱의 작업 공간이 된다(`app --status` 에 보인다). 기록은 문서 폴더 밖 기록 보관함에 생기고 문서 폴더에는 아무것도 생기지 않는다. 앱 화면(`app --open`)의 "목록에서 빼기"로 뺀다(기록은 남는다).
-- "넘기기를 이 대시보드 터미널로"를 끄면 `onHandoff` 가 `{ handled: false }` 를 돌려주고, 작업대가 앱의 Claude 작업 창을 연다.
+- "보내기를 이 대시보드 터미널로"를 끄면 `onHandoff` 가 `{ handled: false }` 를 돌려주고, 작업대가 스스로 처리한다(앱의 Claude 작업).
 
 ## 다른 언어로 옮길 때
 

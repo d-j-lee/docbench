@@ -2,7 +2,7 @@
  * 문서 한 장 — 머리·도구줄·본문, 접기·이름표·찾기, 피드백 앵커, 바뀐 섹션, 목차.
  */
 import type { ChangeEntry, DocContent, Feedback } from '../types';
-import { diffSections, sectionSources, KEY_SEP, type SectionDiff } from '../core/source';
+import { diffSections, sectionSources, getSectionText, KEY_SEP, type SectionDiff } from '../core/source';
 import { locate, makeSelector } from '../core/selectors';
 import { norm } from '../core/markdown';
 import { turnOf, countTurns } from '../core/feedback';
@@ -37,7 +37,7 @@ export class DocView {
   private textCache = new Map<string, string>();
   private outlineBtns = new Map<string, HTMLElement>();
   private cleanup: (() => void)[] = [];
-  private els: { head?: HTMLElement; toolbar?: HTMLElement; banner?: HTMLElement; busy?: HTMLElement; fresh?: HTMLElement; diffSlot?: HTMLElement; orphans?: HTMLElement; stats?: HTMLElement; seg?: HTMLElement; chips?: HTMLElement; find?: HTMLInputElement; findCnt?: HTMLElement } = {};
+  private els: { head?: HTMLElement; toolbar?: HTMLElement; banner?: HTMLElement; busy?: HTMLElement; fresh?: HTMLElement; diffSlot?: HTMLElement; orphans?: HTMLElement; guide?: HTMLElement; stats?: HTMLElement; seg?: HTMLElement; chips?: HTMLElement; find?: HTMLInputElement; findCnt?: HTMLElement } = {};
   private destroyed = false;
 
   constructor(app: App, id: string) {
@@ -76,9 +76,11 @@ export class DocView {
     const st = this.app.docState(this.id);
     const since = compareFrom || (st.lastSeen && st.lastSeen !== this.content.version ? st.lastSeen : null);
     if (since) await this.showChangedSince(since, !!compareFrom);
-    st.lastSeen = this.content.version;
+    // 본 판은 "확인"을 눌러야 넘어간다 — 다시 열거나 새로 고쳐도 바뀐 것 표시가 사라지지 않게
+    if (compareFrom) { if (!st.lastSeen) st.lastSeen = this.content.version; } else this.markSeen(this.content.version);
     this.app.changedDocs.delete(this.id);
     this.app.saveState();
+    this.showGuide();
     this.bindScroll();
     this.bindSelection();
     return true;
@@ -93,7 +95,8 @@ export class DocView {
     this.els.banner = h('div', { class: 'db-banner', hidden: true });
     this.els.diffSlot = h('div', { class: 'db-diffslot' });
     this.els.orphans = h('div', { class: 'db-orphans', hidden: true });
-    page.append(this.els.busy, this.els.banner, this.els.diffSlot, this.els.orphans);
+    this.els.guide = h('div', { class: 'db-guide', hidden: true });
+    page.append(this.els.busy, this.els.banner, this.els.diffSlot, this.els.guide, this.els.orphans);
     this.renderBusy();
     this.renderBody();
     page.append(this.article);
@@ -158,6 +161,9 @@ export class DocView {
       }).catch(() => tb.querySelector('.db-btn.sm')?.remove());
     }
     if (this.canEdit()) tb.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => this.openEditor(null), html: icon('edit') }, this.t('doc.editAll')));
+    // 양방향: 내가 다 읽기 전에 Claude 에게 먼저 — 제안·질문 받기, 읽기 정리(접기·먼저 볼 곳)
+    if (this.app.canReview()) tb.append(h('button', { class: 'db-btn sm db-review-btn', type: 'button', title: this.t('review.btn.hint'), onclick: () => void this.app.reviewMenu(), html: icon('spark') }, this.t('review.btn')));
+    if (this.app.can('feedback.create')) tb.append(h('button', { class: 'db-btn sm', type: 'button', title: this.t('doc.feedback.whole.hint'), onclick: (e: Event) => this.app.composer.open({ docId: this.id, whole: true }, e.currentTarget as HTMLElement), html: icon('chat') }, this.t('doc.feedback.whole')));
     this.els.stats = h('span', { class: 'db-stats' });
     tb.append(this.els.stats);
     return tb;
@@ -179,7 +185,7 @@ export class DocView {
       s.head.querySelector('.db-caret')!.addEventListener('click', () => this.toggle(s));
       s.heading.addEventListener('dblclick', () => this.toggle(s));
       const acts = s.head.querySelector('.db-sec-acts')!;
-      if (this.app.can('feedback.create')) acts.append(h('button', { class: 'db-act', type: 'button', title: this.t('doc.feedback'), onclick: (e: Event) => { e.stopPropagation(); this.app.dialogs.compose({ docId: this.id, sec: s }); }, html: icon('chat') }, this.t('doc.feedback')));
+      if (this.app.can('feedback.create')) acts.append(h('button', { class: 'db-act', type: 'button', title: this.t('doc.feedback'), onclick: (e: Event) => { e.stopPropagation(); this.app.composer.open({ docId: this.id, sec: s }, s.head); }, html: icon('chat') }, this.t('doc.feedback')));
       if (this.canEdit()) acts.append(h('button', { class: 'db-act', type: 'button', title: this.t('doc.edit'), onclick: (e: Event) => { e.stopPropagation(); this.openEditor(s); }, html: icon('edit') }, this.t('doc.edit')));
     }
     // 깊이 버튼
@@ -279,13 +285,12 @@ export class DocView {
       const prev = this.content;
       // 이미 보여 주던 바뀜이 있으면 그 기준(마지막으로 본 판)을 지킨다 — 두 번 바뀌어도 "본 뒤로 바뀐 것" 전부가 보이게
       if (!this.changed || this.changedOldMd == null) { this.changedFrom = prev.version; this.changedOldMd = prev.md; }
-      this.changed = diffSections(this.changedOldMd, fresh.md);
+      this.changed = this.dropAcked(diffSections(this.changedOldMd, fresh.md), fresh.md);
       this.rerender(fresh);
-      this.app.docState(this.id).lastSeen = fresh.version;
-      this.app.saveState();
+      this.markSeen(fresh.version);
       await this.loadChangeInfo();
       this.showBanner();
-      this.app.toast(this.t('doc.reloaded'));
+      this.app.toast(this.t('doc.reloaded'), { weak: true });
     } catch { /* 다음 이벤트 때 다시 */ }
   }
 
@@ -323,7 +328,7 @@ export class DocView {
     let old: DocContent | null = null;
     try { old = await this.app.ad.docs.loadVersion(this.id, version); } catch { old = null; }
     if (!old || this.destroyed) return;
-    this.changed = diffSections(old.md, this.content.md);
+    this.changed = this.dropAcked(diffSections(old.md, this.content.md), this.content.md);
     this.changedFrom = version;
     this.changedOldMd = old.md;
     this.markChanged();
@@ -433,10 +438,97 @@ export class DocView {
     this.textCache.clear();
     this.updateBadges();
     this.els.diffSlot!.replaceChildren();
+    this.markSeen(this.content.version);
     this.app.renderRail();
   }
 
-  private showBanner(oldMd?: string): void {
+  /** 아직 확인하지 않은 바뀜이 있으나 */
+  private pendingChanges(): boolean {
+    const c = this.changed;
+    return !!c && this.changedOldMd != null && (c.changed.length + c.added.length + c.removed.length + (c.preamble ? 1 : 0)) > 0;
+  }
+  /** 섹션 글의 지문(확인한 섹션을 다시 열어도 기억 — 글이 또 바뀌면 지문이 달라 다시 보인다) */
+  private static mark(md: string, key: string): string {
+    const s = getSectionText(md, key) ?? '';
+    let x = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 0x01000193) >>> 0; }
+    return s.length.toString(36) + '.' + x.toString(36);
+  }
+  /** 하나씩 확인한 섹션(그 뒤로 그대로인 것)은 바뀐 표시에서 뺀다 */
+  private dropAcked(d: SectionDiff, md: string): SectionDiff {
+    const acked = this.app.docState(this.id).acked;
+    if (!acked) return d;
+    const keep = (ks: string[]) => ks.filter((k) => acked[k] == null || acked[k] !== DocView.mark(md, k));
+    return { ...d, changed: keep(d.changed), added: keep(d.added) };
+  }
+  /** 아직 확인하지 않은 바뀐 섹션 키 — 읽기 정리가 이 섹션(과 그 위 섹션)은 접지 않는다 */
+  changedKeys(): string[] {
+    return this.pendingChanges() && this.changed ? [...this.changed.changed, ...this.changed.added] : [];
+  }
+  /** 본 판 적기 — 확인 전의 바뀜이 있으면 그 기준(마지막으로 확인한 판)을 지킨다 */
+  markSeen(version: string): void {
+    const st = this.app.docState(this.id);
+    const pending = this.pendingChanges() && this.changedFrom;
+    st.lastSeen = pending ? this.changedFrom! : version;
+    // 본 판이 지금으로 넘어가면 하나씩 확인한 기억은 필요 없다
+    if (!pending) delete st.acked;
+    this.app.saveState();
+  }
+
+  /** 화면 밖 단추(되돌리기 등)로 내가 저장한 판 — 바뀜 표시 없이 그린다 */
+  ownSave(docId: string, content: DocContent): void {
+    if (docId !== this.id || this.destroyed) return;
+    if (this.editor) { this.editor.externalChanged(content); return; }
+    this.rerender(content, undefined, true);
+    this.refreshBanner();
+    this.markSeen(content.version);
+  }
+
+  /**
+   * 이 섹션들의 바뀜은 봤다 — 볼 것에서 Claude 의 고침을 확인하면 문서의 표시에서도 뺀다(같은 것을 두 번 확인하지 않게).
+   * '*' = 문서 전체. 하위 섹션도 함께. 남은 바뀜(남이 고친 것)은 그대로
+   */
+  ackSections(keys: string[] | '*'): void {
+    if (!this.changed || this.destroyed) return;
+    if (keys === '*') { this.ackChanges(); return; }
+    const hit = (k: string) => keys.some((x) => k === x || k.startsWith(x + KEY_SEP));
+    // 다시 열어도 기억 — 본 판(lastSeen)은 남은 바뀜 때문에 그대로라 섹션마다 지문을 남긴다
+    const st = this.app.docState(this.id);
+    const acked = { ...(st.acked || {}) };
+    for (const k of [...this.changed.changed, ...this.changed.added]) if (hit(k)) acked[k] = DocView.mark(this.content.md, k);
+    st.acked = acked;
+    this.changed = { ...this.changed, changed: this.changed.changed.filter((k) => !hit(k)), added: this.changed.added.filter((k) => !hit(k)) };
+    this.markChanged();
+    this.refreshBanner();
+    this.markSeen(this.content.version);
+    this.app.renderRail();
+  }
+
+  /** 바뀐 섹션 수가 달라졌을 때 머리 띠를 다시 센다 — 남은 게 없으면 닫는다(문서를 옮기지 않는다) */
+  private refreshBanner(): void {
+    if (!this.changed || !this.els.banner || this.els.banner.hidden) return;
+    if (!this.pendingChanges() && !this.changed.removed.length) { this.ackChanges(); return; }
+    this.showBanner(undefined, false);
+  }
+
+  /** Claude 의 읽기 정리 안내 — 문서는 그대로, 내 화면의 접기만 바꿨다 */
+  showGuide(): void {
+    const el = this.els.guide;
+    if (!el) return;
+    const st = this.app.docState(this.id);
+    const t = this.t;
+    if (!st.guide && !st.foldsBefore) { el.hidden = true; el.replaceChildren(); return; }
+    el.replaceChildren(
+      h('div', { class: 'db-guide-t' },
+        h('b', { html: icon('eye') + ' ' + t('view.guide') }),
+        st.guide ? h('p', { text: st.guide }) : null),
+      h('div', { class: 'db-guide-a' },
+        st.foldsBefore ? h('button', { class: 'db-btn sm', type: 'button', onclick: () => this.app.undoReadingPlan(this.id) }, t('view.undo')) : null,
+        h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => { delete st.guide; delete st.foldsBefore; this.app.saveState(); this.showGuide(); } }, t('view.keep'))));
+    el.hidden = false;
+  }
+
+  private showBanner(oldMd?: string, jump = true): void {
     const b = this.els.banner!;
     const c = this.changed;
     if (!c) return;
@@ -462,7 +554,7 @@ export class DocView {
     b.hidden = false;
     if (oldMd != null) this.els.diffSlot!.replaceChildren(renderDiff(lineDiff(oldMd, this.content.md), this.t));
     this.changeI = -1;
-    const first = this.secs.find((s) => s.el.dataset.changed);
+    const first = jump ? this.secs.find((s) => s.el.dataset.changed) : undefined;
     if (first) this.openTo(first);
   }
 
@@ -646,7 +738,7 @@ export class DocView {
       const at = locate(idx.s, f.selector);
       if (!at) continue;
       const t = turnOf(f);
-      const cls = 'db-fbq' + (t === 'owner' ? ' owner' : t === 'assistant' ? '' : ' closed');
+      const cls = 'db-fbq' + (t === 'draft' ? ' draft' : t === 'owner' ? ' owner' : t === 'assistant' ? '' : ' closed');
       for (const mk of wrapRange(idx.map, at.start, at.end, () => h('mark', { class: cls, 'data-fb': f.id }))) {
         mk.addEventListener('click', () => this.app.panel.focus(f.id));
       }
@@ -673,9 +765,10 @@ export class DocView {
       if (ch) box.append(h('span', { class: 'db-badge chg', tabindex: '0', text: (ch === 'new' ? this.t('doc.newBadge') : ch === 'big' ? this.t('doc.bigBadge') : this.t('doc.changedBadge')) + (by ? ' · ' + by.who.split(' · ')[0] : '') }));
       else if (collapsed && s.body.querySelector('.db-sec[data-changed="changed"], .db-sec[data-changed="new"]')) box.append(h('span', { class: 'db-badge chg', text: '•' }));
       const open = (n: number, cls: string, title: string) => n && box.append(h('button', { class: 'db-badge ' + cls, type: 'button', title, onclick: () => this.app.panel.focus(mine.find((f) => turnOf(f) === (cls === 'closed' ? turnOf(f) : cls))?.id || mine[0].id), text: n }));
-      open(c.assistant, 'assistant', this.t('turn.assistant'));
+      open(c.draft, 'draft', this.t('turn.draft'));
       open(c.owner, 'owner', this.t('turn.owner'));
-      if (!c.assistant && !c.owner) open(c.resolved + c.declined, 'closed', this.t('fb.f.closed'));
+      open(c.assistant, 'assistant', this.t('turn.assistant'));
+      if (!c.assistant && !c.owner && !c.draft) open(c.resolved + c.declined, 'closed', this.t('fb.f.closed'));
     }
   }
 
@@ -689,7 +782,7 @@ export class DocView {
     const box = h('div', { class: 'db-outline' });
     this.outlineBtns.clear();
     const fbBy = new Map<string, number>();
-    for (const f of this.app.fb) if (f.docId === this.id && f.status === 'open') { const k = this.secOfFb.get(f.id); if (k) fbBy.set(k, (fbBy.get(k) || 0) + 1); }
+    for (const f of this.app.fb) if (f.docId === this.id && (f.status === 'open' || f.status === 'draft')) { const k = this.secOfFb.get(f.id); if (k) fbBy.set(k, (fbBy.get(k) || 0) + 1); }
     const item = (s: Section, cls: string) => {
       let n = 0;
       for (const [k, v] of fbBy) if (k === s.key || k.startsWith(s.key + KEY_SEP)) n += v;
@@ -753,7 +846,7 @@ export class DocView {
   }
   toggleCurrent(): boolean { if (!this.current) return false; this.toggle(this.current); return true; }
   editCurrent(): void { if (this.canEdit()) this.openEditor(this.current); }
-  commentCurrent(): void { this.app.dialogs.compose(this.current ? { docId: this.id, sec: this.current } : { docId: this.id }); }
+  commentCurrent(): void { this.app.composer.open(this.current ? { docId: this.id, sec: this.current } : { docId: this.id, whole: true }, this.current?.head || null); }
 
   // ------------------------------------------------------------ 문구 선택 → 피드백
   private bindSelection(): void {
@@ -791,7 +884,13 @@ export class DocView {
     const onChange = debounce(onSel, 300);
     document.addEventListener('selectionchange', onChange);
     const onDown = (e: Event) => e.preventDefault();
-    const onClick = () => { if (!ctx) return; btn.hidden = true; this.app.dialogs.compose({ docId: this.id, sec: ctx.sec, selector: ctx.selector }); };
+    const onClick = () => {
+      if (!ctx) return;
+      const sel = window.getSelection();
+      const rect = sel && sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : btn.getBoundingClientRect();
+      btn.hidden = true;
+      this.app.composer.open({ docId: this.id, sec: ctx.sec, selector: ctx.selector }, rect);
+    };
     btn.addEventListener('mousedown', onDown);
     btn.addEventListener('click', onClick);
     this.cleanup.push(() => { document.removeEventListener('selectionchange', onChange); btn.removeEventListener('mousedown', onDown); btn.removeEventListener('click', onClick); btn.hidden = true; });

@@ -6,6 +6,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { repo, tempWorkspace, rm } from './helpers.mjs';
+import { Workspace } from '../../server/workspace.mjs';
 
 const run = promisify(execFile);
 const cli = path.join(repo, 'bin/docbench.mjs');
@@ -29,11 +30,46 @@ test('CLI: 사람이 남긴 피드백을 AI 가 처리하는 한 바퀴', async 
   const bytes = await fs.readFile(path.join(dir, 'notes/윈도우-메모.md'));
   assert.ok(bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf])));
   assert.ok(bytes.toString('utf8').includes('- 저장 확인\r\n'));
+  // doc write --fb: 고친 결과(전·후 판)가 피드백에 붙어 "볼 것"으로 — 화면이 차이·되돌리기를 보인다(D73)
+  const e = JSON.parse((await db(dir, 'fb', 'show', f.id, '--json')).stdout).feedback;
+  assert.equal(e.waitingOn, 'owner');
+  assert.deepEqual([e.result.kind, e.result.change.docId, e.result.change.section, e.result.change.from], ['edit', 'notes/윈도우-메모.md', sec, show.doc.version]);
   await db(dir, 'fb', 'reply', f.id, '-m', '추가했습니다', '--resolve');
+  // Claude 의 "다 했다"는 끝이 아니라 볼 것 — 닫는 것은 사람. 고친 결과(edit)는 그대로
   const st = JSON.parse((await db(dir, 'status', '--json')).stdout);
-  assert.equal(st.feedback.resolved, 1);
+  assert.deepEqual([st.feedback.resolved, st.feedback.owner, st.feedback.assistant], [0, 1, 0]);
   const g = JSON.parse((await db(dir, 'fb', 'show', f.id, '--json')).stdout).feedback;
   assert.equal(g.thread.at(-1).author.kind, 'assistant');
+  assert.equal(g.result.kind, 'edit');
+  // 사람이 확인하면 끝
+  await db(dir, 'fb', 'reply', f.id, '--as', 'human:dj', '-m', '확인', '--resolve');
+  assert.equal(JSON.parse((await db(dir, 'status', '--json')).stdout).feedback.resolved, 1);
+});
+
+test('CLI: fb show 는 "이렇게 바꿔" 글·★·되돌린 고침을 글로도 보인다 (스킬이 --json 없이 읽어도)', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const sec = '윈도우에서 만든 메모 › 할 일';
+  const f = JSON.parse((await db(dir, 'fb', 'add', '--as', 'human:dj', '--doc', 'notes/윈도우-메모.md', '--section', sec, '-m', '이 글로', '--json')).stdout);
+  const ws = await new Workspace(dir).init();
+  const cur = await ws.getFeedback(f.id);
+  await ws.updateFeedback(f.id, { suggestion: '- 저장 확인\n- 줄바꿈 확인', severity: 'high', result: { kind: 'edit', at: new Date().toISOString(), run: 'run-0', change: { docId: 'notes/윈도우-메모.md', section: sec, from: 'a', to: 'b' }, reverted: new Date().toISOString() } }, cur.version);
+  const text = (await db(dir, 'fb', 'show', f.id)).stdout;
+  assert.match(text, /이렇게 바꿔\(본문을\):\n----\n- 저장 확인\n- 줄바꿈 확인\n----/);
+  assert.match(text, /급함\(★\)/);
+  assert.match(text, /지난 고침을 되돌리고 다시 보냈다/);
+});
+
+test('CLI: 초안은 사람의 메모 — Claude 는 목록에서 보지 않고, 회신·제안을 거부한다 · Claude 가 먼저 올린 것은 볼 것', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  const d = JSON.parse((await db(dir, 'fb', 'add', '--as', 'human:dj', '--doc', 'README.md', '-m', '나중에 다듬기', '--draft', '--json')).stdout);
+  assert.deepEqual([d.status, d.waitingOn], ['draft', 'owner']);
+  assert.deepEqual(JSON.parse((await db(dir, 'fb', 'list', '--json')).stdout).map((x) => x.id), []);
+  assert.deepEqual(JSON.parse((await db(dir, 'fb', 'list', '--status', 'draft', '--json')).stdout).map((x) => x.id), [d.id]);
+  await assert.rejects(db(dir, 'fb', 'reply', d.id, '-m', '했습니다'), (e) => e.code === 1 && /초안/.test(e.stderr));
+  const s = JSON.parse((await db(dir, 'fb', 'add', '--doc', 'README.md', '--title', '용어', '-m', '"작업대"와 "워크벤치"가 섞여 있습니다', '--json')).stdout);
+  assert.deepEqual([s.author.kind, s.status, s.waitingOn, s.result.kind], ['assistant', 'open', 'owner', 'review']);
+  const st = JSON.parse((await db(dir, 'status', '--json')).stdout);
+  assert.deepEqual([st.feedback.draft, st.feedback.owner], [1, 1]);
 });
 
 test('CLI: 판이 바뀌었으면 쓰기 거부(종료 코드 3)', async (t) => {

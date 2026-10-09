@@ -3,7 +3,7 @@
  * 기본 대상은 같은 저장소의 로컬 작업 폴더 서버(`docbench serve`)지만,
  * 사내 대시보드 백엔드가 같은 계약을 구현하면 그대로 쓸 수 있다.
  */
-import { DocConflictError, DocReadOnlyError, FeedbackConflictError, type DocBenchAdapters, type DocEvent, type Feedback, type Person, type ProposeRequest, type RunLogLine, type RunsAvailability, type RunStatus, type TreeEntry, type ViewState } from '../types';
+import { DocConflictError, DocReadOnlyError, FeedbackConflictError, type DocBenchAdapters, type DocEvent, type Feedback, type Person, type ProposeRequest, type RunLogLine, type RunsAvailability, type RunStatus, type TerminalHandoff, type TreeEntry, type ViewState } from '../types';
 import { normalizeFeedback } from '../core/feedback';
 
 export interface RestOptions {
@@ -25,7 +25,7 @@ interface Session {
   permissions: string[];
   assistant?: { name: string } | null;
   notify?: { label?: string } | null;
-  features?: { base?: boolean; versions?: boolean; inventory?: boolean; changes?: boolean; runs?: boolean; tree?: boolean };
+  features?: { base?: boolean; versions?: boolean; inventory?: boolean; changes?: boolean; runs?: boolean; tree?: boolean; terminal?: boolean; instructions?: boolean };
   /** 사람이 어디서 왔나 — 'pc' 면 화면의 "나"에서 표시 이름을 바꿀 수 있다(PUT /me) */
   identity?: 'pc' | 'host';
 }
@@ -136,12 +136,17 @@ export function createRestAdapters(o: RestOptions = {}): DocBenchAdapters & { re
       refresh: async (id) => { await call('GET', '/doc', undefined, { id }); return false; },
       tree: async (dir) => { try { return (await call<{ items: TreeEntry[] }>('GET', '/tree', undefined, { dir })).items; } catch (e) { if (e instanceof HttpError && e.status === 404) return null; throw e; } },
     },
+    instructions: {
+      load: () => call<{ text: string }>('GET', '/instructions').then((r) => r.text || ''),
+      save: (text) => call<void>('PUT', '/instructions', { text }),
+    },
     runs: {
       status: () => call<RunsAvailability>('GET', '/runs/status'),
       start: (input) => call<RunStatus>('POST', '/runs', input),
       cancel: (id) => call<void>('POST', '/runs/' + encodeURIComponent(id) + '/cancel'),
       list: (limit) => call<{ items: RunStatus[] }>('GET', '/runs', undefined, { limit: limit ? String(limit) : undefined }).then((r) => r.items),
       log: (id, from) => call<{ lines: RunLogLine[]; next: number }>('GET', '/runs/' + encodeURIComponent(id) + '/log', undefined, { from: String(from || 0) }),
+      startTerminal: (input) => call<RunStatus & { terminal: TerminalHandoff }>('POST', '/runs/terminal', input),
     },
     feedback: {
       subscribe(cb, onErr) {
@@ -206,6 +211,8 @@ export async function trimBySession(ad: DocBenchAdapters & { ready: Promise<Sess
   else out.assistant = { ...ad.assistant!, name: assistantName || s.assistant.name };
   if (!s.notify) delete out.notifier;
   if (!s.features?.runs) delete out.runs;
+  else if (!s.features?.terminal && out.runs) out.runs = { ...out.runs, startTerminal: undefined };
+  if (!s.features?.instructions) delete out.instructions;
   if (s.features && s.features.base === false) out.docs = { ...out.docs, loadBase: undefined };
   // 나무(펼친 폴더만 읽기)를 모르는 예전 서버·다른 백엔드면 빼고 예전 목록으로
   if (!s.features?.tree) out.docs = { ...out.docs, tree: undefined };

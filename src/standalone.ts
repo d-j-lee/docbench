@@ -160,7 +160,7 @@ async function welcome(root: HTMLElement): Promise<void> {
     setName: async (name) => { acct = saveAccount({ id: acct.id, ...(name.trim() ? { name: name.trim().slice(0, 60) } : {}) }); return { kind: 'human', id: acct.id, ...(acct.name ? { name: acct.name } : {}) }; },
   };
   // 연습 공간에도 Claude 작업 창 — 흉내 Claude 가 한 바퀴를 보여 준다(넘겼는데 아무 일도 없던 것, 주인 폰 실사용)
-  mem.runs = demoRuns(mem, locale, ['fb.act.toAssistant', 'fb.act.reopen', 'fb.act.decline', 'fb.act.resolve', 'fb.proposal.reject'].map((k) => t(k)));
+  mem.runs = demoRuns(mem, locale, ['fb.proposal.reject', 'fb.proposal.appliedMsg', 'result.revert.msg'].map((k) => t(k)));
   await mount(root, mem, menuFor(root, 'welcome'), t('welcome.title'), Object.keys(w.docs)[0]);
   if (!canWrite()) bench?.toast(t(folderAccessSupported() ? 'start.insecure' : 'start.unsupported'), { sticky: true });
 }

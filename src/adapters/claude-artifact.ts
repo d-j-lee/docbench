@@ -250,9 +250,9 @@ export async function createArtifactAdapters(o: ArtifactOptions = {}): Promise<D
   }
 
   ad.notifier = {
-    label: 'Claude에게 넘기기',
+    label: '이 대화의 Claude 에게',
     async send(s) {
-      const text = o.fallbackRequest ? o.fallbackRequest(s) : `피드백 반영 — 작업대 Claude 차례 ${s.count}건 (${s.docs.join(', ')})`;
+      const text = o.fallbackRequest ? o.fallbackRequest(s) : `DocBench 검토 — 보낸 피드백 ${s.count}건 (${s.docs.join(', ')})${s.note ? ' · ' + s.note : ''}`;
       if (comments && typeof comments.canSendToClaude === 'function') {
         try {
           if ((await comments.canSendToClaude()) === 'available') {

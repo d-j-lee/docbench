@@ -2,6 +2,8 @@
  * claude.ai 아티팩트 어댑터 — 플랫폼 런타임(claude.use)을 흉내 낸 메모리 저장소로 왕복을 확인한다.
  * 흉내(test/fixtures/claude-mock.js)는 계약 0.2.73 의 모양을 따른다: 경로 문법 검사, 깊게 얼린 스냅샷,
  * 내 쓰기의 hasPendingWrites, sample.json 이 없는 옛 뷰어(capability_removed).
+ * 검토 회차(0.6.0): 적어 둔 초안을 대화창의 Claude 에게 한 번에 보내고(comments.sendToClaude), Claude 가 저장소에 올린 제안을
+ * "볼 것"에서 보고 적용한다.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +12,8 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 import { Workspace } from '../../server/workspace.mjs';
-import { repo, sample } from '../server/helpers.mjs';
+import { core } from '../../server/core.mjs';
+import { repo, sample, until } from '../server/helpers.mjs';
 
 let server, base, browser;
 const mock = await fs.readFile(path.join(repo, 'test/fixtures/claude-mock.js'), 'utf8');
@@ -41,7 +44,7 @@ DocBench.createDocBench(document.getElementById('app'), { adapters: ad, routing:
 });
 after(async () => { await browser?.close(); server?.close(); });
 
-test('편집본 층·판 기록·피드백·제안·적용 (한글·슬래시 문서 id)', async (t) => {
+test('편집본 층·판 기록·초안·대화창으로 보내기·제안·적용 (한글·슬래시 문서 id)', async (t) => {
   const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
   t.after(() => ctx.close());
   await ctx.addInitScript(mock);
@@ -54,29 +57,64 @@ test('편집본 층·판 기록·피드백·제안·적용 (한글·슬래시 �
   await page.evaluate(() => localStorage.removeItem('mockdb'));
   await page.reload();
   await page.waitForSelector('.db-sec');
+  const db = async () => page.evaluate(() => Object.fromEntries(JSON.parse(localStorage.getItem('mockdb') || '[]')));
+  const fbRow = async () => Object.entries(await db()).find(([k]) => k.startsWith('feedback/'));
 
+  // 섹션에 적어 두기 → 공유 저장소에 초안 한 건(아직 아무에게도 가지 않는다)
   const key = '알림 서비스 운영 런북 › 장애 대응 › 중복 발송';
-  const sec = page.locator(`.db-sec[data-key="${key}"]`);
-  await sec.locator('> .db-sec-head').hover();
-  await sec.locator('> .db-sec-head .db-act').first().click();
-  await page.locator('dialog[open] textarea').fill('절차를 한 줄로');
-  await page.locator('dialog[open] .db-btn.primary').click();
-  const card = page.locator('.db-card').first();
-  await card.waitFor();
-  await card.locator('.db-btn', { hasText: '제안' }).click();
-  await card.locator('.db-prop .db-dl.add').first().waitFor({ timeout: 5000 });
-  await card.locator('.db-btn.primary', { hasText: '적용' }).click();
+  const head = page.locator(`.db-sec[data-key="${key}"] > .db-sec-head`);
+  await head.hover();
+  await head.locator('.db-act').first().click();
+  await page.locator('.db-cmp .db-cmp-ta:not(.rw)').fill('절차를 한 줄로');
+  await page.locator('.db-cmp .db-cmp-f .db-btn.primary', { hasText: '초안에 두기' }).click();
+  let row;
+  await until(async () => (row = await fbRow()), 5000);
+  const [fbKey, draft] = row;
+  assert.deepEqual([draft.status, draft.waitingOn, draft.body], ['draft', 'owner', '절차를 한 줄로']);
+  assert.deepEqual(Object.keys(draft.author).sort(), ['id', 'kind'], '공유 데이터엔 사람 id 만');
+  assert.deepEqual(await page.evaluate(() => window.__sent), [], '적기만 해서는 대화창에 보내지 않는다');
+
+  // 보내기(어디로 = 대화창의 Claude) → 한 번에 한 요청, 피드백은 보냄으로
+  await page.locator('.db-pill.draft').click();
+  const bar = page.locator('.db-sendbar');
+  assert.equal(await bar.locator('select[aria-label="어디로"]').count(), 0, '보낼 곳은 대화창 하나');
+  await bar.locator('.db-sendbtn', { hasText: '1개 보내기' }).click();
+  await page.locator('.db-toast', { hasText: '보냈습니다. 결과는 "볼 것"에 올라옵니다.' }).waitFor();
+  const sent = await page.evaluate(() => window.__sent);
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].text, /^DocBench 검토 — 보낸 피드백 1건/);
+  await until(async () => (await fbRow())[1].waitingOn === 'assistant', 5000);
+
+  // 대화창의 Claude 가 저장소에 제안을 올린다(아티팩트 데이터에 직접 — 문서는 그대로) → "볼 것"의 제안 카드
+  const md0 = await fs.readFile(path.join(sample, id), 'utf8');
+  const before = core.getSectionText(md0, key);
+  await page.evaluate(async ([ref, before, keyPath]) => {
+    const dbh = await window.claude.use('db');
+    const doc = dbh.doc(ref);
+    const cur = (await doc.get()).data();
+    const at = new Date().toISOString();
+    const claude = { kind: 'assistant', name: 'Claude' };
+    await doc.update({ version: cur.version + 1, status: 'open', waitingOn: 'owner', updatedAt: at, result: { kind: 'propose', at, run: 'chat' },
+      proposal: { path: keyPath, before, after: before.replace(/\n*$/, '') + '\n\n(모의 제안) 한 줄\n', rationale: '한 줄로 줄였습니다', author: claude, at, state: 'pending' },
+      thread: [...cur.thread, { author: claude, text: '이렇게 바꾸면 어떨까요?', at }] });
+  }, [fbKey, before, key.split(' › ')]);
+  await page.locator('.db-pill.owner .n', { hasText: '1' }).waitFor();
+  await page.locator('.db-pill.owner').click();
+  const card = page.locator('.db-card.r-propose');
+  await card.locator('.db-prop .db-dl.add', { hasText: '(모의 제안) 한 줄' }).waitFor({ timeout: 5000 });
+  await card.locator('.db-c-act .db-btn.primary', { hasText: '적용' }).click();
   await page.waitForFunction(() => JSON.parse(localStorage.getItem('mockdb') || '[]').some(([k, v]) => k.startsWith('feedback/') && v.status === 'resolved'));
 
-  const db = await page.evaluate(() => Object.fromEntries(JSON.parse(localStorage.getItem('mockdb'))));
-  const docKeys = Object.keys(db).filter((k) => k.startsWith('docs/'));
+  const all = await db();
+  const docKeys = Object.keys(all).filter((k) => k.startsWith('docs/'));
   assert.equal(docKeys.length, 1);
   assert.match(docKeys[0], /^docs\/@[A-Za-z0-9_-]+$/, '경로 문법에 안 맞는 id 는 @base64url 로');
-  assert.equal(db[docKeys[0]].docId, id);
-  assert.ok(db[docKeys[0]].md.includes('(모의 제안) 한 줄'));
-  assert.ok(Object.keys(db).some((k) => /^revisions\/@[A-Za-z0-9_-]+~1$/.test(k)), '판 기록');
-  assert.ok(Object.keys(db).some((k) => k.startsWith('changes/')), '변경 이력');
-  const fb = Object.entries(db).find(([k]) => k.startsWith('feedback/'))[1];
+  assert.equal(all[docKeys[0]].docId, id);
+  assert.ok(all[docKeys[0]].md.includes('(모의 제안) 한 줄'));
+  assert.equal(all[docKeys[0]].md.split('(모의 제안) 한 줄').length, 2, '그 섹션에 한 번');
+  assert.ok(Object.keys(all).some((k) => /^revisions\/@[A-Za-z0-9_-]+~1$/.test(k)), '판 기록');
+  assert.ok(Object.keys(all).some((k) => k.startsWith('changes/')), '변경 이력');
+  const fb = all[fbKey];
   assert.equal(fb.proposal.state, 'applied');
   for (const m of fb.thread) if (m.author.kind === 'human') assert.deepEqual(Object.keys(m.author).sort(), ['id', 'kind'], '공유 데이터엔 사람 id 만');
   assert.equal(await page.locator('.db-editor .db-ed-msg:not([hidden])').count(), 0, '내 저장을 밖의 변경으로 오해하지 않는다');

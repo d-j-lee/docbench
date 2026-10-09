@@ -202,7 +202,7 @@ export class Editor {
       // 내 것 = 이 저장이 바꾼 섹션(바탕 판 → 저장한 글). 더 새 판에 끼워 저장했으면 그 사이 남의 변경은 표시된다
       const d = diffSections(baseDoc.md, next);
       this.view.rerender(fresh, this.index ?? undefined, against ? { mine: new Set([...d.changed, ...d.added, ...d.removed]) } : true);
-      app.docState(this.view.id).lastSeen = res.version;
+      this.view.markSeen(res.version);
       app.saveState();
       app.toast(t('edit.saved'));
       app.emit({ type: 'doc:saved', docId: this.view.id, version: res.version });
@@ -260,14 +260,16 @@ export async function applyProposal(app: App, f: Feedback): Promise<void> {
       thread: [...f.thread, { author: app.me, text: app.t('fb.proposal.appliedMsg'), at: new Date().toISOString() }],
     }, app.t('fb.proposal.appliedMsg'));
   };
-  const cur = getSectionText(view.content.md, key);
-  const sec = view.findSec(key);
+  // 문서 전체 제안(path 가 비었음 — Claude 가 문서를 통째로 고친 글)이면 문서 전체를 견준다
+  const whole = !p.path.length;
+  const cur = whole ? view.content.md : getSectionText(view.content.md, key);
+  const sec = whole ? null : view.findSec(key);
   if (cur != null && cur.replace(/\n+$/, '') === p.before.replace(/\n+$/, '')) {
-    const next = replaceSection(view.content.md, key, p.after)!;
+    const next = whole ? p.after : replaceSection(view.content.md, key, p.after)!;
     try {
       const res = await app.ad.docs.save!(f.docId, next, { baseVersion: view.content.version, summary: f.title || f.body.slice(0, 60), feedbackIds: [f.id] });
       view.rerender({ ...view.content, md: next, version: res.version, updatedAt: res.updatedAt, updatedBy: app.me }, sec?.index, true);
-      app.docState(f.docId).lastSeen = res.version;
+      view.markSeen(res.version);
       app.saveState();
       app.emit({ type: 'doc:saved', docId: f.docId, version: res.version });
       await resolve();
@@ -278,6 +280,7 @@ export async function applyProposal(app: App, f: Feedback): Promise<void> {
       view.rerender(fresh);
     }
   }
+  if (whole) { view.openEditor(null, { text: p.after, note: app.t('edit.proposalStale'), feedback: f, onSaved: resolve }); return; }
   const target = view.findSec(key);
   if (!target) { app.toast(app.t('doc.orphans', { n: 1 })); return; }
   view.openEditor(target, { text: p.after, note: app.t('edit.proposalStale'), feedback: f, onSaved: resolve });

@@ -231,7 +231,7 @@ describe('기록을 문서 폴더 밖에 둘 때 (D57)', () => {
     expect((await a.docs.manifest()).project.storage).toBe('기록함/문서');
     expect(a.runs?.setup).toBeUndefined();
     // Claude 작업도 기록 폴더로: 실행기 심장 박동을 읽고 요청을 남긴다
-    await home.write('문서/runners/runner_dj@pc.json', JSON.stringify({ id: 'runner:dj@pc', kind: 'runner', user: 'dj', host: 'pc', pid: 1, version: 't', protocol: 1, startedAt: '', seenAt: new Date().toISOString(), claude: { ok: true }, models: [], efforts: [] }));
+    await home.write('문서/runners/runner_dj@pc.json', JSON.stringify({ id: 'runner:dj@pc', kind: 'runner', user: 'dj', host: 'pc', pid: 1, version: 't', protocol: 2, startedAt: '', seenAt: new Date().toISOString(), claude: { ok: true }, models: [], efforts: [] }));
     expect((await a.runs!.status()).available).toBe(true);
     const r = await a.runs!.start({ kind: 'handoff', feedbackIds: [f.id] });
     expect(home.files.has(`문서/runs/${r.id}.req.json`)).toBe(true);
@@ -255,7 +255,8 @@ describe('기록을 문서 폴더 밖에 둘 때 (D57)', () => {
       expect(JSON.parse(await cli('fb', 'list', '--waiting', 'assistant')).map((x: { id: string }) => x.id)).toContain(f.id);
       await cli('fb', 'reply', f.id, '-m', '두 군데입니다', '--resolve');
       const rows = await new Promise<import('../../src/types').Feedback[]>((r) => { const off = a.feedback.subscribe((x) => { off(); r(x); }); });
-      expect(rows.find((x) => x.id === f.id)).toMatchObject({ status: 'resolved' });
+      // Claude 의 "다 했다"는 볼 것 — 닫는 것은 사람(D73)
+      expect(rows.find((x) => x.id === f.id)).toMatchObject({ status: 'open', waitingOn: 'owner', result: { kind: 'answer', run: 'cli' } });
       expect((await fsp.readdir(dir)).includes('.docbench')).toBe(false);
       expect(JSON.parse(await fsp.readFile(path.join(pcHome, 'config.json'), 'utf8')).dataHome).toBe(homeDir);
     } finally { await fsp.rm(base, { recursive: true, force: true }); }
@@ -287,7 +288,8 @@ describe('실제 디스크: 브라우저 어댑터 ↔ CLI 가 같은 폴더를 
       expect(d1.md).toContain('롤백은 10분 안에');
       expect((await a.docs.changes!()).at(-1)).toMatchObject({ docId: 'docs/운영-런북.md', summary: '롤백 기준', feedbackIds: [f.id], by: { kind: 'assistant' } });
       const rows = await new Promise<import('../../src/types').Feedback[]>((r) => { const off = a.feedback.subscribe((x) => { off(); r(x); }); });
-      expect(rows.find((x) => x.id === f.id)).toMatchObject({ status: 'resolved', version: 2 });
+      // doc write --fb 가 전·후 판을 붙이고(판 2), 회신(판 3) — 결과는 볼 것, 고친 결과(edit)는 그대로
+      expect(rows.find((x) => x.id === f.id)).toMatchObject({ status: 'open', waitingOn: 'owner', version: 3, result: { kind: 'edit', change: { docId: 'docs/운영-런북.md', section: '알림 서비스 운영 런북 › 배포 전 확인', from: d0.version, to: d1.version } } });
 
       // 어댑터가 저장한 판을 CLI 가 같은 판으로 본다. CP949 문서도 바이트 그대로
       const cpId = 'notes/옛-회의록.md';
@@ -367,11 +369,15 @@ describe('짝짓지 않은 앱 (D54·D63)', () => {
   it('이 화면의 계정과 짝짓지 않은 앱만 켜져 있으면 저절로 고르지 않고 "내 것인지" 묻는다 — 짝지은 앱은 고른다', async () => {
     const fs = fsFromMemory({ 'a.md': '# A\n' });
     const a = await open(fs, { user: { id: 'u-0a1b2c3d4e', name: '디제이' } });
-    const beat = (o: object) => JSON.stringify({ id: 'app:dj-pc@h', kind: 'app', user: 'dj-pc', host: 'h', pid: 1, version: 't', protocol: 1, startedAt: '', seenAt: new Date().toISOString(), claude: { ok: true }, models: [], efforts: [], ...o });
+    const beat = (o: object) => JSON.stringify({ id: 'app:dj-pc@h', kind: 'app', user: 'dj-pc', host: 'h', pid: 1, version: 't', protocol: 2, startedAt: '', seenAt: new Date().toISOString(), claude: { ok: true }, models: [], efforts: [], ...o });
     await fs.write('.docbench/runners/app_dj-pc@h.json', beat({}));
     expect((await a.runs!.status()).reason).toBe('not-mine');
     await fs.write('.docbench/runners/app_dj-pc@h.json', beat({ owners: ['u-0a1b2c3d4e'] }));
     const st = await a.runs!.status();
     expect([st.available, st.runner?.id]).toEqual([true, 'app:dj-pc@h']);
+    // 내 앱이 예전 판(작업 약속 1)이면 "없음"이 아니라 "새 판으로" — 반영 규칙이 달라 맡기지 않는다
+    await fs.write('.docbench/runners/app_dj-pc@h.json', beat({ owners: ['u-0a1b2c3d4e'], protocol: 1, version: '0.5.2' }));
+    const old = await a.runs!.status();
+    expect([old.available, old.reason, old.runner?.version]).toEqual([false, 'old-runner', '0.5.2']);
   });
 });

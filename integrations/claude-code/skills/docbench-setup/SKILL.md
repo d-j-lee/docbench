@@ -8,7 +8,7 @@ description: DocBench(사람과 AI 가 같은 마크다운 문서를 접어 보�
 DocBench 는 문서 폴더의 `.md` 를 제목 깊이별로 접어 보고, 섹션·문구에 피드백을 달고, 섹션 단위로 고치는 작업대다.
 피드백·이력은 사람이 읽는 파일로 **기록 폴더**에 남는다 — 기본은 문서 폴더 밖(기록 보관함/<문서 폴더 이름>, 문서 폴더에는 문서만), 팀이 git 으로 함께 쓰면 문서 폴더 안 `.docbench/`.
 대시보드에는 기본으로 **DocBench 앱**(`docbench app` — 이 PC 에 하나 도는 작은 서비스)을 켜 두고, 대시보드 탭이 앱의 `/host.js` 로 `DocBenchHost.mount(el, { root, key })` 를 부른다. 백엔드는 언어와 상관없이 이 PC 의 설정 폴더에서 열쇠 파일을 읽어 페이지에 넣기만 한다.
-Claude 는 두 길로 처리한다: 화면 아래 **Claude 작업**(앱·서버가 띄우는 백그라운드 `claude -p`, 모델·노력 선택, 진행 로그 — 읽기만 하고 반영은 DocBench 가 판 비교로) 또는 터미널의 Claude Code 가 `docbench` CLI 로.
+사람은 읽으며 초안을 모으고 한 번에 보낸다(검토 회차 — 결과는 "볼 것"에서 확인·되돌리기). Claude 는 세 길로 처리한다: 화면 아래 **Claude 작업**(앱·서버가 띄우는 백그라운드 `claude -p`, 모델·노력 선택, 진행 로그 — 읽기만 하고 반영은 DocBench 가 판 비교로), **터미널 한 줄**(설치 없음 — 기록 폴더에서 Claude Code 를 켜면 결과 파일을 남기고 화면·앱이 반영), 또는 켜 둔 Claude Code 가 `docbench` CLI 로.
 원본: https://github.com/d-j-lee/docbench (MIT). 세부 계약은 받은 판의 `docs/PORTING.md`·`docs/openapi.yaml` 이 정본이다 — 이 스킬과 다르면 그 판의 문서를 따른다.
 
 ## 0. 먼저 지킬 것
@@ -31,7 +31,7 @@ Claude 는 두 길로 처리한다: 화면 아래 **Claude 작업**(앱·서버�
 | 응답 헤더 CSP(`script-src`·`frame-src`·`style-src`·`img-src`·`frame-ancestors`) | 앱 출처를 더해야 하는지(T), 화면 스크립트·주입 스타일이 막히는지(B·C) |
 | 미들웨어 순서(인증·본문 파서·압축), 라우터가 받는 HTTP 메서드 | B·C — DocBench 는 GET·POST·PUT·PATCH·DELETE 를 쓴다 |
 | 대시보드 테마(밝게 고정 / 어둡게 고정 / OS 따라감 / 사용자가 바꿈) | `theme`·`setTheme` |
-| 터미널의 Claude: 어디서(현재 폴더) 시작하나, 시작 환경 변수를 고칠 수 있나, 입력을 밀어 넣는 API 가 있나(Enter 포함 여부, 교차 사이트 요청 막힘 여부), docbench 플러그인이 깔렸나 | `onHandoff`·`DOCBENCH_ROOT`·넘기기(§5) |
+| 터미널의 Claude: 어디서(현재 폴더) 시작하나, 시작 환경 변수를 고칠 수 있나, 입력을 밀어 넣는 API 가 있나(Enter 포함 여부, 교차 사이트 요청 막힘 여부), docbench 플러그인이 깔렸나 | `onHandoff`(셸이면 `command`, 켜진 Claude 대화면 `prompt`)·`DOCBENCH_ROOT`·보내기(§5) |
 | 문서 폴더: 경로, 문서 수, 인코딩(CP949·UTF-16·BOM·CRLF), **대시보드 저장소 안인가**, git 인가, 프로젝트 폴더들이 한 폴더 아래 있나 | 기록 자리·커밋 정책·작업 공간 범위·확인 대상 |
 | 사용자가 여럿인가 | T 는 사람마다 자기 PC 의 앱. B·C 는 모든 쓰기가 한 사람(이 PC 의 설정 `user`, 없으면 OS 사용자)으로 기록되고 Claude 작업이 서버 PC 의 claude(그 계정)로 돈다 — 여럿이면 끈다(§5) |
 | 이미 있는 DocBench: `node <cli> app --status`(켜져 있나·판·작업 공간), 이 PC 의 설정 폴더의 `app.json`·`config.json` | 다시 켜면 돌던 Claude 작업이 끊긴다, 이미 더한 작업 공간과 겹치는지 |
@@ -47,12 +47,12 @@ Claude 는 두 길로 처리한다: 화면 아래 **Claude 작업**(앱·서버�
 | 위와 같지만 대시보드 서버가 `0.0.0.0`·사내망에 열려 있고 `127.0.0.1` 로 묶을 수 없다 | 열쇠를 페이지에 넣지 않는다 → **C** 또는 **B** (토큰은 백엔드만 가진다) |
 | 다른 PC 에서 접속하는 공용 대시보드 | **B·C** (Claude 작업 끔) 또는 **D** |
 | DocBench API 도 대시보드 인증을 타야 한다 | **C** (Node) / **B** |
-| Node 를 못 쓴다 | **E. 단일 HTML** — 단, Claude 작업은 앱(Node)이 필요하므로 터미널에서 직접 처리만 |
+| Node 를 못 쓴다 | **E. 단일 HTML** — Claude 작업(앱)은 Node 가 필요하므로, Claude 는 터미널 한 줄(설치 없음)로 |
 | 오늘 보기만 | `docbench app --open`, 또는 **A** |
 | 문서가 DB·사내 시스템 | **D. 계약 구현** (`docs/openapi.yaml`) |
 
 - **T 가 못 하는 것**: 다른 PC 의 브라우저(보는 사람 PC 의 앱에 붙는다), https·사내 호스트 이름 대시보드는 [미확인] — 브라우저가 `http://127.0.0.1` 로 가는 스크립트·iframe 을 막을 수 있으니 먼저 시험한다. 대시보드 인증은 DocBench 에 걸리지 않는다(앱 열쇠가 대신).
-- **E 가 못 하는 것**: 넘기기 명령 실행(요청함 파일만 남김), 파일 감시(몇 초 간격 확인 + 창으로 돌아오면 바로), 바깥 주소 그림. 보안 문맥(`file://`·`http://localhost`·https)에서만 쓰기가 된다. 브라우저는 엣지·크롬.
+- **E 가 못 하는 것**: 명령 실행(터미널 한 줄은 사람이 붙여 넣는다), 파일 감시(몇 초 간격 확인 + 창으로 돌아오면 바로), 바깥 주소 그림. 보안 문맥(`file://`·`http://localhost`·https)에서만 쓰기가 된다. 브라우저는 엣지·크롬.
 - 모든 방식이 같은 기록 폴더 모양을 쓰므로 나중에 바꿔도 피드백은 이어진다.
 
 ## 3. DocBench 받기 — 판을 고정해서
@@ -94,9 +94,9 @@ Claude 는 두 길로 처리한다: 화면 아래 **Claude 작업**(앱·서버�
    - 탭은 처음 보일 때 끼우고, 다른 탭으로 가도 지우지 않고 숨긴다(상태 유지). 탭을 없앨 때 `destroy()`.
    - 높이: 탭 칸이 정해진 높이를 가져야 한다(iframe 이 `height:100%`). 최소 420px 정도.
    - 테마: 대시보드 테마를 `theme` 로, 바뀌면 `setTheme`. 색·글꼴은 `tokens`(`--db-*`).
-   - 배지: `onTodo({ owner, assistant })` — 사람 차례·Claude 차례 수, 바뀔 때만 온다. 사용자가 고른 대로 배지에.
+   - 배지: `onTodo({ owner, assistant, draft })` — 볼 것·보냄·초안 수, 바뀔 때만 온다. 사용자가 고른 대로 배지에(보통 볼 것).
    - 대시보드 CSP 가 있으면 `script-src`·`frame-src` 에 앱 출처를 더한다.
-5. **넘기기**: §5.
+5. **보내기를 대시보드 터미널로**: §5.
 
 ### 공통 — 문서 폴더 준비 (A·B·C·D)
 
@@ -154,7 +154,7 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
   - 백엔드가 `Authorization: Bearer <토큰>` 을 붙인다. 브라우저에는 토큰을 주지 않는다.
   - **Host 는 브라우저가 보낸 그대로** 넘긴다(`localhost:8800` 같은 이름은 기본 통과). 바꿔 쓰면 DocBench 의 Host 검사가 꺼진다. 사내 호스트 이름으로 열면 serve 에 `--allow-host <이름>`.
   - 메서드 GET·POST·PUT·PATCH·DELETE, 본문과 `X-DocBench` 헤더를 그대로(쓰기 요청에 필수, 없으면 403). 응답에서 hop-by-hop 헤더(`connection`·`transfer-encoding` 등)는 빼고, 스트림이 아닌 응답은 길이를 맞춘다.
-  - `/api/events`(SSE)는 버퍼링·압축 없이 바로 흘려보내고 시간 제한을 길게. 경로를 골라 넘기는 프록시면 `/api/runs*`(Claude 작업)도 넘긴다.
+  - `/api/events`(SSE)는 버퍼링·압축 없이 바로 흘려보내고 시간 제한을 길게. 경로를 골라 전달하는 프록시면 `/api/runs*`(Claude 작업)도 넘긴다.
   - 여러 사람이 붙는 대시보드면 `serve … --no-claude`(§5).
   - 언어별: Python 표준 라이브러리만이면 `http.client` 로 요청하고 `resp.read1()` 고리로 `wfile` 에 바로 쓰기(`BaseHTTPRequestHandler` 는 `do_PUT`·`do_PATCH`·`do_DELETE` 도 만들어야 한다 — 없으면 501). FastAPI·Starlette 는 `httpx` 스트리밍, Flask 는 `requests(stream=True)`, .NET 은 YARP, Java 는 Spring Cloud Gateway, Go 는 `httputil.ReverseProxy`(`FlushInterval: -1`), nginx 는 `proxy_buffering off`.
 
@@ -183,7 +183,7 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 - **기록 보관함**(문서 폴더 밖 빈 폴더)은 처음 저장할 때 한 번 고른다. 서버·CLI·앱과 같은 보관함을 쓰게 하려면 이 PC 의 설정 `dataHome` 과 같은 폴더를 고르라고 안내한다.
 - 대시보드 주소로 내주면 연 폴더·고른 보관함을 기억한다. 파일로 바로 열면(`file://`) 기억하지 않는다 — 같은 브라우저로 연 다른 로컬 HTML 이 꺼내 쓸 수 있어서.
 - 문서 속 바깥 주소 그림은 보이지 않는다(그림 주소로 새는 길 차단). `data:` 그림만.
-- Claude 작업: 넘기기·제안을 누른 자리에서 Claude 작업 창이 연결 안내 문구를 준다 — 그 PC 의 Claude Code 에 붙여 넣으면 CLI 를 받아 지문을 확인하고 `link --owner <이 화면의 계정>` 으로 폴더를 앱에 잇고 앱을 켠다. 이 스킬로 붙이는 중이면 그 단계를 대신 해도 된다: §3 의 CLI → `node <cli> link "<문서 폴더>" --data "<보관함>/<문서 폴더 이름>" --owner <계정>`(계정은 화면 "나"에 보이는 `u-…` — 사용자에게 받는다. 기록을 문서 폴더 안에 두기로 했으면 `--data` 없이) → `node <cli> app --detach` → `app --status` 에 그 폴더가 보이는지. 로그인 때 켜기는 묻고 `app --startup on`.
+- Claude 작업: 앱이 없으면 Claude 작업 창이 연결 안내 문구를 준다(그 사이에도 "터미널 한 줄"로 보낼 수 있다) — 그 PC 의 Claude Code 에 붙여 넣으면 CLI 를 받아 지문을 확인하고 `link --owner <이 화면의 계정>` 으로 폴더를 앱에 잇고 앱을 켠다. 이 스킬로 붙이는 중이면 그 단계를 대신 해도 된다: §3 의 CLI → `node <cli> link "<문서 폴더>" --data "<보관함>/<문서 폴더 이름>" --owner <계정>`(계정은 화면 "나"에 보이는 `u-…` — 사용자에게 받는다. 기록을 문서 폴더 안에 두기로 했으면 `--data` 없이) → `node <cli> app --detach` → `app --status` 에 그 폴더가 보이는지. 로그인 때 켜기는 묻고 `app --startup on`.
 
 ### A. `serve` 화면 iframe
 
@@ -193,15 +193,16 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 
 - **피드백 스킬이 터미널 Claude 에 보이게**: 플러그인(`claude plugin install docbench@docbench`)이면 어디서든 보인다. 아니면 터미널 Claude 가 **시작하는 폴더**의 `.claude/skills/docbench-feedback/` 또는 사용자 폴더(`%USERPROFILE%\.claude\skills\`)에 사본의 `integrations/claude-code/skills/docbench-feedback` 를 둔다. 이름은 `/docbench-feedback`(플러그인은 `/docbench:docbench-feedback` 도). 실제로 터미널에서 불러지는지 확인한다.
 - **작업 폴더 찾기**: CLI 는 현재 폴더에서 위로 문서 폴더를 찾는다(기록 짝·`.docbench` 가 있는 곳 — 앱이 더한 폴더도). 터미널이 문서 폴더 밖에서 시작하면 그 시작 환경에 `DOCBENCH_ROOT=<문서 폴더>` 를 넣고, 시작부를 못 고치면 대시보드 `CLAUDE.md` 에 "CLI 는 `node <cli> --root <문서 폴더> …`" 한 줄을 남긴다(없으면 종료 코드 2).
-- **"Claude에게 넘기기"를 어디로**:
-  1. **T + 대시보드에 Claude 터미널 입력 API 가 있으면**: `onHandoff(req)` 에서 `req.prompt` 를 그 터미널에 보내고 `{ handled: true, message }`. 프롬프트는 `/docbench:docbench-feedback 문서 폴더 "<이름>" 의 Claude 차례 피드백 N건(<id>…)을 처리해 줘.` 한 줄 — 플러그인 이름이 붙어 있으니 스킬만 복사해 깐 터미널이면 `/docbench-feedback` 으로 바꿔 보낸다. 폴더 **이름**만 있으므로 터미널이 그 폴더에서 시작하지 않았으면 `root` 를 덧붙인다. Enter 가 필요하면 `\r`. 15초 안에 답한다(늦거나 `handled: false` 면 작업대가 Claude 작업 창으로). 그 API 는 이제 자동 입력 통로이므로 다른 사이트가 부를 수 없게(전용 헤더 검사 등) 되어 있는지 확인한다.
+- **보내기를 어디로**:
+  0. **설치 없이**: 화면의 "어디로 = 터미널 한 줄" — 사람이 그 한 줄을 PowerShell 에 붙여 넣으면 기록 폴더에서 Claude Code 가 켜져 처리한다(플러그인·앱 불필요, 사본 `docs/PORTING.md` §5). 기록 폴더를 Claude 의 자리로 쓰는 이유(켠 폴더가 지시·권한·대화 기록을 정한다)를 사용자에게 한 줄로 알린다.
+  1. **T + 대시보드에 터미널 입력 API 가 있으면**: `onHandoff(req)` 에서 셸 터미널이면 `req.command`(설치 없이 새 Claude Code — 기록 폴더로 가서 요청 파일 처리), 이미 켜진 Claude 대화면 `req.prompt` 를 보내고 `{ handled: true, message }`. `prompt` 는 `/docbench:docbench-feedback 문서 폴더 "<이름>" 에서 보낸 피드백 N건(<id>…)을 처리해 줘.` 한 줄 — 플러그인 이름이 붙어 있으니 스킬만 복사해 깐 터미널이면 `/docbench-feedback` 으로 바꿔 보낸다. 폴더 **이름**만 있으므로 터미널이 그 폴더에서 시작하지 않았으면 `root` 를 덧붙인다. Enter 가 필요하면 `\r`. 15초 안에 답한다(늦거나 `handled: false` 면 작업대가 Claude 작업 창으로). 그 API 는 이제 자동 입력 통로이므로 다른 사이트가 부를 수 없게(전용 헤더 검사 등) 되어 있는지 확인한다.
   2. **T 에서 `onHandoff` 를 주지 않으면**: 앱의 Claude 작업 창(아래)이 맡는다.
   3. **B·C**: 기록 폴더 `inbox/req-*.json` 을 남기고, 대시보드가 터미널에 입력을 밀어 넣을 수 있으면 그 API 를 부르는 작은 스크립트를 이 PC 의 설정 `workspaces["<문서 폴더>"].notify.command`(배열, 셸 없이 실행)에 건다. 알아 둘 것: 현재 폴더 = 문서 폴더(상대 경로는 거기 기준) · 환경 변수 = 서버 프로세스의 것(C 는 대시보드 환경, B 는 곁 프로세스 환경 — 대시보드 주소·인증 값은 곁 프로세스를 띄울 때 넘긴다) + `DOCBENCH_REQUEST`·`DOCBENCH_ROOT` · 한 번에 하나만 돌고 출력은 `inbox/req-*.json.log` · 터미널 API 가 Enter 를 붙이는지.
-  4. 그대로: 사람이 터미널에서 `/docbench-feedback`(E 는 Claude 작업 창의 "터미널 Claude Code로 직접"이 요청함에 남기고 한 줄을 복사해 준다).
+  4. 그대로: 사람이 터미널에서 `/docbench-feedback`(화면의 "어디로 = 요청함"이 요청함에 남긴다).
   5. 무인 처리(`claude -p` 를 명령으로): 받은 판 `docs/PORTING.md` §5. 피드백을 신뢰하는 사람만 다는 폴더에서만.
-- **Claude 작업**(화면 아래 창 — 넘기기·"Claude 제안"이 이 길로): 구독 로그인을 그대로 쓰고 API 키는 쓰지 않는다(`--bare` 금지). DocBench 가 claude 를 **문서 폴더 밖**에서 `--restricted --safe-mode --permission-mode dontAsk --tools Read,Grep,Glob --add-dir <문서 폴더>` 로 띄워, 문서 폴더의 훅·CLAUDE.md 가 실행·지시가 되지 않게 한다(사본 `docs/SECURITY.md`).
+- **Claude 작업**(화면 아래 창 — 보낸 묶음·Claude 검토가 이 길로): 구독 로그인을 그대로 쓰고 API 키는 쓰지 않는다(`--bare` 금지). DocBench 가 claude 를 **문서 폴더 밖**에서 `--restricted --safe-mode --permission-mode dontAsk --tools Read,Grep,Glob --add-dir <문서 폴더>` 로 띄워, 문서 폴더의 훅·CLAUDE.md 가 실행·지시가 되지 않게 한다(사본 `docs/SECURITY.md`).
   - T·E: 앱이 작업 공간마다 띄운다. B·C·A: 서버가 띄운다. `claude` 가 PATH 에 없으면 이 PC 의 설정에 `"assistant": { "command": "<claude 실행 파일 전체 경로>" }`(앱은 다시 켜야 읽는다 — `app --stop` → `app --detach`). `where.exe claude` 가 `.cmd`(npm 설치본)만 보여 주면 DocBench 가 옆의 `cli.js` 를 node 로 부르므로 그대로 둬도 된다 — 안 되면 실제 대상(exe, 또는 `node …js`)을 배열로. 작업 하나 상한 `timeoutSec`(기본 900).
-  - **여러 사람이 붙는 서버면 켜지 않는다**: C 는 기본 끔(켜려면 `runs: true`), B·A 는 `serve --no-claude`. 꺼져 있으면 창 대신 예전 넘기기(요청함·알림 명령)만. 앱은 그 PC 사용자 하나의 것이라 해당 없다.
+  - **여러 사람이 붙는 서버면 켜지 않는다**: C 는 기본 끔(켜려면 `runs: true`), B·A 는 `serve --no-claude`. 꺼져 있으면 창 대신 요청함(알림 명령)·터미널 한 줄로. 앱은 그 PC 사용자 하나의 것이라 해당 없다.
   - E 는 이 화면의 계정과 짝지은 엔진(`link --owner`)이나 사용자 이름이 같은 엔진만 저절로 고른다. 아니면 창에 "내 것 아님" — 사람이 한 번 고르거나 `link --owner` 로 잇는다. 예전 실행기(`docbench runner`)도 그대로 되지만 새로 붙일 때는 앱을 쓴다.
   - 확인은 실제 한 번(구독 사용량을 쓴다고 알린다, 작은 모델·낮은 노력으로) — 사용량 없이 흐름만 보려면 잠시 `assistant.command` 를 사본의 `test/fixtures/fake-claude.mjs`(`[node, <그 경로>]`)로 바꿔 보고(앱이면 다시 켜고) 되돌린다.
 - 터미널 Claude 와 Claude 작업은 함께 써도 된다: 같은 피드백을 동시에 잡으면 판 비교로 한쪽만 반영되고, `docbench status` 가 맡겨 둔 작업의 피드백을 보여 준다(피드백 스킬이 그것을 건너뛴다).
@@ -216,7 +217,7 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 | 4 | 밖에서 고침 | 편집기로 문서를 고치면 화면에 바뀐 글이 표시된다(초록·취소선, 배지에 마우스를 올리면 누가·언제) — 앱·B·C 1초 안팎, E 몇 초·창으로 돌아오면 바로. 화면에서 그 섹션을 편집하는 중이었으면 내 글이 지켜지고 차이를 보여 준다 |
 | 5 | CLI 왕복 | 화면 피드백 → `docbench fb list --waiting assistant` 에 보임 → `fb reply <id> -m … --resolve` → 화면 카드가 바뀜 |
 | 6 | Claude 가 고친 문서 | `docbench doc write … --section … --base …` 후 가만히 둔 화면이 새 글을 보여 준다 |
-| 7 | 넘기기·Claude 작업 | T 에 `onHandoff` 를 걸었으면 넘기기 → 터미널에 한 줄이 들어가고 그 세션이 처리한다. Claude 작업: 창이 "연결됨" → 피드백 하나 넘기기 → 로그가 흐르고(읽은 파일·막힌 접근) 끝나면 문서에 바뀐 글·카드에 회신. "Claude 제안" → 카드에 제안 → 차이 → 적용. 끈 서버면 넘기기 → 요청함 파일(+ 고른 알림이 실제로 터미널에 닿는지) |
+| 7 | 보내기·Claude 작업 | 초안 둘을 적어도 아무 데도 가지 않는다 → 보내기. T 에 `onHandoff` 를 걸었으면 터미널에 한 줄이 들어가고 그 세션이 처리한다. Claude 작업: 창이 "연결됨" → 보내기 → 로그가 흐르고(읽은 파일·막힌 접근) 끝나면 문서에 바뀐 글·"볼 것"에 회차 → 하나 되돌리기(바이트 그대로 돌아오는지) → 하나 확인. "제안만" → 차이 → 적용. "Claude 검토" → 볼 것에 제안·질문. 앱 없이: 터미널 한 줄 → 결과가 볼 것에. 끈 서버면 요청함 파일(+ 고른 알림이 실제로 터미널에 닿는지) |
 | 8 | 보안 | **T**: 열쇠 없이 `curl <앱>/api/app/info` → 401 · `<앱>/embed` 응답의 `Content-Security-Policy` 가 `frame-ancestors 'self' <허용한 출처>` 뿐 · 대시보드 페이지에 다른 Host(`-H "Host: evil.example"`)로 요청하면 거부, 응답에 `Cache-Control: no-store` · 열쇠가 대시보드 저장소·로그에 없다(찾을 때도 열쇠는 변수로 넘겨 화면에 찍지 않는다). **공통**: Claude 작업 로그에 "안전 실행" 줄이 있고, 돌 때 claude 명령줄에 `--restricted --safe-mode` 가 있는지(PowerShell `Get-CimInstance Win32_Process \| ? CommandLine -match 'restricted' \| select CommandLine`, macOS·Linux `ps -ef \| grep -- --restricted`) · 열린 포트가 127.0.0.1 에만 묶였는지(`netstat -ano \| findstr <포트>`, macOS·Linux 는 `ss -ltn`). B: 토큰 없이 곁 프로세스 직접 호출 401, 브라우저 요청에 토큰이 안 보임. C: DocBench 경로도 대시보드 인증을 탄다. 다른 Host 403, `X-DocBench` 없는 쓰기 403 |
 | 9 | 대시보드 회귀 | 대시보드 자체 시험·빌드·린트 통과, 다른 화면 모양 그대로 |
 
@@ -242,7 +243,7 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 | 탭에 "이 주소는 열쇠가 있어야 열립니다" (T) | 넣은 열쇠가 앱의 것과 다르다 → 대시보드 프로세스가 같은 사용자·같은 설정 폴더(`DOCBENCH_HOME`)를 보는지, 열쇠를 캐시해 두지 않았는지 |
 | `host.js` 를 못 받음 (T) | 앱이 꺼졌거나 포트가 바뀜 → `app --status`, 주소를 `app.json` 에서 매번 읽는지 |
 | 탭에 "앱 화면에서 합친 뒤 다시 여세요" (T) | `root` 가 이미 더한 작업 공간을 품는다 → `app --open` → 폴더 추가 → 그 폴더 → 합치기 |
-| 넘기기가 터미널로 안 가고 Claude 작업 창이 열림 (T) | `onHandoff` 가 15초 안에 `{ handled: true }` 를 못 돌려줌, 또는 오류 → 터미널 API 호출을 확인 |
+| 보내기가 터미널로 안 가고 작업대가 스스로 처리함 (T) | `onHandoff` 가 15초 안에 `{ handled: true }` 를 못 돌려줌, 또는 오류 → 터미널 API 호출을 확인 |
 | PUT·POST 가 응답 없이 멈춤 | 본문 파서가 먼저 읽음 → 처리기를 파서보다 앞에(§4 C) |
 | 화면이 실시간으로 안 바뀜 | 프록시·압축이 SSE 를 모음 → 버퍼링·압축 끄기. 안 되면 `createRestAdapters({ live: 'poll' })` |
 | 403 `HOST_NOT_ALLOWED` | 브라우저 주소의 호스트 이름 → `allowHosts`·`--allow-host`. 앱은 `localhost`·`127.0.0.1`·`::1` 로만 부른다(`app.json` 의 `url` 그대로) |
@@ -250,10 +251,10 @@ server.on('close', () => void docbench?.close());   // Claude 작업 엔진도 �
 | 작업대가 칸을 못 채우거나 긴 문서가 잘림 | 요소에 `display:block` 을 줬거나 부모 높이가 정해지지 않음 → §4 프런트 높이, T 는 탭 칸 높이 |
 | 저장 때 `EPERM`·`EBUSY` | 편집기·백신·동기화 도구가 파일을 잡음 → 잠시 뒤 다시 |
 | 문서가 읽기 전용 | 화면 머리 안내가 이유를 말한다(CP949 인데 iconv-lite 없음, 깨진 바이트 등). 사람이 동의하면 UTF-8 로 바꿔 저장 |
-| 제안·넘기기 명령이 안 돎, `status` 에 "주의" | 명령을 문서 폴더 `config.json` 에 적음 → 이 PC 의 설정으로(§4 공통) |
+| 제안·알림 명령이 안 돎, `status` 에 "주의" | 명령을 문서 폴더 `config.json` 에 적음 → 이 PC 의 설정으로(§4 공통) |
 | `claude 실행 파일을 찾지 못했습니다` | `assistant.command` 에 전체 경로(§5), 앱이면 다시 켠다 |
 | "Claude Code 에 로그인하지 않았습니다" | 터미널에서 `claude` → `/login`(또는 `claude auth login`). 1분 안에 다시 확인한다 |
 | Claude 작업 창이 연결 안내에서 넘어가지 않음 (E) | `node <cli> app --status` 에 그 문서 폴더가 있는지(없으면 `link` 가 안 됨), 화면의 기록 자리와 `docbench status` 의 "기록:" 이 같은지, "내 것 아님"이면 `link --owner <계정>`, 로그(`%LOCALAPPDATA%\docbench\logs\`) |
 | "Claude Code 업데이트 필요" | `--restricted`·`--safe-mode` 가 없는 판 → `claude update`. 1분 안에 다시 확인한다 |
-| 작업 "실패: 고친 글(text)이 비어 있습니다" | 작은 모델·낮은 노력에서 가끔(실측) → 피드백은 그대로 Claude 차례, 모델·노력을 올려 다시 |
+| 작업 "실패: 고친 글(text)이 비어 있습니다" | 작은 모델·낮은 노력에서 가끔(실측) → 피드백은 그대로 보냄, 모델·노력을 올려 다시 |
 | E 에서 "읽기만"만 보임 | 보안 문맥이 아님(`http://사내호스트`)이거나 엣지·크롬이 아님 → localhost·https 로, 또는 T·B |

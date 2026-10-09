@@ -221,6 +221,7 @@ export class RunEngine {
   }
 
   get claudeCmd() { return this.o.claudeCommand || resolveClaudeCommand(this.ws.config.assistant?.command); }
+  /** @returns {import('../dist/core.mjs').Person} */
   get actor() { return { kind: 'assistant', name: this.ws.config.assistantName || 'Claude' }; }
 
   /** @returns {import('../dist/core.mjs').RunnerInfo} */
@@ -264,6 +265,8 @@ export class RunEngine {
     // 지난번에 남은 끄기 요청은 지운다(켜자마자 꺼지지 않게)
     await fs.rm(this.stopFile, { force: true }).catch(() => undefined);
     await this.recover();
+    // 자리가 이미 있으면 맞춰 둔다(문서 폴더 경로·지시가 바뀌었을 수 있다) — 없으면 터미널 한 줄을 처음 쓸 때 만든다
+    if (existsSync(path.join(this.ws.dir, core.ROOM_FILES.claudeMd))) await this.ws.ensureRoom().catch(() => undefined);
     await this.beat();
     this.timers.push(setInterval(() => void this.beat(), core.RUNNER_BEAT_MS));
     // 요청은 감시로 바로, 감시가 안 되는 드라이브를 위해 1.5초 폴링도
@@ -319,7 +322,7 @@ export class RunEngine {
   files(id) {
     // 상태 파일 안의 id 는 믿지 않는다 — 파일 이름에서 온, 모양이 맞는 id 만 경로가 된다
     if (!core.validRunId(id)) throw Object.assign(new Error('잘못된 작업 id: ' + String(id).slice(0, 60)), { code: 'BAD_REQUEST' });
-    const f = core.runFiles(id); return { req: path.join(this.dir, f.req), status: path.join(this.dir, f.status), log: path.join(this.dir, f.log), cancel: path.join(this.dir, f.cancel), out: path.join(this.dir, id + '.out.json') }; }
+    const f = core.runFiles(id); return { req: path.join(this.dir, f.req), status: path.join(this.dir, f.status), log: path.join(this.dir, f.log), cancel: path.join(this.dir, f.cancel), out: path.join(this.dir, id + '.out.json'), ctx: path.join(this.dir, f.ctx), prompt: path.join(this.dir, f.prompt), result: path.join(this.dir, f.result) }; }
   /** @param {any} st */
   /**
    * 상태 파일 쓰기. 같은 작업의 쓰기는 들어온 차례대로 하나씩 — 진행 표시를 쓰는 사이 엔진이 꺼지며 "취소됨"을 적으면
@@ -354,9 +357,17 @@ export class RunEngine {
       const st = core.cleanRunEntry(await readJson(f.status), id);
       if (st) { out.push(st); continue; }
       const req = core.cleanRunEntry(await readJson(f.req), id, 'queued');
-      if (req) out.push(req);
+      // 터미널 Claude 를 기다리는 요청 — 칠 한 줄을 이 서버가 아는 기록 자리로(파일에서 읽지 않는다)
+      if (req) out.push(req.state === 'queued' && core.isTerminalRunner(req.runner) ? { ...req, terminal: this.terminalHandoff(req) } : req);
     }
     return out;
+  }
+
+  /** 터미널 안내 — 기록 폴더(절대 경로)·이름·칠 줄(새 대화·이어서) @param {{ id: string, model?: string, effort?: string }} r */
+  terminalHandoff(r) {
+    const room = this.ws.dir;
+    const locale = /** @type {any} */ (this.ws.config).locale === 'en' ? 'en' : 'ko';
+    return { room, roomName: path.basename(room), ...core.terminalCommands({ id: r.id, room, model: r.model, effort: r.effort, locale }) };
   }
 
   /** @param {string} id @param {number} from @returns {Promise<{ lines: any[], next: number }>} */
@@ -449,6 +460,8 @@ export class RunEngine {
           await this.writeStatus({ ...req, state: 'queued' });
         }
       } while (this.scanAgain);
+      // 터미널 Claude 가 남긴 결과 파일 (설치 없는 연결, D76)
+      await this.pickupResults().catch(() => undefined);
     } finally { this.scanning = false; }
     void this.pump();
   }
@@ -485,52 +498,9 @@ export class RunEngine {
   staleEntry(st) { return Date.parse(st.at || '') < Date.now() - 86400000; }
 
   // ------------------------------------------------------------ 한 작업
-  /** @param {any} req */
-  async buildContext(req) {
-    const ws = this.ws;
-    await ws.scan();
-    /** @type {import('../dist/core.mjs').RunContext} */
-    const ctx = { kind: req.kind, mode: req.mode || 'auto', root: ws.root, items: [], docs: {} };
-    /** @type {{ id: string, reason: string }[]} */
-    const skipped = [];
-    const titles = new Map();
-    for (const id of req.feedbackIds) {
-      let f;
-      try { f = await ws.getFeedback(id); } catch { skipped.push({ id, reason: 'gone' }); continue; }
-      if (f.status !== 'open' || (req.kind === 'handoff' && f.waitingOn !== 'assistant')) { skipped.push({ id, reason: 'not-waiting' }); continue; }
-      if (req.kind === 'propose' && f.target.kind !== 'section') { skipped.push({ id, reason: 'not-section' }); continue; }
-      /** @type {import('../dist/core.mjs').RunItem} */
-      const it = { feedback: f, allowed: ['answer', 'ask', 'decline'] };
-      if (f.docId && f.target.kind !== 'item') {
-        let doc;
-        try { doc = await ws.readDoc(f.docId); } catch { skipped.push({ id, reason: 'no-doc' }); continue; }
-        if (!titles.has(f.docId)) titles.set(f.docId, await ws.titleOf(f.docId).catch(() => f.docId));
-        ctx.docs[f.docId] ||= { md: doc.md, version: doc.version };
-        it.docId = doc.id;
-        it.docTitle = titles.get(f.docId);
-        it.docPath = path.join(ws.root, ...doc.id.split('/'));
-        it.docVersion = doc.version;
-        // 설정으로 막은 문서는 고치지도 제안하지도 않는다. 인코딩 때문에 읽기 전용이면 제안만(사람이 UTF-8 변환에 동의하고 적용)
-        /** @type {import('../dist/core.mjs').RunAction[]} */
-        const canChange = !doc.readOnly ? ['edit', 'propose'] : doc.readOnlyReason === 'config' ? [] : ['propose'];
-        const key = core.locateSectionKey(doc.md, f);
-        if (key) {
-          const text = core.getSectionText(doc.md, key);
-          const s = core.findSection(doc.md, key);
-          it.sectionKey = key;
-          it.sectionLine = s ? doc.md.slice(0, s.start).split('\n').length : undefined;
-          if (text != null && text.length > core.MAX_SECTION_CHARS) it.tooLarge = true;
-          else { it.sectionText = text ?? undefined; it.allowed = [...canChange, ...it.allowed]; }
-        } else if (f.target.kind === 'doc') {
-          it.sectionKeys = core.sectionSources(doc.md).map((s) => s.key);
-          if (it.sectionKeys.length) it.allowed = [...canChange, ...it.allowed];
-        }
-        if (req.kind === 'propose') it.allowed = it.allowed.filter((a) => a !== 'edit');
-      }
-      if (ctx.mode === 'propose') it.allowed = it.allowed.filter((a) => a !== 'edit');
-      ctx.items.push(it);
-    }
-    return { ctx, skipped };
+  /** 결과 반영에 쓰는 저장소 — 반영 규칙은 core(apply.ts) 한 벌 @param {any} req */
+  applyHost(req) {
+    return wsHost(this.ws, { log: (/** @type {any} */ l) => this.log(req.id, l), emit: (/** @type {any} */ ev) => this.o.emit?.(ev) });
   }
 
   /**
@@ -549,28 +519,58 @@ export class RunEngine {
     return out.slice(0, 8);
   }
 
+  /**
+   * 요청 → 맥락·프롬프트 (엔진이 돌릴 때와 터미널 Claude 에게 넘길 때 같다)
+   * @param {any} req @param {{ inline?: boolean }} [o]
+   */
+  async prepare(req, o = {}) {
+    await this.ws.scan();
+    const host = this.applyHost(req);
+    const review = req.kind === 'review';
+    const { ctx, skipped } = review ? await core.buildReviewContext(host, req, { root: this.ws.root }) : await core.buildRunContext(host, req, { root: this.ws.root, inline: o.inline });
+    const docs = review ? /** @type {any} */ (ctx).docs.map((/** @type {any} */ d) => d.id) : [...new Set(/** @type {any} */ (ctx).items.map((/** @type {any} */ i) => i.docId).filter(Boolean))];
+    const empty = review ? !(/** @type {any} */ (ctx).docs.length) : !(/** @type {any} */ (ctx).items.length);
+    const readDirs = this.readDirs(docs);
+    if (readDirs.length !== 1 || readDirs[0] !== this.ws.root) /** @type {any} */ (ctx).readDirs = readDirs;
+    const prompt = empty ? '' : review ? core.buildReviewPrompt(/** @type {any} */ (ctx)) : core.buildRunPrompt(/** @type {any} */ (ctx));
+    return { ctx, skipped, docs, readDirs, prompt, empty, review };
+  }
+
+  /**
+   * 결과(Claude 가 돌려준 JSON) 반영 — 엔진이 돌린 것과 터미널 Claude 가 결과 파일로 준 것이 같은 길
+   * @param {any} req @param {any} ctx @param {any} payload
+   */
+  async applyOutput(req, ctx, payload) {
+    const host = this.applyHost(req);
+    if (req.kind === 'review') {
+      const r = await core.applyReviewOutput(host, req, ctx, payload, this.actor);
+      return { summary: r.summary, extra: { overview: r.overview || undefined, created: r.created, view: r.view.length ? r.view : undefined } };
+    }
+    const r = await core.applyRunOutput(host, req, ctx, payload, this.actor);
+    return { summary: r.summary, extra: { overview: r.overview || undefined } };
+  }
+
   /** @param {any} req */
   async runOne(req) {
     const t0 = Date.now();
     /** @type {any} */
     let st = { ...req, state: 'running', startedAt: new Date().toISOString(), progress: { phase: 'starting', at: new Date().toISOString() } };
     await this.writeStatus(st);
-    await this.log(req.id, { k: 'start', v: { kind: req.kind, model: req.model || '', effort: req.effort || '', mode: req.mode || 'auto', n: req.feedbackIds.length } });
-    const summary = core.emptySummary();
+    await this.log(req.id, { k: 'start', v: { kind: req.kind, model: req.model || '', effort: req.effort || '', mode: req.mode || 'auto', n: req.kind === 'review' ? (req.docIds || []).length : req.feedbackIds.length } });
+    let summary = core.emptySummary();
     if (!this.claude.ok) this.claude = await probeClaude(this.claudeCmd, true, this.workDir);
     if (!this.claude.ok) throw new Error(this.claude.problem || 'claude 를 쓸 수 없습니다');
 
-    const { ctx, skipped } = await this.buildContext(req);
-    for (const s of skipped) { summary.skipped++; await this.log(req.id, { k: 'skip', v: { fb: s.id, reason: s.reason }, ref: { feedbackId: s.id } }); }
-    st.docs = [...new Set(ctx.items.map((i) => i.docId).filter(Boolean))];
-    if (!ctx.items.length) {
+    const { ctx, skipped, docs, readDirs, prompt, empty, review } = await this.prepare(req);
+    for (const s of skipped) { summary.skipped++; await this.log(req.id, { k: 'skip', v: { fb: s.id, reason: s.reason }, ref: review ? { docId: s.id } : { feedbackId: s.id } }); }
+    // 문서를 읽지 못한 것은 볼 것에 못 함으로(보냄에 말없이 남지 않게)
+    if (!review) { const lost = await core.failUnreadable(this.applyHost(req), req, skipped); summary.skipped -= lost; summary.failed += lost; }
+    st.docs = docs;
+    if (empty) {
       await this.writeStatus({ ...st, state: 'done', endedAt: new Date().toISOString(), summary, progress: undefined });
       await this.log(req.id, { k: 'done', v: { ms: Date.now() - t0 } });
       return;
     }
-    const readDirs = this.readDirs(st.docs);
-    if (readDirs.length !== 1 || readDirs[0] !== this.ws.root) ctx.readDirs = readDirs;
-    const prompt = core.buildRunPrompt(ctx);
     const args = [
       '-p',
       '--restricted', '--safe-mode',
@@ -579,7 +579,7 @@ export class RunEngine {
       ...readDirs.flatMap((d) => ['--add-dir', d]),
       '--strict-mcp-config', '--no-session-persistence',
       '--output-format', 'stream-json', '--verbose',
-      '--json-schema', JSON.stringify(core.RUN_SCHEMA),
+      '--json-schema', JSON.stringify(review ? core.REVIEW_SCHEMA : core.RUN_SCHEMA),
       ...(req.model ? ['--model', req.model] : this.ws.config.assistant?.model ? ['--model', this.ws.config.assistant.model] : []),
       ...(req.effort ? ['--effort', req.effort] : []),
       ...(this.ws.config.assistant?.args || []),
@@ -656,110 +656,175 @@ export class RunEngine {
     // 문제를 살펴볼 때: DOCBENCH_RUN_DEBUG=1 이면 Claude 가 돌려준 결과를 그대로 남긴다 (.docbench/runs/<id>.out.json, 커밋하지 않음)
     if (process.env.DOCBENCH_RUN_DEBUG === '1') await writeJson(path.join(this.dir, req.id + '.out.json'), payload).catch(() => undefined);
 
-    // ---- 반영
+    // ---- 반영 (core 한 벌)
     st = { ...st, progress: { phase: 'applying', at: new Date().toISOString() } };
     await this.writeStatus(st);
-    const plan = core.planRun(ctx, payload);
-    for (const a of plan.actions) {
-      if (a.failed) {
-        // 반영할 수 없는 결과: 피드백은 그대로 Claude 차례 — 다시 넘기면 된다
-        summary.failed++;
-        await this.log(req.id, { k: 'applyFail', v: { fb: a.feedbackId, message: a.problem || a.failed }, ref: { feedbackId: a.feedbackId, docId: a.docId }, text: a.message });
-        continue;
-      }
-      try {
-        const r = await this.apply(req, ctx, a);
-        if (r === 'gone') { summary.skipped++; await this.log(req.id, { k: 'skip', v: { fb: a.feedbackId, reason: 'changed' }, ref: { feedbackId: a.feedbackId } }); continue; }
-        summary[r === 'edit' ? 'edited' : r === 'propose' ? 'proposed' : r === 'answer' ? 'answered' : r === 'ask' ? 'asked' : 'declined']++;
-      } catch (e) {
-        summary.failed++;
-        await this.log(req.id, { k: 'applyFail', v: { fb: a.feedbackId, message: String(/** @type {any} */ (e)?.message || e).slice(0, 300) }, ref: { feedbackId: a.feedbackId, docId: a.docId } });
-      }
-    }
-    for (const id of plan.missing) { summary.skipped++; await this.log(req.id, { k: 'skip', v: { fb: id, reason: 'no-answer' }, ref: { feedbackId: id } }); }
-    if (plan.summary) await this.log(req.id, { k: 'summary', text: plan.summary });
-    await this.log(req.id, { k: 'done', v: { ms: Date.now() - t0, edited: summary.edited, proposed: summary.proposed, answered: summary.answered, asked: summary.asked, declined: summary.declined, skipped: summary.skipped, failed: summary.failed } });
-    await end({ state: 'done' });
+    const r = await this.applyOutput(req, ctx, payload);
+    summary = r.summary;
+    await this.log(req.id, { k: 'done', v: { ms: Date.now() - t0, ...summary } });
+    await end({ state: 'done', ...r.extra });
+  }
+
+  // ------------------------------------------------------------ 터미널 Claude (설치 없음, D76)
+  /**
+   * 터미널 Claude 가 맡을 요청을 만든다: 요청·맥락·지시 파일을 쓰고 기록 폴더(Claude 자리)를 갖춘다.
+   * 결과 파일(runs/<id>.result.json)은 이 엔진이나 같은 계정의 화면이 반영한다.
+   * @param {any} input @param {any} [by]
+   */
+  async submitTerminal(input, by) {
+    const owner = core.safeAccountId(by?.id) || this.user;
+    const req = core.makeRunRequest(input, { runner: core.TERMINAL_RUNNER + ':' + owner, by });
+    const { ctx, prompt, empty, skipped } = await this.prepare(req, { inline: true });
+    if (empty) throw Object.assign(new Error('처리할 것이 없습니다(이미 닫혔거나 문서를 읽지 못함)'), { code: 'BAD_REQUEST' });
+    await this.ws.ensureRoom();
+    const f = this.files(req.id);
+    await writeJson(f.ctx, { req, ctx });
+    await fs.writeFile(f.prompt, core.terminalPromptFile(req.id, req, prompt, /** @type {any} */ (this.ws.config).locale === 'en' ? 'en' : 'ko'));
+    await writeJson(f.req, req);
+    // 문서를 읽지 못해 뺀 것은 볼 것에 못 함으로 — 요청을 만든 뒤
+    if (req.kind !== 'review') await core.failUnreadable(this.applyHost(req), req, skipped);
+    this.emit('runs', req.id);
+    return { ...req, state: 'queued', terminal: this.terminalHandoff(req) };
   }
 
   /**
-   * 피드백 하나를 고친다. 그 사이 사람이 닫았거나 남에게 넘겼으면 'gone'
-   * @param {any} req @param {string} id @param {(f: any) => any} patchOf
+   * 터미널 Claude 가 남긴 결과 파일을 반영한다. 요청 결과(<id>.result.json)와 스스로 올린 제안(inbox-*.result.json).
+   * 같은 계정의 화면도 같은 파일을 볼 수 있어 잠금 안에서 상태를 다시 보고 한 번만 반영한다.
    */
-  async updateFb(req, id, patchOf) {
-    for (let i = 0; i < 3; i++) {
-      let f;
-      try { f = await this.ws.getFeedback(id); } catch { return 'gone'; }
-      if (f.status !== 'open' || (req.kind === 'handoff' && f.waitingOn !== 'assistant')) return 'gone';
-      try { await this.ws.updateFeedback(id, patchOf(f), f.version); return 'ok'; } catch (e) {
-        if (/** @type {any} */ (e).code !== 'CONFLICT' && /** @type {any} */ (e).code !== 'BUSY') throw e;
-        await sleep(120 * (i + 1));
+  async pickupResults() {
+    if (this.stopped) return;
+    const names = await fs.readdir(this.dir).catch(() => []);
+    // 결과를 기다리는 터미널 요청 중 멈춘 것·다른 길(플러그인 CLI 등)로 이미 처리된 것은 닫는다 — 화면이 "기다리는 중"에 붙잡히지 않게
+    for (const n of names) {
+      if (!n.endsWith('.req.json')) continue;
+      const id = n.slice(0, -'.req.json'.length);
+      const f = core.runFiles(id);
+      if (!core.validRunId(id) || names.includes(f.status) || names.includes(f.result)) continue;
+      const raw = /** @type {any} */ (await readJson(path.join(this.dir, n)));
+      if (!raw || !core.isTerminalRunner(raw.runner)) continue;
+      const owner = String(raw.runner).slice(core.TERMINAL_RUNNER.length + 1);
+      if (owner && owner !== this.user && !this.owners.includes(owner)) continue;
+      const canceled = names.includes(f.cancel);
+      const ids = Array.isArray(raw.feedbackIds) ? raw.feedbackIds.filter((/** @type {unknown} */ x) => typeof x === 'string') : [];
+      let elsewhere = false;
+      if (!canceled && ids.length) {
+        const rows = await Promise.all(ids.map((/** @type {string} */ x) => this.ws.getFeedback(x).catch(() => null)));
+        elsewhere = rows.every((r) => !r || r.status !== 'open' || r.waitingOn !== 'assistant');
       }
+      if (!canceled && !elsewhere) continue;
+      await this.ws.withLock(core.lockKey.run(id), async () => {
+        if (await readJson(path.join(this.dir, f.status))) return;
+        const st = core.cleanRunEntry(raw, id, 'queued');
+        if (!st) return;
+        if (elsewhere) await this.log(id, { k: 'terminal.elsewhere' });
+        await this.writeStatus({ ...st, state: canceled ? 'canceled' : 'done', endedAt: new Date().toISOString(), ...(elsewhere ? { summary: { ...core.emptySummary(), skipped: ids.length } } : {}) });
+      }).catch(() => undefined);
     }
-    throw new Error('피드백이 계속 바뀌어 회신하지 못했습니다');
+    for (const n of names) {
+      if (!n.endsWith('.result.json')) continue;
+      if (core.INBOX_RE.test(n)) { await this.applyInbox(n).catch(() => undefined); continue; }
+      const id = n.slice(0, -'.result.json'.length);
+      if (!core.validRunId(id)) continue;
+      const f = this.files(id);
+      const req = /** @type {any} */ (await readJson(f.req));
+      if (!req || !core.isTerminalRunner(req.runner)) continue;
+      // 이 PC 의 계정 것만 — 남의 요청을 내 구독으로 반영하지 않는다(반영은 Claude 를 부르지 않지만 기록의 주인을 지킨다)
+      const owner = String(req.runner).slice(core.TERMINAL_RUNNER.length + 1);
+      if (owner && owner !== this.user && !this.owners.includes(owner)) continue;
+      await this.ws.withLock(core.lockKey.run(id), async () => {
+        const cur = /** @type {any} */ (await readJson(f.status));
+        const step = core.terminalStep(cur, existsSync(f.cancel));
+        if (step === 'skip') return;
+        if (step === 'apply') { await this.applyTerminal(id, req); return; }
+        // 멈춤 요청이 있으면 결과가 와도 반영하지 않는다 · 반영 중에 멈춘 것은 실패로(보낸 것은 그대로 — 다시 보낼 수 있다)
+        const base = cur || core.cleanRunEntry(req, id, 'queued');
+        if (!base) return;
+        const error = step === 'stale' ? '반영 중에 멈췄습니다 — 보낸 것을 확인하고 다시 보내 주세요' : undefined;
+        if (error) await this.log(id, { k: 'error', v: { message: error } }).catch(() => undefined);
+        await this.writeStatus({ ...base, state: step === 'cancel' ? 'canceled' : 'failed', endedAt: new Date().toISOString(), progress: undefined, ...(error ? { error } : {}) });
+      }).catch(() => undefined);
+    }
   }
 
-  /**
-   * @param {any} req @param {import('../dist/core.mjs').RunContext} ctx @param {import('../dist/core.mjs').PlannedAction} a
-   * @returns {Promise<'edit' | 'propose' | 'answer' | 'ask' | 'decline' | 'gone'>}
-   */
-  async apply(req, ctx, a) {
-    const ws = this.ws;
-    const now = () => new Date().toISOString();
-    const actor = this.actor;
-    const msg = (/** @type {string} */ m, /** @type {any} */ note) => (m + (note ? ' ' + core.noteText(note) : '')).trim();
-    const ref = { feedbackId: a.feedbackId, docId: a.docId, section: a.sectionKey };
-    let action = a.action;
-    let note = a.note;
-
-    if (action === 'edit' && a.docId && a.sectionKey && a.text != null) {
-      // 사람이 그 사이 같은 섹션을 고쳤으면 덮지 않고 제안으로. 다른 곳만 바뀌었으면 지금 판에 그대로 끼운다
-      for (let i = 0; i < 3 && action === 'edit'; i++) {
-        const doc = await ws.readDoc(a.docId);
-        const cur = core.getSectionText(doc.md, a.sectionKey);
-        if (cur == null || core.norm(cur) !== core.norm(a.before || '')) { action = 'propose'; note = 'changed-meanwhile'; break; }
-        const next = core.replaceSection(doc.md, a.sectionKey, a.text);
-        if (next == null) { action = 'propose'; break; }
-        // 피드백이 아직 Claude 차례인지 먼저 본다 — 닫힌 피드백 때문에 문서를 고치지 않게
-        const f = await ws.getFeedback(a.feedbackId).catch(() => null);
-        if (!f || f.status !== 'open' || (req.kind === 'handoff' && f.waitingOn !== 'assistant')) return 'gone';
-        try {
-          await ws.writeDoc(a.docId, next, { baseVersion: doc.version, summary: a.message.slice(0, 200), feedbackIds: [a.feedbackId], by: actor });
-          // 서버 안에서 쓴 것은 이력 감시가 '내 쓰기'로 건너뛴다 — 화면에 직접 알린다 (실행기 프로세스면 화면이 이력 줄을 본다)
-          this.o.emit?.({ type: 'doc', id: a.docId });
-          this.o.emit?.({ type: 'changes' });
-          const r = await this.updateFb(req, a.feedbackId, (fb) => ({ status: 'resolved', thread: [...fb.thread, { author: actor, text: msg(a.message, note), at: now() }] }));
-          await this.log(req.id, { k: 'apply.edit', v: { fb: a.feedbackId, doc: a.docId, section: a.sectionKey }, ref });
-          if (r === 'gone') await this.log(req.id, { k: 'warn', v: { message: '문서는 고쳤지만 그 사이 피드백이 바뀌어 회신은 남기지 못했습니다' }, ref });
-          return 'edit';
-        } catch (e) {
-          const c = /** @type {any} */ (e).code;
-          if (c === 'READ_ONLY') { action = 'propose'; break; }
-          if (c !== 'CONFLICT' && c !== 'BUSY') throw e;
-          await sleep(150 * (i + 1));
-        }
-      }
-      if (action === 'edit') { action = 'propose'; note ||= 'changed-meanwhile'; }
+  /** @param {string} id @param {any} raw */
+  async applyTerminal(id, raw) {
+    const f = this.files(id);
+    let req;
+    try { req = { ...core.cleanRunEntry(raw, id, 'queued'), ...core.normalizeRunInput(raw), id, runner: raw.runner }; } catch { return; }
+    const saved = /** @type {any} */ (await readJson(f.ctx));
+    const t0 = Date.now();
+    // 결과 파일이 아직 JSON 이 아니면(Claude 가 쓰는 중·Windows 공유 위반) 잠깐은 기다린다 — 상태를 쓰지 않고 다음에 다시
+    const resultFile = path.join(this.dir, core.runFiles(id).result);
+    const payload = core.parseResultText(await fs.readFile(resultFile, 'utf8').catch(() => null));
+    if (!payload) {
+      const st = await fs.stat(resultFile).catch(() => null);
+      if (st && Date.now() - st.mtimeMs < core.RESULT_SETTLE_MS) return;
     }
-
-    if (action === 'propose' && a.sectionKey && a.text != null) {
-      const r = await this.updateFb(req, a.feedbackId, (fb) => ({
-        waitingOn: 'owner',
-        proposal: { path: a.sectionKey ? core.keyToPath(a.sectionKey) : [], before: a.before || '', after: a.text, rationale: a.message, author: actor, at: now(), state: 'pending' },
-        thread: [...fb.thread, { author: actor, text: msg(a.message, note), at: now() }],
-      }));
-      if (r === 'gone') return 'gone';
-      await this.log(req.id, { k: 'apply.propose', v: { fb: a.feedbackId, doc: a.docId || '', section: a.sectionKey, note: note || '' }, ref });
-      return 'propose';
+    /** @type {any} */
+    const st = { ...req, state: 'running', startedAt: new Date().toISOString(), progress: { phase: 'applying', at: new Date().toISOString() } };
+    await this.writeStatus(st);
+    await this.log(id, { k: 'terminal' });
+    if (!payload || !saved?.ctx) {
+      const error = !saved?.ctx ? '요청의 맥락 파일이 없어 반영하지 못했습니다' : '결과 파일이 정해진 모양(JSON)이 아닙니다';
+      await this.log(id, { k: 'error', v: { message: error } });
+      await this.writeStatus({ ...st, state: 'failed', endedAt: new Date().toISOString(), progress: undefined, error });
+      return;
     }
-    if (action === 'propose') { action = 'ask'; note ||= 'no-section'; }
-
-    const patch = action === 'answer' ? { status: 'resolved' } : action === 'decline' ? { status: 'declined' } : { status: 'open', waitingOn: 'owner' };
-    const r = await this.updateFb(req, a.feedbackId, (fb) => ({ ...patch, thread: [...fb.thread, { author: actor, text: msg(a.message, note), at: now() }] }));
-    if (r === 'gone') return 'gone';
-    await this.log(req.id, { k: 'apply.' + action, v: { fb: a.feedbackId, note: note || '', problem: a.problem || undefined }, ref, text: a.message });
-    return /** @type {any} */ (action);
+    let r;
+    try { r = await this.applyOutput(req, saved.ctx, payload); } catch (e) {
+      // "반영 중"에 멈춰 있지 않게 — 실패로 남기면 보낸 것은 그대로(다시 보낼 수 있다)
+      const error = String(/** @type {any} */ (e)?.message || e).slice(0, 300);
+      await this.log(id, { k: 'error', v: { message: error } }).catch(() => undefined);
+      await this.writeStatus({ ...st, state: 'failed', endedAt: new Date().toISOString(), progress: undefined, error });
+      return;
+    }
+    await this.log(id, { k: 'done', v: { ms: Date.now() - t0, ...r.summary } });
+    await this.writeStatus({ ...st, ...r.extra, state: 'done', endedAt: new Date().toISOString(), progress: undefined, summary: r.summary, docs: saved.ctx.docs ? (Array.isArray(saved.ctx.docs) ? saved.ctx.docs.map((/** @type {any} */ d) => d.id) : Object.keys(saved.ctx.docs)) : undefined });
   }
+
+  /** 터미널 Claude 가 스스로 올린 제안 — 선제안과 같은 모양으로 반영하고 파일은 치운다 @param {string} name */
+  async applyInbox(name) {
+    const file = path.join(this.dir, name);
+    await this.ws.withLock(core.lockKey.run(name), async () => {
+      const payload = /** @type {any} */ (core.parseResultText(await fs.readFile(file, 'utf8').catch(() => null)));
+      if (!payload) {
+        // 쓰는 중이면 다음에 · 오래도록 모양이 아니면 치운다(계속 집지 않게)
+        const st = await fs.stat(file).catch(() => null);
+        if (st && Date.now() - st.mtimeMs > core.RESULT_SETTLE_MS) await fs.rm(file, { force: true });
+        return;
+      }
+      const docIds = [...new Set((Array.isArray(payload?.items) ? payload.items : []).map((/** @type {any} */ x) => x?.docId).filter(core.validDocId))].slice(0, core.RUN_MAX_DOCS);
+      // 반영하기 전에 치운다 — 도중에 꺼져도 같은 제안을 두 번 올리지 않게(내용은 이미 읽었다). 문서를 가리키지 않으면 반영할 것도 없다
+      await fs.rm(file, { force: true });
+      if (!docIds.length) return;
+      const req = { ...core.makeRunRequest({ kind: 'review', feedbackIds: [], docIds, goal: 'suggest' }, { runner: core.TERMINAL_RUNNER + ':' + this.user, by: this.actor }), docIds };
+      await writeJson(this.files(req.id).req, req);
+      const { ctx } = await core.buildReviewContext(this.applyHost(req), req, { root: this.ws.root });
+      await this.log(req.id, { k: 'terminal' });
+      const r = await this.applyOutput(req, ctx, payload);
+      await this.log(req.id, { k: 'done', v: { ms: 0, ...r.summary } });
+      await this.writeStatus({ ...req, ...r.extra, state: 'done', startedAt: req.at, endedAt: new Date().toISOString(), summary: r.summary });
+    }).catch(() => undefined);
+  }
+}
+
+/**
+ * 반영 규칙(core/apply.ts)에 줄 서버 저장소
+ * @param {import('./workspace.mjs').Workspace} ws @param {{ log?: (l: any) => Promise<void>, emit?: (ev: any) => void }} [o]
+ */
+export function wsHost(ws, o = {}) {
+  return {
+    readDoc: (/** @type {string} */ id) => ws.readDoc(id),
+    writeDoc: (/** @type {string} */ id, /** @type {string} */ md, /** @type {any} */ opt) => ws.writeDoc(id, md, opt),
+    getFeedback: (/** @type {string} */ id) => ws.getFeedback(id),
+    updateFeedback: (/** @type {string} */ id, /** @type {any} */ patch, /** @type {number | undefined} */ v) => ws.updateFeedback(id, patch, v),
+    createFeedback: (/** @type {any} */ input) => ws.createFeedback(input, input.author),
+    titleOf: (/** @type {string} */ id) => ws.titleOf(id),
+    docPath: (/** @type {string} */ id) => path.join(ws.root, ...id.split('/')),
+    standing: () => ws.standing(),
+    log: o.log || (async () => undefined),
+    emit: o.emit,
+  };
 }
 
 /**

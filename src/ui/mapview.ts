@@ -125,7 +125,7 @@ function paintTree(app: App): void {
         h('span', { text: n.folder ? `${n.count} · ${fmtBytes(n.size)}` : fmtBytes(it?.size) }),
         h('span', { class: 'd', text: it?.modified ? fmtTime(it.modified).slice(0, 10) : '' }),
         it?.url ? h('a', { href: it.url, target: '_blank', rel: 'noopener noreferrer', title: 'open' }, '↗') : null,
-        app.can('feedback.create') ? h('button', { class: 'db-btn sm ghost', type: 'button', title: t('map.feedback'), onclick: () => app.dialogs.compose({ item: { id: it ? it.id : n.path, label: (n.path || n.name).replace(/#.*$/, '') } }) }, t('doc.feedback')) : null),
+        app.can('feedback.create') ? h('button', { class: 'db-btn sm ghost', type: 'button', title: t('map.feedback'), onclick: (e: Event) => app.composer.open({ item: { id: it ? it.id : n.path, label: (n.path || n.name).replace(/#.*$/, '') } }, e.currentTarget as HTMLElement) }, t('doc.feedback')) : null),
       it?.note && !n.folder ? h('div', { class: 'db-tnote', text: it.note }) : null);
     if (n.folder && n.kids.length && !filtering) {
       const tg = () => { (ms.open ||= {})[n.path] = !open; hl = []; app.saveState(); paintTree(app); };

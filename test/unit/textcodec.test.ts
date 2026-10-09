@@ -98,9 +98,9 @@ describe('PC 설정·.gitignore', () => {
     expect([c.user, c.assistant, c.notify.command, c.notify.message, c.warnings?.length]).toEqual(['', null, ['ok'], 'm', 3]);
   });
   it('mergeGitignore: 빠진 줄만 덧붙이고 사람이 더한 줄은 그대로', () => {
-    expect(mergeGitignore('blobs/\nmine/')).toBe('blobs/\nmine/\nviewstate/\ninbox/\nlocks/\nruns/\nrunners/\nstate.json\n*.tmp\n');
-    // 0.2.0 이 만든 .gitignore 에는 Claude 작업 폴더(runs/·runners/)만 더한다
-    expect(mergeGitignore('blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\n')).toBe('blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\nruns/\nrunners/\n');
+    expect(mergeGitignore('blobs/\nmine/')).toBe('blobs/\nmine/\nviewstate/\ninbox/\nlocks/\nruns/\nrunners/\nstate.json\n*.tmp\n.claude/\nCLAUDE.md\n');
+    // 0.2.0 이 만든 .gitignore 에는 Claude 작업 폴더(runs/·runners/)와 Claude 자리(.claude/·CLAUDE.md, 0.6)만 더한다
+    expect(mergeGitignore('blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\n')).toBe('blobs/\nviewstate/\ninbox/\nlocks/\nstate.json\n*.tmp\nruns/\nrunners/\n.claude/\nCLAUDE.md\n');
     expect(mergeGitignore(DOT_GITIGNORE)).toBeNull();
   });
 });

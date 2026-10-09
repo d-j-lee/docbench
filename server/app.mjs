@@ -8,7 +8,7 @@
  *  - 화면: http://127.0.0.1:<포트>/ — 고르기 창 없이 드라이브를 둘러보고 폴더를 "작업 공간"으로 더한다(펼친 폴더만 읽는다, D64).
  *    사람은 이 PC 의 로그인(표시 이름은 화면의 "나"에서), 기록은 이 PC 의 기록 보관함(locateData) — 묻지 않는다.
  *  - Claude 작업: 작업 공간마다 엔진(RunEngine, kind 'app') 하나. 단일 HTML 로 쓰는 폴더도 `docbench link` 로 이어 두면 맡는다.
- *  - 대시보드 탭: /embed?root=<폴더>&scope=… 를 iframe 으로, /host.js 가 테마·사람·넘기기·할 일 수를 postMessage 로 잇는다(D68).
+ *  - 대시보드 탭: /embed?root=<폴더>&scope=… 를 iframe 으로, /host.js 가 테마·사람·보내기·할 일 수를 postMessage 로 잇는다(D68).
  *
  * 보안(로컬 도구지만 브라우저와 같은 PC 의 다른 사용자가 붙을 수 있다):
  *  - 127.0.0.1 에만 열고 Host 헤더를 본다(DNS rebinding).
