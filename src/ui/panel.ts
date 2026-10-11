@@ -18,6 +18,8 @@ import type { App } from './app';
 
 const LEGACY: Record<string, PanelFilter> = { active: 'review', owner: 'review', assistant: 'sent', closed: 'done' };
 const FILTERS: PanelFilter[] = ['draft', 'review', 'sent', 'done'];
+/** 볼 것의 묶음 키: Claude 가 먼저 남긴 의견(회차 없음). 작업 id 와 겹치지 않는 모양 */
+const RAISED = ':raised';
 
 export class Panel {
   private app: App;
@@ -65,6 +67,15 @@ export class Panel {
   open(scope?: 'doc' | 'all', filter?: PanelFilter): void {
     this.setPanel({ ...(scope ? { scope } : {}), ...(filter ? { filter } : {}) });
     this.app.root.classList.add('panel-open');
+  }
+
+  /**
+   * 위 막대의 초안·볼 것 — 그 숫자는 모든 문서의 것이다. 범위가 "이 문서"인데 이 문서에 없으면 모든 문서로 연다
+   * (숫자를 보고 눌렀는데 빈 목록이 나오지 않게)
+   */
+  openTab(filter: 'draft' | 'review'): void {
+    const empty = this.scope === 'doc' && !this.rowsOf(filter).length && (filter !== 'review' || !this.viewRounds().length);
+    this.open(empty ? 'all' : undefined, filter);
   }
 
   /** 새 초안을 보낼 것으로 고른다 */
@@ -408,7 +419,8 @@ export class Panel {
   private renderReview(rows: Feedback[], views: RunStatus[] = []): void {
     const app = this.app;
     const groups = new Map<string, Feedback[]>();
-    for (const f of rows) { const k = f.result?.run || ''; (groups.get(k) || groups.set(k, []).get(k)!).push(f); }
+    // Claude 가 먼저 남긴 의견(대화의 Claude·옛 판의 사전 리뷰 — 회차가 없다)은 한 묶음으로
+    for (const f of rows) { const k = f.result?.run || (this.kindOf(f) === 'point' ? RAISED : ''); (groups.get(k) || groups.set(k, []).get(k)!).push(f); }
     // 읽기 정리만 돌려준 작업(피드백 없음)도 회차로 — 적용하거나 치울 때까지
     for (const r of views) if (!groups.has(r.id)) groups.set(r.id, []);
     const latest = (run: string, fs: Feedback[]) => fs.reduce((m, f) => (f.result?.at || f.updatedAt) > m ? (f.result?.at || f.updatedAt) : m, app.dock?.runFor(run)?.endedAt || '');
@@ -430,8 +442,9 @@ export class Panel {
     const app = this.app;
     const t = this.t;
     const edits = fs.filter((f) => f.result?.kind === 'edit' && f.result.change && !f.result.reverted);
+    const raised = runId === RAISED;
     const when = run?.endedAt || fs[0]?.result?.at || '';
-    const kind = !runId ? t('round.other') : run?.kind === 'review' ? (run.goal === 'view' ? t('round.view') : t('round.review')) : t('round.sent', { n: run?.feedbackIds.length || fs.length });
+    const kind = raised ? t('round.raised', { n: fs.length }) : !runId ? t('round.other') : run?.kind === 'review' ? (run.goal === 'view' ? t('round.view') : t('round.review')) : t('round.sent', { n: run?.feedbackIds.length || fs.length });
     const box = h('div', { class: 'db-round' },
       h('div', { class: 'db-round-h' }, h('b', { text: kind }), when ? h('span', { class: 'db-hint', text: relTime(when, t) }) : null),
       run?.note ? h('div', { class: 'db-round-note' }, h('span', { class: 'db-hint', text: t('round.note') + ' ' }), run.note) : null,
@@ -447,8 +460,10 @@ export class Panel {
       }
       if (viewPending && !fs.length) box.append(h('div', { class: 'db-row' }, h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => app.dismissReadingPlan(runId) }, t('round.view.dismiss'))));
     }
+    if (raised) box.append(h('div', { class: 'db-hint', text: t('round.raised.hint') }));
     const okable = fs.filter((f) => this.kindOf(f) !== 'failed');
-    if (runId && fs.length) box.append(h('div', { class: 'db-row wrap' },
+    // 먼저 남긴 의견은 한꺼번에 닫지 않는다 — 하나씩 읽고 반영해·답하기·닫기
+    if (runId && !raised && fs.length) box.append(h('div', { class: 'db-row wrap' },
       okable.length ? h('button', { class: 'db-btn sm', type: 'button', title: t('round.ok.hint'), onclick: () => void this.confirmAll(okable) }, t('round.ok', { n: okable.length })) : null,
       edits.length ? h('button', { class: 'db-btn sm ghost', type: 'button', onclick: () => void this.revertAll(edits) }, t('round.revert', { n: edits.length })) : null,
       h('button', { class: 'db-btn sm ghost', type: 'button', title: t('round.copy.hint'), onclick: () => void this.copySummary(fs, run), html: icon('copy') + ' ' + t('round.copy') })));
@@ -457,7 +472,8 @@ export class Panel {
 
   private kindOf(f: Feedback): string {
     const r = f.result;
-    if (!r) return f.author.kind === 'assistant' ? (f.proposal?.state === 'pending' ? 'suggest' : 'question') : 'mine';
+    // 결과 꼬리표 없이 Claude 가 올린 것 = 먼저 남긴 의견(대화의 Claude 가 저장소에 직접, 옛 판의 사전 리뷰)
+    if (!r) return f.author.kind === 'assistant' ? (f.proposal?.state === 'pending' ? 'suggest' : 'point') : 'mine';
     if (r.kind === 'review') return f.proposal?.state === 'pending' ? 'suggest' : 'question';
     if (r.kind === 'edit' && r.reverted) return 'reverted';
     return r.kind;
@@ -497,6 +513,11 @@ export class Panel {
       if (f.proposal?.state === 'pending' && app.can('doc.edit')) btn(t('fb.proposal.apply'), () => void applyProposal(app, f), 'db-btn sm primary');
       btn(t('result.reply'), () => this.startReply(f), 'db-btn sm ghost');
       btn(t('fb.proposal.reject'), () => void this.reject(f), 'db-btn sm ghost');
+    } else if (k === 'point') {
+      // 동의하면 한 번에 — 글을 적지 않아도 다음 묶음에 "반영해 주세요"로 간다
+      btn(t('result.accept'), () => void this.accept(f), 'db-btn sm primary', t('result.accept.hint'));
+      btn(t('result.reply'), () => this.startReply(f), 'db-btn sm ghost');
+      btn(t('result.close'), () => void this.confirm(f), 'db-btn sm ghost');
     } else if (k === 'ask' || k === 'question') {
       btn(t('result.reply'), () => this.startReply(f), 'db-btn sm primary');
       btn(t('result.close'), () => void this.confirm(f), 'db-btn sm ghost');
@@ -585,6 +606,14 @@ export class Panel {
   private async reject(f: Feedback): Promise<void> {
     const app = this.app;
     await app.updateFeedback(f, { status: 'resolved', ...(f.proposal ? { proposal: { ...f.proposal, state: 'rejected' as const } } : {}), thread: [...f.thread, { author: app.me, text: this.t('fb.proposal.reject'), at: new Date().toISOString() }] });
+  }
+  /** 먼저 남긴 의견에 동의 — "반영해 주세요"를 붙여 내 초안으로(다음 묶음과 함께 간다) */
+  private async accept(f: Feedback): Promise<void> {
+    const app = this.app;
+    const t = this.t;
+    if (!(await app.updateFeedback(f, { status: 'draft', waitingOn: 'owner', drafter: app.me.id || null, thread: [...f.thread, { author: app.me, text: t('result.accept.say'), at: new Date().toISOString() }] }))) return;
+    this.select(f.id);
+    app.toast(t('result.accept.done'), { action: t('fb.draft.see'), onAction: () => this.open(undefined, 'draft') });
   }
   /** 초안으로 — 내 초안이 된다(함께 쓰는 기록이면 남에게는 보이지 않는다). 못 한 결과의 꼬리표는 지운다 */
   private async toDraft(f: Feedback): Promise<void> {
@@ -724,7 +753,7 @@ export class Panel {
     if (e.key === 'x' && filter === 'draft') { this.sel.has(f.id) ? this.sel.delete(f.id) : this.sel.add(f.id); this.render(); }
     else if (e.key === 's' && filter === 'draft') void this.app.updateFeedback(f, { severity: f.severity === 'high' ? null : 'high' });
     else if (e.key === 'e' && filter === 'draft') { e.preventDefault(); this.startEdit(f); }
-    else if (e.key === 'a' && filter === 'review') void (f.proposal?.state === 'pending' ? (this.app.can('doc.edit') ? applyProposal(this.app, f) : undefined) : k === 'failed' ? this.resend(f) : this.confirm(f));
+    else if (e.key === 'a' && filter === 'review') void (f.proposal?.state === 'pending' ? (this.app.can('doc.edit') ? applyProposal(this.app, f) : undefined) : k === 'failed' ? this.resend(f) : k === 'point' ? this.accept(f) : this.confirm(f));
     else if (e.key === 'u' && filter === 'review' && k === 'edit') void this.revert(f);
     else if (e.key === 'r' && filter === 'review') { e.preventDefault(); this.startReply(f); }
     else return;

@@ -124,3 +124,50 @@ test('편집본 층·판 기록·초안·대화창으로 보내기·제안·적�
   assert.ok((await page.content()).includes('(모의 제안) 한 줄'), '다시 열면 편집본');
   assert.deepEqual(errors, []);
 });
+
+test('Claude 가 먼저 남긴 의견(대화의 Claude·옛 판 사전 리뷰): 위 막대 "볼 것"은 이 문서에 없으면 모든 문서로, 반영해 한 번이면 초안으로', async (t) => {
+  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  t.after(() => ctx.close());
+  await ctx.addInitScript(mock);
+  const page = await ctx.newPage();
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
+  const id = 'docs/운영-런북.md';
+  const other = 'docs/설계-노트.md';
+  const path = ['알림 서비스 운영 런북', '장애 대응', '중복 발송'];
+  const at = '2026-10-08T07:30:00Z';
+  // 옛 판(0.1) 사전 리뷰 모양 그대로 — 결과 꼬리표 없음, 작성 Claude, 내 차례. 보기 상태는 "이 문서"만
+  const row = { author: { kind: 'assistant', name: 'Claude' }, body: '멱등 키 확인 절차를 단계로 나누자.', createdAt: at, updatedAt: at, docId: id, kind: '명료성', order: 0,
+    selector: { exact: '멱등' }, severity: 'medium', status: 'open', target: { kind: 'section', path, heading: path[2] }, thread: [], title: '절차를 단계로', version: 2, waitingOn: 'owner' };
+  await page.goto(base + '#' + encodeURIComponent(other));
+  await page.evaluate(([row]) => { localStorage.clear(); window.__seed([['feedback/pr-01', row], ['data/users/u_mockuser0000000000000/viewstate', { v: 1, updatedAt: Date.now(), docs: {}, panel: { scope: 'doc', filter: 'owner' } }]]); }, [row]);
+  await page.reload();
+  await page.waitForSelector('.db-sec');
+  await page.locator('.db-pill.owner .n', { hasText: '1' }).waitFor();
+  await page.locator('.db-pill.owner').click();
+  const card = page.locator('.db-card[data-id="pr-01"]');
+  await card.waitFor({ timeout: 5000 });
+  assert.match(await page.locator('.db-panel .db-ph-top').innerText(), /모든 문서/, '이 문서에 없으니 모든 문서로 열었다');
+  assert.match(await page.locator('.db-round-h').first().innerText(), /Claude 가 먼저 남긴 것 1/);
+  assert.equal(await card.locator('.db-rkind').innerText(), 'Claude 의견');
+  assert.deepEqual(await card.locator('.db-c-act button').allInnerTexts(), ['반영해', '답하기', '닫기']);
+  assert.equal(await page.locator('.db-round', { hasText: 'Claude 가 먼저 남긴 것' }).locator('button', { hasText: '모두 확인' }).count(), 0, '먼저 남긴 의견은 한꺼번에 닫지 않는다');
+
+  await card.locator('button', { hasText: '반영해' }).click();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem('mockdb') || '[]').some(([k, v]) => k === 'feedback/pr-01' && v.status === 'draft'));
+  const all = Object.fromEntries(await page.evaluate(() => JSON.parse(localStorage.getItem('mockdb') || '[]')));
+  const fb = all['feedback/pr-01'];
+  assert.equal(fb.drafter, 'u_mockuser0000000000000');
+  assert.deepEqual(fb.thread.map((m) => [m.author.kind, m.text]), [['human', '반영해 주세요.']]);
+  assert.deepEqual(Object.keys(fb.thread[0].author).sort(), ['id', 'kind'], '공유 데이터엔 사람 id 만');
+  assert.deepEqual(await page.evaluate(() => window.__sent), [], '반영해는 초안에 둘 뿐 — 보내지 않는다');
+  await page.locator('.db-pill.draft .n', { hasText: '1' }).waitFor();
+
+  // 초안 탭에서 한 번에 보내면 대화로 한 요청
+  await page.locator('.db-pill.draft').click();
+  await page.locator('.db-sendbar .db-sendbtn', { hasText: '1개 보내기' }).click();
+  await until(async () => (await page.evaluate(() => window.__sent)).length === 1, 5000);
+  assert.match((await page.evaluate(() => window.__sent))[0].text, /^DocBench 검토 — 보낸 피드백 1건 \(알림 서비스 운영 런북\)/);
+  assert.deepEqual(errors, []);
+});

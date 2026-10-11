@@ -397,7 +397,7 @@ export class App {
     const todoSig = `${c.owner}:${c.assistant}:${c.draft}`;
     if (todoSig !== this.lastTodo) { this.lastTodo = todoSig; this.emit({ type: 'todo', owner: c.owner, assistant: c.assistant, draft: c.draft }); }
     const pill = (cls: string, ic: 'edit' | 'eye', label: string, n: number, f: 'draft' | 'review') =>
-      h('button', { class: 'db-pill ' + cls + (n ? '' : ' zero'), type: 'button', title: label, 'aria-label': `${label} ${n}`, onclick: () => this.panel.open(undefined, f) },
+      h('button', { class: 'db-pill ' + cls + (n ? '' : ' zero'), type: 'button', title: label, 'aria-label': `${label} ${n}`, onclick: () => this.panel.openTab(f) },
         h('span', { class: 'ic', html: icon(ic) }), h('span', { class: 'lbl', text: label }), h('span', { class: 'n', text: n }));
     bar.append(h('div', { class: 'db-turns' },
       pill('draft', 'edit', this.t('pill.draft'), c.draft, 'draft'),

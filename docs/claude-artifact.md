@@ -54,6 +54,11 @@
    - `update feedback/<id>` `{ waitingOn: 'owner', result: { kind: 'edit', at, run: 'chat', change: { docId, section: <키>, from: 'v', to: 'v+1' } }, version: n+1, updatedAt, thread: [...기존, { author: Claude, text: 한두 문장, at }] }` — 닫지 않는다(사람이 "볼 것"에서 확인·되돌리기)
 5. 되물을 때는 `update feedback/<id>` 로 `waitingOn: 'owner'`, `result: { kind: 'ask', at, run: 'chat' }` 와 질문 한 줄. 제안만이면 `proposal` 과 `result.kind: 'propose'`.
 
+### Claude 가 먼저 의견을 남길 때 (사전 리뷰)
+
+사람이 보내기 전에 대화의 Claude 가 문서를 읽고 짚을 곳을 남기려면 `set feedback/<새 id>` 로 `{ docId, target: { kind: 'section', path, heading }, selector?: { exact }, title, body, kind?, severity?, author: { kind: 'assistant', name: 'Claude' }, status: 'open', waitingOn: 'owner', thread: [], version: 1, createdAt, updatedAt }` — `result` 는 넣지 않는다.
+화면은 이것을 볼 것의 "Claude 가 먼저 남긴 것"에 "Claude 의견"으로 보이고, 사람이 **반영해**를 누르면 `thread` 에 "반영해 주세요"가 붙은 초안이 되었다가 다음 묶음과 함께 보내진다(위 1번으로 다시 온다). 바꿀 글까지 있으면 `proposal`(`state: 'pending'`)을 함께 넣는다 — 그러면 "제안"으로 적용·거절.
+
 화면이 열려 있으면 구독으로 바로 반영되고, 고친 섹션에 "바뀜" 표시가 뜬다.
 
 ## 한계

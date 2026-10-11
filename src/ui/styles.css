@@ -721,7 +721,7 @@
 .docbench .db-round-view { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; background: var(--db-surface); border-radius: 8px; padding: 6px 8px; }
 .docbench .db-rkind { font-weight: 650; border-radius: 4px; padding: 0 6px; background: var(--db-sunk); color: var(--db-ink-2); }
 .docbench .db-rkind.edit { background: var(--db-go-soft); color: var(--db-go); }
-.docbench .db-rkind.propose, .docbench .db-rkind.suggest { background: var(--db-chg-soft); color: var(--db-chg); }
+.docbench .db-rkind.propose, .docbench .db-rkind.suggest, .docbench .db-rkind.point { background: var(--db-chg-soft); color: var(--db-chg); }
 .docbench .db-rkind.ask, .docbench .db-rkind.question { background: var(--db-wait-soft); color: var(--db-wait); }
 .docbench .db-rkind.reverted, .docbench .db-rkind.decline { text-decoration: line-through; }
 .docbench .db-rkind.failed { background: var(--db-bad-soft); color: var(--db-bad); }
