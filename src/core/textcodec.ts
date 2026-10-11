@@ -100,8 +100,8 @@ export function decodeBytes(buf: Uint8Array, legacy?: LegacyCodec | null): Decod
       raw = dec('utf-8', true).decode(body);
     } catch {
       const loose = dec('utf-8').decode(body);
-      const bad = (loose.match(/�/g) || []).length;
-      const good = (loose.match(/[^\x00-\x7F�]/g) || []).length;
+      const bad = (loose.match(/\uFFFD/g) || []).length;
+      const good = (loose.match(/[^\x00-\x7F\uFFFD]/g) || []).length;
       if (good > 0 && good >= bad * 4) {
         // 대부분 UTF-8 인데 몇 바이트가 깨졌다 → 보여 주되 저장은 막는다
         raw = loose; writable = false; readOnlyReason = 'invalid-utf8';
@@ -192,7 +192,7 @@ export function createBrowserCp949(): LegacyCodec | null {
     for (let lead = 0x81; lead <= 0xfe; lead++) {
       for (let trail = 0x41; trail <= 0xfe; trail++, i++) {
         const s = parts[i];
-        if (!s || s === '�' || s.length !== 1) continue;
+        if (!s || s === '\uFFFD' || s.length !== 1) continue;
         const cp = s.charCodeAt(0);
         if (!map.has(cp)) map.set(cp, (lead << 8) | trail); // 처음 나온 자리(표준 인코더와 같은 규칙)
       }

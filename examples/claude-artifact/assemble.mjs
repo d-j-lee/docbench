@@ -13,6 +13,8 @@ if (!out) { console.error('사용법: node assemble.mjs <출력 index.html> [제
 const css = readFileSync(path.join(dist, 'docbench.css'), 'utf8');
 const js = readFileSync(path.join(dist, 'docbench.iife.js'), 'utf8').replace(/\/\/# sourceMappingURL=\S+\s*$/, '');
 if (/<\/script/i.test(js) || /<\/style/i.test(css)) throw new Error('번들에 닫는 태그 문자열이 있다');
+// 아티팩트 게시는 대체 문자(U+FFFD)가 든 파일을 깨진 편집으로 보고 거부한다 — 코드에서는 \uFFFD 로 적는다
+if (js.includes('\uFFFD') || css.includes('\uFFFD')) throw new Error('번들에 대체 문자(U+FFFD)가 그대로 있다 — 소스에서 \\uFFFD 로');
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 // 아티팩트 게시는 doctype·head·body 를 스스로 씌운다 — 여기서는 본문만 쓴다

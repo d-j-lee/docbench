@@ -220,7 +220,7 @@ const where = (f) => (f.target.kind === 'section' ? core.sectionKeyOf(f) : f.tar
 function inputText(buf) {
   const d = decode(buf);
   if (d.encoding === 'euc-kr' || d.readOnlyReason === 'invalid-utf8') die('입력 파일이 UTF-8(또는 UTF-16)이 아닙니다. UTF-8 로 저장해 다시 주세요.');
-  if (/\u0000|�/.test(d.text)) die('입력에 깨진 글자(NUL·U+FFFD)가 있습니다.');
+  if (/\u0000|\uFFFD/.test(d.text)) die('입력에 깨진 글자(NUL·U+FFFD)가 있습니다.');
   return d.text;
 }
 async function readInput(a) {

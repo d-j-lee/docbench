@@ -3,6 +3,10 @@
 판마다 무엇이 달라졌는지 적습니다. `main` 에 새 판(`package.json` 의 version)이 올라가면 CI 가 이 파일의 그 판 절을 본문으로
 태그 `v<판>` 과 GitHub Release 를 만들고 `release/docbench.html`·`release/docbench.mjs` 를 첨부합니다(절이 없으면 릴리스하지 않습니다).
 
+## 0.6.3 — 2026-10-12
+
+- 고침: claude.ai 아티팩트로 게시(`examples/claude-artifact/assemble.mjs`)하면 "대체 문자(U+FFFD)가 든 파일"이라며 거부되었습니다 — 번들 안 정규식에 그 글자가 날것으로 들어 있었습니다. 코드에서는 `\uFFFD` 로 적고(동작은 같습니다), `npm run check` 와 assemble 이 번들에 그 글자가 다시 들어오면 멈춥니다.
+
 ## 0.6.2 — 2026-10-12
 
 Claude 가 먼저 남긴 의견(사전 리뷰)을 다루기 쉽게 — 실제 작업대의 사전 리뷰 34건으로 써 보고 고쳤습니다.

@@ -2,6 +2,7 @@
 //  1) release/docbench.html · release/docbench.mjs · 플러그인의 cli/docbench.mjs 가 지금 빌드(dist/)와 같은가 (다르면 저장소의 배포물이 낡은 것)
 //  2) Claude Code 플러그인 버전이 package.json 버전과 같은가 (스킬은 그 버전의 문서·계약을 가리킨다)
 //  3) 단일 HTML 이 담은 CLI 주소(v<판> 태그)·지문이 맞는가  4) CHANGELOG.md 에 이 판의 절이 있는가 — CI 가 이것으로 태그·Release 를 만든다
+//  5) 브라우저 번들에 대체 문자(U+FFFD)가 날것으로 없는가 — claude.ai 아티팩트 게시는 그 글자가 든 파일을 깨진 것으로 보고 거부한다(코드에는 \uFFFD 로)
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -21,4 +22,8 @@ if (!html.includes(`/v${pkg}/release/docbench.mjs`)) fail(`release/docbench.html
 if (!cliSha || !html.includes(cliSha)) fail('release/docbench.html 이 담은 CLI 지문이 release/docbench.mjs 와 다릅니다.');
 // 4) 이 판의 바뀐 점 — CI 가 Release 본문으로 쓴다
 if (!readFileSync('CHANGELOG.md', 'utf8').split(/\r?\n/).some((l) => l.startsWith(`## ${pkg} `) || l === `## ${pkg}`)) fail(`CHANGELOG.md 에 ${pkg} 절이 없습니다.`);
-if (!process.exitCode) console.log(`release/docbench.html · docbench.mjs · 플러그인 cli = dist, 플러그인 버전 = ${pkg}, HTML 의 CLI 주소·지문 = v${pkg}, CHANGELOG ${pkg} 절 있음`);
+// 5) 아티팩트로 게시하는 번들(examples/claude-artifact/assemble.mjs)과 단일 HTML 에 날것의 U+FFFD 가 없어야 한다
+for (const f of ['dist/docbench.iife.js', 'dist/docbench.css', 'dist/docbench.html']) {
+  if (existsSync(f) && readFileSync(f, 'utf8').includes('\uFFFD')) fail(`${f} 에 대체 문자(U+FFFD)가 그대로 있습니다 — 소스에서 \\uFFFD 로 적으세요(아티팩트 게시가 거부합니다).`);
+}
+if (!process.exitCode) console.log(`release/docbench.html · docbench.mjs · 플러그인 cli = dist, 플러그인 버전 = ${pkg}, HTML 의 CLI 주소·지문 = v${pkg}, CHANGELOG ${pkg} 절 있음, 브라우저 번들에 날것의 U+FFFD 없음`);
