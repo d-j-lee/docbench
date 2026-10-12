@@ -15,6 +15,8 @@ const js = readFileSync(path.join(dist, 'docbench.iife.js'), 'utf8').replace(/\/
 if (/<\/script/i.test(js) || /<\/style/i.test(css)) throw new Error('번들에 닫는 태그 문자열이 있다');
 // 아티팩트 게시는 대체 문자(U+FFFD)가 든 파일을 깨진 편집으로 보고 거부한다 — 코드에서는 \uFFFD 로 적는다
 if (js.includes('\uFFFD') || css.includes('\uFFFD')) throw new Error('번들에 대체 문자(U+FFFD)가 그대로 있다 — 소스에서 \\uFFFD 로');
+// 제어 문자(탭·줄바꿈 말고)도 마찬가지 — esbuild 는 문자열의 '\u001F' 를 날것으로 풀어 쓴다
+if (/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/.test(js + css)) throw new Error('번들에 제어 문자가 그대로 있다 — 문자열이면 String.fromCharCode 로');
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
 
 // 아티팩트 게시는 doctype·head·body 를 스스로 씌운다 — 여기서는 본문만 쓴다

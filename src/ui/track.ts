@@ -9,11 +9,16 @@ import { h } from './dom';
 
 const SKIP = '.db-sec-side,button,.db-noindex,.db-editor';
 /** 표의 뼈대(tr·tbody …) 바로 아래 글(칸 사이 줄바꿈)에는 표시를 두지 않는다 — 두면 브라우저가 칸을 하나 더 그린다 */
-const TABLE_FRAME = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'COLGROUP']);
-const inTableFrame = (n: Text): boolean => TABLE_FRAME.has(n.parentElement?.tagName ?? '');
-/** 칸·줄 경계 한 글자 — 비교 글에서 공백 대신. 차이를 칸 너머로 묶지 않게(칸마다 지운 글 → 더한 글) */
-const CELL = '\u001F';
-const CELLS = /\u001F/g;
+const inTableFrame = (n: Text): boolean => {
+  const p = n.parentElement;
+  return p instanceof HTMLTableElement || p instanceof HTMLTableSectionElement || p instanceof HTMLTableRowElement || p instanceof HTMLTableColElement;
+};
+/**
+ * 칸·줄 경계 한 글자 — 비교 글에서 공백 대신. 차이를 칸 너머로 묶지 않게(칸마다 지운 글 → 더한 글).
+ * U+2028(줄 구분자)을 쓴다: 공백이라 collect 가 ' ' 로 접으므로 글 속에서는 나오지 않고, esbuild 는 ASCII 이스케이프로 적는다.
+ * 0.7.0 의 '\u001F' 는 esbuild 가 날것의 제어 문자로 풀어 썼다(이제 check 가 막는다). 줄바꿈·탭도 날것으로 나온다.
+ */
+const CELL = '\u2028';
 
 /** 섹션 요소의 자기 글(하위 섹션 제외) — 공백을 한 칸으로 접은 글과 글자별 위치 */
 export function ownTextIndex(secEl: Element): { s: string; map: [Text, number][] } {
@@ -78,8 +83,9 @@ export function markSectionChanges(secEl: HTMLElement, oldOwnMd: string, rules: 
   for (const c of chunks) {
     if (!c.chg) { pos += c.b.length; continue; }
     // 바꾼 구절은 "지운 글 → 더한 글" 한 덩어리로 (지운 글을 앞에)
-    if (c.a.replace(CELLS, ' ').trim()) ops.push({ pos, kind: 'del', text: c.a });
-    if (c.b.replace(CELLS, ' ').trim()) ops.push({ pos, kind: 'ins', end: pos + c.b.length });
+    // 경계(U+2028)도 공백이라 trim 이 걷는다
+    if (c.a.trim()) ops.push({ pos, kind: 'del', text: c.a });
+    if (c.b.trim()) ops.push({ pos, kind: 'ins', end: pos + c.b.length });
     pos += c.b.length;
   }
   // 뒤에서부터 — 글자 위치표가 앞쪽은 그대로 맞게. 같은 자리면 더한 글을 먼저 감싸고 지운 글을 그 앞에 둔다
@@ -89,12 +95,12 @@ export function markSectionChanges(secEl: HTMLElement, oldOwnMd: string, rules: 
     if (op.kind === 'ins') {
       // 앞뒤 공백은 감싸지 않는다
       let s = op.pos, e = op.end;
-      while (s < e && (b[s] === ' ' || b[s] === CELL)) s++;
-      while (e > s && (b[e - 1] === ' ' || b[e - 1] === CELL)) e--;
+      while (s < e && /\s/.test(b[s])) s++;
+      while (e > s && /\s/.test(b[e - 1])) e--;
       if (s < e) { const got = wrap(idx.map, s, e); if (got) ins++; }
       continue;
     }
-    const text = op.text.replace(CELLS, ' ').replace(/ {2,}/g, ' ').trim();
+    const text = op.text.split(CELL).join(' ').trim();
     const el = h('del', { class: 'db-chg-del db-noindex', 'data-full': text, text: text.length > 160 ? text.slice(0, 80) + ' … ' + text.slice(-40) : text });
     if (insertAt(idx.map, op.pos, el)) del++;
   }
