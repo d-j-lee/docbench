@@ -18,7 +18,7 @@ const scopeCss = (css) => css.replace(/\.docbench(?![\w-])/g, '.docbench.docbenc
 const cssText = scopeCss(readFileSync('src/ui/styles.css', 'utf8'));
 const cssPlugin = { name: 'docbench-css', setup(b) { b.onLoad({ filter: /styles\.css$/ }, () => ({ contents: cssText, loader: 'text' })); } };
 const common = {
-  plugins: [cssPlugin], bundle: true, target: ['es2021', 'chrome105', 'firefox110', 'safari16'], loader: { '.css': 'text' },
+  plugins: [cssPlugin], bundle: true, target: ['es2021', 'chrome105', 'firefox110', 'safari16'], loader: { '.css': 'text', '.md': 'text' },
   legalComments: 'none', banner: { js: banner }, sourcemap: true, logLevel: 'warning',
   define: { __DOCBENCH_VERSION__: JSON.stringify(pkg.version) },
 };

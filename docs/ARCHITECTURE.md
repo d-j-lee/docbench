@@ -26,7 +26,7 @@
 | `src/index.ts` | `createDocBench`·`<doc-bench>`(dist/docbench.js) — 대시보드에 직접 끼움 | 호스트가 준 것(보통 rest) |
 | `src/standalone.ts` | 서버 없는 단일 HTML(release/docbench.html) | folder, 시작하기는 memory |
 | `src/app-shell.ts` | DocBench 앱 화면 `/` 와 대시보드 탭 `/embed`(dist/app.js) | rest(`/api/w/<id>`), 시작하기는 memory |
-| `src/welcome.ts` | "시작하기" 작업 공간의 글(문서 둘·예제 피드백 하나) — 저장하지 않는다. 흉내 Claude(`demoRuns`, 실행기 종류 `demo`, D72) — 결과 반영은 진짜와 같은 `core/apply`(D75) | memory |
+| `src/welcome.ts` · `src/welcome/<ko·en>/*.md` | "시작하기" 작업 공간 — 문서 다섯(시작하기·연습용 기획서·활용 가이드 셋, 마크다운 파일 그대로를 빌드가 글로 싣는다)·예제 피드백 둘 — 저장하지 않는다. 흉내 Claude(`demoRuns`, 실행기 종류 `demo`, D72) — 결과 반영은 진짜와 같은 `core/apply`(D75) | memory |
 
 **같은 규칙은 한 곳에**: 바이트 보존(`textcodec`)·기록 폴더 모양(`workspace`)·기록 합치기(`records`)·결과 반영(`apply`)·Claude 자리(`room`)는 서버(Node)와 브라우저 폴더 어댑터가
 같은 코드를 쓴다. 각자는 입출력(파일·해시·잠금)과 CP949 코덱만 다르다 — 서버는 `iconv-lite`, 브라우저는 내장 `euc-kr` 디코더로 만든 역표

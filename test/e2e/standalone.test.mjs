@@ -184,6 +184,62 @@ test('file:// 로 열면 시작하기 작업대가 바로 — 이름·폴더를 
   assert.deepEqual(errors, []);
 });
 
+test('시작하기의 활용 가이드(직군별 활용·사용 팁·효용과 한계) + Claude 가 먼저 남긴 의견에 반영해 → 보내기 → 고침·되돌리기, 키보드(f·j·r)', async (t) => {
+  const { page, errors } = await newPage(t, pathToFileURL(html).href + '?lang=ko');
+  await page.waitForSelector('.db-sec');
+  // 가이드 셋이 한 폴더에, 첫 제목이 이름으로
+  const rail = page.locator('.db-rail');
+  for (const g of ['직군별 활용', '사용 팁', '효용과 한계']) await rail.locator('.db-nav', { hasText: g }).first().waitFor();
+  await rail.locator('.db-nav', { hasText: '직군별 활용' }).first().click();
+  await page.locator('.db-sec', { hasText: '내 업무에 적용해 보기' }).first().waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, '표가 있어도 가로 넘침 없음');
+
+  // 볼 것: Claude 가 먼저 남긴 것 2 — 값을 기다리는 질문, 표로 나누자는 의견
+  await openTab(page, 'review');
+  const round = page.locator('.db-round', { hasText: 'Claude 가 먼저 남긴 것 2' });
+  await round.waitFor();
+  const card = page.locator('.db-card[data-id="welcome-2"]');
+  assert.deepEqual(await card.locator('.db-c-act button').allInnerTexts(), ['반영해', '답하기', '닫기']);
+  await cardBtn(card, '반영해').click();
+  await page.locator('.db-toast', { hasText: '"반영해"로 초안에 두었습니다' }).waitFor();
+  await until(async () => (await page.locator('.db-pill.draft .n').innerText()) === '1', 4000);
+
+  // 한 번에 보내면 연습용 Claude 가 제안한 표로 고친다 → 볼 것의 고침 → 되돌리기
+  await dismissToast(page);
+  await sendDrafts(page, { n: 1 });
+  await page.locator('.db-toast', { hasText: 'Claude 가 끝냈습니다' }).waitFor({ timeout: 10000 });
+  await openTab(page, 'review');
+  const edited = page.locator('.db-card[data-id="welcome-2"].r-edit');
+  await edited.waitFor();
+  assert.match(await edited.innerText(), /제안한 글로 바꿨습니다/);
+  const md1 = await page.evaluate(() => window.DocBenchStandalone.adapters.docs.load('연습용 기획서.md').then((d) => d.md));
+  assert.ok(md1.includes('## 위험 요소\n\n| 위험 | 대응 |'), '위험 요소가 표로');
+  await cardBtn(edited, '되돌리기').click();
+  await until(async () => !(await page.evaluate(() => window.DocBenchStandalone.adapters.docs.load('연습용 기획서.md').then((d) => d.md))).includes('| 위험 | 대응 |'), 5000);
+
+  // 되돌린 의견은 초안으로 돌아온다(다시 다듬어 보낸다)
+  await until(async () => (await page.locator('.db-pill.draft .n').innerText()) === '1', 4000);
+
+  // 키보드: 문서에서 f → 패널에 초점 → j 로 첫 카드(welcome-1, 값을 묻는 질문 — 답하기가 먼저) → r 로 답하기 → Ctrl+Enter 로 초안
+  await page.evaluate(() => document.activeElement?.blur());
+  if (await page.evaluate(() => document.querySelector('.docbench')?.classList.contains('panel-open'))) await page.keyboard.press('f');
+  await page.keyboard.press('f');
+  assert.equal(await page.evaluate(() => document.activeElement?.classList.contains('db-panel')), true, 'f 로 패널에 초점');
+  await page.locator('.db-tabs .tab-review').click();
+  await page.locator('.db-panel').focus();
+  const first = page.locator('.db-panel .db-card').first();
+  assert.equal(await first.getAttribute('data-id'), 'welcome-1');
+  assert.deepEqual(await first.locator('.db-c-act button').allInnerTexts(), ['답하기', '닫기'], '질문 카드 — 반영해가 아니다');
+  await page.keyboard.press('j');
+  await page.keyboard.press('r');
+  const reply = page.locator('.db-card[data-id="welcome-1"] .db-reply textarea');
+  await until(async () => await reply.evaluate((e) => e === document.activeElement), 4000);
+  await page.keyboard.type('11월 3~14일, 김민지');
+  await page.keyboard.press('Control+Enter');
+  await until(async () => (await page.locator('.db-pill.draft .n').innerText()) === '2', 4000);
+  assert.deepEqual(errors, []);
+});
+
 test('휴대폰 너비(360): 위 띠가 한 줄, 그 자리의 적는 칸·검토 패널·Claude 창을 손가락으로 — 흉내 Claude 가 답글의 값으로 빈칸을 채우고, 그 밖의 요청은 고치지 않고 솔직히 답한다', async (t) => {
   // 주인 폰 실사용(0.5.0): 넘겼는데 아무 반응이 없었다 — 0.6.0 은 초안으로 모아 한 번에 보내고, 결과는 "볼 것"에 회차로 모인다
   const { page, errors } = await newPage(t, pathToFileURL(html).href + '?lang=ko', { viewport: { width: 360, height: 780 }, isMobile: true, hasTouch: true, deviceScaleFactor: 2 });

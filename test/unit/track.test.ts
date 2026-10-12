@@ -33,6 +33,28 @@ describe('바뀐 글 표시', () => {
     const { secs } = view('## 개요\n\n완전히 다른 새 글이 여기에 길게 들어갑니다. 예전 글과 겹치는 낱말이 없습니다.\n');
     expect(markSectionChanges(secs[0].el, '## 개요\n\n짧은 옛 글\n', rules).big).toBe(true);
   });
+  it('표의 칸이 바뀌어도 칸 수는 그대로 — 줄(tr) 바로 아래에 표시를 두지 않는다', () => {
+    const intro = '## 내 업무에 적용해 보기\n\n내 업무 문서 하나로 시작해 보세요. 문서 위의 단추를 누르고 답하기에 값을 적어 보내면 표를 채웁니다.\n\n| 문서 | 지금 방식 | 바꿔 볼 것 |\n|---|---|---|\n';
+    const before = intro + '| [TODO] | [TODO] | [TODO] |\n';
+    const { a, secs } = view('# 문서\n\n' + intro + '| 주간 보고 | 메신저로 의견 받기 | 읽기 정리 |\n');
+    const s = secs.find((x) => x.key === '문서 › 내 업무에 적용해 보기')!;
+    const r = markSectionChanges(s.el, before, rules);
+    expect(r.big).toBe(false);
+    expect(r.ins + r.del).toBeGreaterThan(0);
+    for (const tr of Array.from(a.querySelectorAll('tr'))) {
+      const cells = Array.from(tr.children).map((c) => c.tagName);
+      expect(cells).toHaveLength(3);
+      expect(cells.every((t) => t === 'TD' || t === 'TH')).toBe(true);
+      for (const n of Array.from(tr.childNodes)) expect(n.nodeType === 1 || !n.textContent?.trim()).toBe(true);
+    }
+    for (const sec of ['TBODY', 'THEAD', 'TABLE']) for (const el of Array.from(a.querySelectorAll(sec))) for (const c of Array.from(el.children)) expect(['INS', 'DEL']).not.toContain(c.tagName);
+    const row = a.querySelector('tbody tr')!;
+    expect(Array.from(row.children).map((td) => td.querySelector('ins')?.textContent ?? '')).toEqual(['주간 보고', '메신저로 의견 받기', '읽기 정리']);
+    // 칸마다 지운 글 → 더한 글 (첫 칸에 몰리지 않는다)
+    expect(Array.from(row.children).map((td) => td.querySelector('del')?.textContent ?? '')).toEqual(['[TODO]', '[TODO]', '[TODO]']);
+    clearChangeMarks(a);
+    expect(Array.from(row.children).map((td) => td.textContent)).toEqual(['주간 보고', '메신저로 의견 받기', '읽기 정리']);
+  });
   it('같으면 아무것도 하지 않는다', () => {
     const { a, secs } = view('## 개요\n\n그대로\n');
     expect(markSectionChanges(secs[0].el, '## 개요\n\n그대로\n', rules)).toEqual({ ins: 0, del: 0, big: false });

@@ -118,6 +118,7 @@
 .docbench .db-rail, .docbench .db-main, .docbench .db-panel { min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .docbench .db-rail { background: var(--db-surface); border-right: 1px solid var(--db-line); padding: 12px 10px 40px; }
 .docbench .db-panel { background: var(--db-surface); border-left: 1px solid var(--db-line); display: flex; flex-direction: column; overflow: hidden; }
+.docbench .db-panel:focus { outline: none; }
 .docbench .db-main { position: relative; padding: 0 16px 120px; scroll-padding-top: 64px; }
 .docbench .db-page { max-width: calc(74ch + 28px); margin: 0 auto; padding-left: 28px; }
 .docbench .db-scrim { display: none; }

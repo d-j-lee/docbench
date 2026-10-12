@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { applyRunOutput, buildRunContext, planRevert, failUnreadable, NO_ANSWER, NO_DOC, type ApplyHost, type HostDoc } from '../../src/core/apply';
-import { planReview, planRun, RUN_MAX_DOCS, normalizeRunInput, buildRunPrompt, type ReviewContext } from '../../src/core/runs';
+import { planReview, planRun, RUN_MAX_DOCS, normalizeRunInput, buildRunPrompt, buildReviewPrompt, type ReviewContext } from '../../src/core/runs';
 import { roomClaudeMd, roomSettings, standingInstructions, terminalCommand, terminalCommands, terminalDeepLink, isRoomPath, terminalPromptFile, parentClaudeMd, ROOM_MARK } from '../../src/core/room';
 import { normalizeFeedback } from '../../src/core/feedback';
 import type { Feedback, RunLogLine } from '../../src/types';
@@ -151,6 +151,12 @@ describe('선제안 결과 검사 (planReview)', () => {
     expect(v.view).toEqual([{ docId: 'a.md', fold: ['런북 › 연락처'], focus: ['런북 › 배포'], guide: '배포부터' }]);
     const ro = planReview(rctx({ docs: [{ id: 'a.md', title: '런북', md, version: '1', readOnly: true }] }), { overview: '', items: [{ docId: 'a.md', section: '런북 › 배포', kind: 'suggest', title: 't', message: 'm', text: '## 배포\n\n짧게\n\n' }], view: [] });
     expect(ro.creates.map((c) => [c.kind, c.text])).toEqual([['question', undefined]]);
+  });
+  it('지시문: 문서가 여럿이면 문서 사이의 어긋남·중복도 짚게 한다(화면 안내와 같은 약속) — 하나·읽기 정리에는 없다', () => {
+    const two = rctx({ docs: [{ id: 'a.md', title: '런북', md, version: '1' }, { id: 'b.md', title: '점검표', md, version: '1' }] });
+    expect(buildReviewPrompt(two)).toMatch(/disagree between them/);
+    expect(buildReviewPrompt(rctx())).not.toMatch(/disagree between them/);
+    expect(buildReviewPrompt({ ...two, goal: 'view' })).not.toMatch(/disagree between them/);
   });
   it('요청 검사: 문서 1~10개, 섹션은 문서 하나일 때만, 반영 방식은 늘 제안', () => {
     expect(normalizeRunInput({ kind: 'review', docIds: ['a.md'], sections: ['런북 › 배포'], mode: 'auto' })).toMatchObject({ kind: 'review', mode: 'propose', goal: 'suggest', sections: ['런북 › 배포'], feedbackIds: [] });

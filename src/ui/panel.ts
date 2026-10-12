@@ -420,7 +420,8 @@ export class Panel {
     const app = this.app;
     const groups = new Map<string, Feedback[]>();
     // Claude 가 먼저 남긴 의견(대화의 Claude·옛 판의 사전 리뷰 — 회차가 없다)은 한 묶음으로
-    for (const f of rows) { const k = f.result?.run || (this.kindOf(f) === 'point' ? RAISED : ''); (groups.get(k) || groups.set(k, []).get(k)!).push(f); }
+    // 작업 회차 없이 Claude 가 올린 것(먼저 남긴 의견·묻는 말)은 한데 — "Claude 가 먼저 남긴 것"
+    for (const f of rows) { const k = f.result?.run || (f.author.kind === 'assistant' ? RAISED : ''); (groups.get(k) || groups.set(k, []).get(k)!).push(f); }
     // 읽기 정리만 돌려준 작업(피드백 없음)도 회차로 — 적용하거나 치울 때까지
     for (const r of views) if (!groups.has(r.id)) groups.set(r.id, []);
     const latest = (run: string, fs: Feedback[]) => fs.reduce((m, f) => (f.result?.at || f.updatedAt) > m ? (f.result?.at || f.updatedAt) : m, app.dock?.runFor(run)?.endedAt || '');

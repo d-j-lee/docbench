@@ -145,7 +145,7 @@ async function welcome(root: HTMLElement): Promise<void> {
   manifest.project.storage = t('welcome.storage');
   manifest.groups = manifest.groups.filter((g) => g.id !== '_bench');
   const mem = createMemoryAdapters({ manifest, docs: w.docs, feedback: w.feedback, me: { kind: 'human', ...info.me } });
-  mem.runs = demoRuns(mem, locale, ['fb.proposal.reject', 'fb.proposal.appliedMsg', 'result.revert.msg'].map((k) => t(k)));
+  mem.runs = demoRuns(mem, locale, ['fb.proposal.reject', 'fb.proposal.appliedMsg', 'result.revert.msg', 'result.accept.say'].map((k) => t(k)));
   document.title = `${t('welcome.title')} · DocBench`;
   await mount(root, mem, { workspace: menu(root), initialDoc: Object.keys(w.docs)[0] });
   if (!info.workspaces.length) bench?.toast(t('app.empty'), { action: t('app.add'), onAction: () => void addFolder(root).catch((e) => fail(root, e)) });

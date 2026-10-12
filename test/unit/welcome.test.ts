@@ -9,18 +9,21 @@
  *  - 로그 첫 줄은 시작, 끝 줄은 요약 — 화면 로그(run.log.*)와 같은 모양
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { welcomeContent, demoRuns } from '../../src/welcome';
+import { welcomeContent, demoRuns, WELCOME_DOCS } from '../../src/welcome';
+import { sectionSources, makeKey } from '../../src/core/source';
 import { createMemoryAdapters } from '../../src/adapters/memory';
 import { buildManifest, mergeConfig, titleFromText } from '../../src/core/workspace';
 import { turnOf } from '../../src/core/feedback';
 import { planRevert } from '../../src/core/apply';
 
 const HAND = '반영해';
+/** 볼 것의 "반영해" 단추가 남기는 말(i18n result.accept.say) — 화면이 actionTexts 로 넘긴다 */
+const ACCEPT = '반영해 주세요.';
 function practice() {
   const w = welcomeContent('ko');
   const manifest = buildManifest(mergeConfig({ title: 'DocBench' }, 'DocBench'), Object.keys(w.docs), (id) => ({ title: titleFromText(w.docs[id], id) }), '', false, { rootName: '시작하기' });
   const mem = createMemoryAdapters({ manifest, docs: w.docs, feedback: w.feedback, me: { kind: 'human', id: 'u-0123456789', name: '디제이' } });
-  const runs = demoRuns(mem, 'ko', [HAND, '다시 열기', '거절']);
+  const runs = demoRuns(mem, 'ko', [HAND, '다시 열기', '거절', ACCEPT]);
   const me = { kind: 'human' as const, id: 'u-0123456789', name: '디제이' };
   const fb = () => mem.control.feedback().find((f) => f.id === 'welcome-1')!;
   const handTo = async (text: string) => { const f = fb(); await mem.feedback.update(f.id, { waitingOn: 'assistant', thread: [...f.thread, { author: me, text, at: new Date().toISOString() }] }); };
@@ -84,6 +87,24 @@ describe('연습 공간의 흉내 Claude', () => {
     expect('md' in back && back.md).toBe(from!.md);
     // 그 뒤 같은 자리를 사람이 또 고쳤으면 저절로 되돌리지 않는다
     expect(planRevert(md.replace('김민지', '이지은'), from!.md, to!.md, res.change!.section)).toEqual({ problem: 'changed-after' });
+  });
+
+  it('값이 빈칸보다 적으면 채운 만큼만 — 몇 곳 중 몇 곳인지 밝힌다', async () => {
+    vi.useFakeTimers();
+    const p = practice();
+    await p.handTo('11월 3~14일');
+    await p.run();
+    const md = (await p.mem.docs.load(p.doc)).md;
+    expect(md).toContain('| 시범 운영 | 11월 3~14일 | 기획팀 |');
+    expect(md).toContain('| 전사 확대 | 다음 분기 | [TODO] |');
+    expect(p.fb().thread.at(-1)!.text).toMatch(/빈칸 2곳 중 1곳/);
+  });
+
+  it('처음 질문(welcome-1)은 질문 카드로 — 결과 꼬리표가 있어 "Claude 의견"(반영해)이 아니다', () => {
+    const w1 = welcomeContent('ko').feedback.find((f) => f.id === 'welcome-1')!;
+    expect(w1.result?.kind).toBe('review');
+    expect(w1.result?.run).toBeUndefined();
+    expect(w1.proposal).toBeUndefined();
   });
 
   it('제안만 방식이면 문서는 그대로 두고 카드에 제안을 올린다', async () => {
@@ -229,6 +250,12 @@ describe('연습 공간의 흉내 Claude', () => {
     expect(r.view![0].fold).toEqual(expect.arrayContaining([top + ' › 배경', top + ' › 위험 요소']));
     expect(r.view![0].guide).toMatch(/일정/);
     expect(p.mem.control.feedback()).toHaveLength(n0);
+    // 빈칸이 없는 문서는 모두 접고 그렇다고 말한다("긴 섹션만"이라고 하지 않는다)
+    const st2 = await p.runs.start({ kind: 'review', feedbackIds: [], docIds: ['활용 가이드/2 사용 팁.md'], goal: 'view', mode: 'propose' });
+    await vi.advanceTimersByTimeAsync(3000);
+    const r2 = (await p.runs.list()).find((x) => x.id === st2.id)!;
+    expect(r2.view![0].focus ?? []).toEqual([]);
+    expect(r2.view![0].guide).toMatch(/모두 접었습니다/);
   });
 
   it('닫힌 피드백은 건너뛴다', async () => {
@@ -237,5 +264,64 @@ describe('연습 공간의 흉내 Claude', () => {
     await p.mem.feedback.update('welcome-1', { status: 'resolved' });
     const { st } = await p.run();
     expect(st.summary).toMatchObject({ skipped: 1 });
+  });
+
+  it('"반영해"(단추가 남긴 말)는 값이 아니다 — 값을 기다리던 질문이면 지어내지 않고 되묻는다', async () => {
+    vi.useFakeTimers();
+    const p = practice();
+    await p.handTo(ACCEPT);
+    const { st } = await p.run();
+    expect(st.summary).toMatchObject({ asked: 1, edited: 0 });
+    expect((await p.mem.docs.load(p.doc)).md).toContain('| 시범 운영 | [TODO] |');
+  });
+
+  it('Claude 가 먼저 남긴 의견(welcome-2): 반영해 → 보내면 제안한 표로 고치고, 되돌릴 수 있다', async () => {
+    vi.useFakeTimers();
+    const p = practice();
+    const g = () => p.mem.control.feedback().find((f) => f.id === 'welcome-2')!;
+    expect([g().author.kind, turnOf(g()), g().result]).toEqual(['assistant', 'owner', undefined]);
+    await p.mem.feedback.update('welcome-2', { status: 'open', waitingOn: 'assistant', thread: [{ author: { kind: 'human', id: 'u-0123456789' }, text: ACCEPT, at: new Date().toISOString() }] });
+    const st = await p.runs.start({ kind: 'handoff', feedbackIds: ['welcome-2'], mode: 'auto' });
+    await vi.advanceTimersByTimeAsync(3000);
+    expect((await p.runs.list()).find((r) => r.id === st.id)!.summary).toMatchObject({ edited: 1 });
+    const md = (await p.mem.docs.load(p.doc)).md;
+    expect(md).toContain('## 위험 요소\n\n| 위험 | 대응 |\n|---|---|\n');
+    expect(md).toContain('## 일정'); // 다른 섹션은 그대로
+    expect(g().result).toMatchObject({ kind: 'edit', change: { docId: p.doc } });
+    expect(g().thread.at(-1)!.text).toMatch(/제안한 글로 바꿨습니다/);
+    const ch = g().result!.change!;
+    const [from, to] = await Promise.all([p.mem.docs.loadVersion!(p.doc, ch.from), p.mem.docs.loadVersion!(p.doc, ch.to)]);
+    const back = planRevert(md, from!.md, to!.md, ch.section);
+    expect('md' in back && back.md).toBe(from!.md);
+  });
+});
+
+describe('연습 공간의 문서', () => {
+  for (const locale of ['ko', 'en'] as const) {
+    it(`${locale}: 시작하기·연습용 기획서·활용 가이드 셋 — 예제 피드백이 가리키는 섹션이 있다`, () => {
+      const w = welcomeContent(locale);
+      const ids = WELCOME_DOCS[locale];
+      expect(Object.keys(w.docs).sort()).toEqual(Object.values(ids).sort());
+      expect(Object.keys(w.docs)[0]).toBe(ids.start);   // 처음 여는 문서
+      for (const f of w.feedback) {
+        const keys = sectionSources(w.docs[f.docId!]).map((s) => s.key);
+        expect(keys).toContain(makeKey((f.target as { path: string[] }).path));
+      }
+      // 가이드는 연습용 Claude 가 다룰 빈칸을 품는다(Claude 검토 → 질문 → 답하면 표를 채움)
+      expect(w.docs[ids.uses]).toContain('| [TODO] | [TODO] | [TODO] |');
+      expect(w.docs[ids.value]).toContain('[TODO]');
+      for (const md of Object.values(w.docs)) {
+        expect(md.startsWith('# ')).toBe(true);
+        expect(md.includes('\r')).toBe(false);
+        expect(md.endsWith('\n')).toBe(true);
+      }
+    });
+  }
+
+  it('ko 와 en 의 가이드는 같은 뼈대(같은 수의 섹션)', () => {
+    const ko = welcomeContent('ko').docs, en = welcomeContent('en').docs;
+    for (const k of ['start', 'sample', 'uses', 'tips', 'value'] as const) {
+      expect(sectionSources(en[WELCOME_DOCS.en[k]]).length, k).toBe(sectionSources(ko[WELCOME_DOCS.ko[k]]).length);
+    }
   });
 });

@@ -8,6 +8,12 @@ import { renderMarkdown, decorate, type Compiled } from './render';
 import { h } from './dom';
 
 const SKIP = '.db-sec-side,button,.db-noindex,.db-editor';
+/** 표의 뼈대(tr·tbody …) 바로 아래 글(칸 사이 줄바꿈)에는 표시를 두지 않는다 — 두면 브라우저가 칸을 하나 더 그린다 */
+const TABLE_FRAME = new Set(['TABLE', 'THEAD', 'TBODY', 'TFOOT', 'TR', 'COLGROUP']);
+const inTableFrame = (n: Text): boolean => TABLE_FRAME.has(n.parentElement?.tagName ?? '');
+/** 칸·줄 경계 한 글자 — 비교 글에서 공백 대신. 차이를 칸 너머로 묶지 않게(칸마다 지운 글 → 더한 글) */
+const CELL = '\u001F';
+const CELLS = /\u001F/g;
 
 /** 섹션 요소의 자기 글(하위 섹션 제외) — 공백을 한 칸으로 접은 글과 글자별 위치 */
 export function ownTextIndex(secEl: Element): { s: string; map: [Text, number][] } {
@@ -32,6 +38,13 @@ function collect(w: TreeWalker): { s: string; map: [Text, number][] } {
   while (w.nextNode()) {
     const n = w.currentNode as Text;
     const t = n.data;
+    if (inTableFrame(n) && !t.trim()) {
+      // 표 뼈대 사이 줄바꿈 = 칸 경계: 바로 앞 공백을 경계로 바꾸고, 경계는 한 번만
+      if (s.endsWith(' ')) { s = s.slice(0, -1); map.pop(); }
+      if (s && !s.endsWith(CELL)) { s += CELL; map.push([n, 0]); }
+      prevSpace = true;
+      continue;
+    }
     for (let i = 0; i < t.length; i++) {
       const ch = t[i];
       if (/\s/.test(ch)) { if (prevSpace) continue; s += ' '; map.push([n, i]); prevSpace = true; }
@@ -65,8 +78,8 @@ export function markSectionChanges(secEl: HTMLElement, oldOwnMd: string, rules: 
   for (const c of chunks) {
     if (!c.chg) { pos += c.b.length; continue; }
     // 바꾼 구절은 "지운 글 → 더한 글" 한 덩어리로 (지운 글을 앞에)
-    if (c.a.trim()) ops.push({ pos, kind: 'del', text: c.a });
-    if (c.b.trim()) ops.push({ pos, kind: 'ins', end: pos + c.b.length });
+    if (c.a.replace(CELLS, ' ').trim()) ops.push({ pos, kind: 'del', text: c.a });
+    if (c.b.replace(CELLS, ' ').trim()) ops.push({ pos, kind: 'ins', end: pos + c.b.length });
     pos += c.b.length;
   }
   // 뒤에서부터 — 글자 위치표가 앞쪽은 그대로 맞게. 같은 자리면 더한 글을 먼저 감싸고 지운 글을 그 앞에 둔다
@@ -76,12 +89,12 @@ export function markSectionChanges(secEl: HTMLElement, oldOwnMd: string, rules: 
     if (op.kind === 'ins') {
       // 앞뒤 공백은 감싸지 않는다
       let s = op.pos, e = op.end;
-      while (s < e && b[s] === ' ') s++;
-      while (e > s && b[e - 1] === ' ') e--;
+      while (s < e && (b[s] === ' ' || b[s] === CELL)) s++;
+      while (e > s && (b[e - 1] === ' ' || b[e - 1] === CELL)) e--;
       if (s < e) { const got = wrap(idx.map, s, e); if (got) ins++; }
       continue;
     }
-    const text = op.text.trim();
+    const text = op.text.replace(CELLS, ' ').replace(/ {2,}/g, ' ').trim();
     const el = h('del', { class: 'db-chg-del db-noindex', 'data-full': text, text: text.length > 160 ? text.slice(0, 80) + ' … ' + text.slice(-40) : text });
     if (insertAt(idx.map, op.pos, el)) del++;
   }
@@ -101,7 +114,7 @@ function coalesce(parts: { value: string; added?: boolean; removed?: boolean }[]
       else out.push({ chg: true, a: p.removed ? p.value : '', b: p.added ? p.value : '' });
     } else out.push({ chg: false, a: p.value, b: p.value });
   }
-  const short = (s: string) => s.length <= 3 || !/[\p{L}\p{N}]{2,}/u.test(s);
+  const short = (s: string) => !s.includes(CELL) && (s.length <= 3 || !/[\p{L}\p{N}]{2,}/u.test(s));
   for (let again = true; again;) {
     again = false;
     for (let i = 1; i < out.length - 1; i++) {
@@ -126,7 +139,7 @@ function wrap(map: [Text, number][], a: number, b: number): boolean {
   }
   let ok = false;
   for (const sg of segs.reverse()) {
-    if (!sg.n.parentNode || sg.n.parentElement?.closest('.db-noindex')) continue;
+    if (!sg.n.parentNode || inTableFrame(sg.n) || sg.n.parentElement?.closest('.db-noindex')) continue;
     const r = document.createRange();
     r.setStart(sg.n, sg.start);
     r.setEnd(sg.n, Math.min(sg.end, sg.n.length));
@@ -136,17 +149,17 @@ function wrap(map: [Text, number][], a: number, b: number): boolean {
 }
 
 function insertAt(map: [Text, number][], pos: number, el: HTMLElement): boolean {
-  if (!map.length) return false;
-  if (pos < map.length) {
-    const [n, off] = map[pos];
-    if (!n.parentNode) return false;
-    const after = n.splitText(Math.min(off, n.length));
-    after.parentNode!.insertBefore(el, after);
-    return true;
+  // 칸 사이(표 뼈대 아래) 자리면 다음 칸의 글 앞으로, 다음 칸이 없으면 마지막 글 뒤로
+  while (pos < map.length && inTableFrame(map[pos][0])) pos++;
+  let at = pos, shift = 0;
+  if (pos >= map.length) {
+    at = map.length - 1; shift = 1;
+    while (at >= 0 && inTableFrame(map[at][0])) at--;
   }
-  const [n, off] = map[map.length - 1];
+  if (at < 0) return false;
+  const [n, off] = map[at];
   if (!n.parentNode) return false;
-  const after = n.splitText(Math.min(off + 1, n.length));
+  const after = n.splitText(Math.min(off + shift, n.length));
   after.parentNode!.insertBefore(el, after);
   return true;
 }

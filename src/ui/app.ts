@@ -189,7 +189,8 @@ export class App {
     const page = h('div', { class: 'db-page' }, h('p', { class: 'db-loading', text: this.t('doc.loading') }));
     const selbtn = h('button', { class: 'db-btn primary sm db-selbtn', type: 'button', hidden: true, text: this.t('compose.selection') }) as HTMLButtonElement;
     const main = h('main', { class: 'db-main' }, page, selbtn);
-    const panel = h('aside', { class: 'db-panel', 'aria-label': 'feedback' });
+    // 패널 안을 누르면 패널이 초점을 받는다 — 카드 단축키(j·k·a·u·r)가 바로 먹게
+    const panel = h('aside', { class: 'db-panel', 'aria-label': 'feedback', tabindex: '-1' });
     const scrim = h('div', { class: 'db-scrim', onclick: () => r.classList.remove('rail-open', 'panel-open') });
     const toast = h('div', { class: 'db-toast', role: 'status', 'aria-live': 'polite', hidden: true });
     const shell = h('div', { class: 'db-shell' }, rail, main, panel, scrim);
@@ -941,7 +942,13 @@ export class App {
         case 'e': d?.editCurrent(); break;
         case 'c': d?.commentCurrent(); break;
         case '/': d?.focusFind(); break;
-        case 'f': this.root.classList.toggle('panel-open'); this.panel.render(); break;
+        case 'f': {
+          const open = this.root.classList.toggle('panel-open');
+          this.panel.render();
+          // 열면 패널로 초점 — 이어서 j·k 로 카드를 고르고 a 로 확인·반영해
+          if (open) this.root.querySelector<HTMLElement>('.db-panel')?.focus({ preventScroll: true });
+          break;
+        }
         case '1': case '2': case '3': d?.setDepthIndex(+e.key - 1); break;
         case '0': d?.setDepth(9); break;
         case '?': this.dialogs.help(); break;

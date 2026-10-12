@@ -2,6 +2,11 @@ declare module '*.css' {
   const css: string;
   export default css;
 }
+/** 연습 공간의 문서(src/welcome 아래 .md) — 빌드·시험이 글로 싣는다 */
+declare module '*.md' {
+  const text: string;
+  export default text;
+}
 
 // File System Access API — Chromium(엣지·크롬)에만 있고 TypeScript 기본 선언에 없는 부분
 interface FileSystemHandlePermissionDescriptor { mode?: 'read' | 'readwrite' }
