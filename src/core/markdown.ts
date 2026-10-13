@@ -33,6 +33,33 @@ export function protectTildes(md: string): string {
     .join('\n');
 }
 
+/**
+ * 문서 맨 앞 YAML 앞머리(`---` … `---` 또는 `...`)의 길이. 없으면 0.
+ * 앞머리는 섹션이 아니다 — 그대로 두면 마크다운이 닫는 `---` 위 줄을 h2 제목(setext)으로 읽는다.
+ * 원문(core/source)과 화면(toHTML)이 이 함수 하나로 같게 뗀다(섹션 키 패리티). 입력은 LF.
+ * 문서가 가로줄로 시작하는 경우를 앞머리로 오인하지 않도록, 안쪽 줄이 모두 YAML 모양(`키: 값`·들여쓴 줄·`- 항목`·주석)이고
+ * `키:` 줄이 하나 이상일 때만 앞머리로 본다. 맨 앞 BOM 은 건너뛴다.
+ */
+export function frontMatterLength(md: string): number {
+  const bom = md.charCodeAt(0) === 0xfeff ? 1 : 0;
+  const open = /^---[ \t]*\n/.exec(md.slice(bom));
+  if (!open) return 0;
+  let at = bom + open[0].length;
+  let key = false;
+  for (let n = 0; n < 200 && at < md.length; n++) {
+    const nl = md.indexOf('\n', at);
+    const end = nl < 0 ? md.length : nl + 1;
+    const line = md.slice(at, nl < 0 ? md.length : nl);
+    if (/^(---|\.\.\.)[ \t]*$/.test(line)) return key ? end : 0;
+    if (/^[A-Za-z0-9_][\w.-]*[ \t]*:([ \t]|$)/.test(line)) key = true;
+    else if (line.trim() && !/^([ \t]|#|-([ \t]|$))/.test(line)) return 0;
+    at = end;
+  }
+  return 0;
+}
+
+const escHTML = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+
 /** 공백을 한 칸으로 접고 앞뒤를 자른다. 앵커·키 비교의 기준 */
 export const norm = (s: string | null | undefined): string => (s || '').replace(/\s+/g, ' ').trim();
 
@@ -70,9 +97,14 @@ const view = new Marked({
   },
 });
 
-/** 마크다운 → HTML (정제 전). 화면에서는 반드시 DOMPurify 를 거친다 */
+/** 마크다운 → HTML (정제 전). 화면에서는 반드시 DOMPurify 를 거친다. 앞머리 YAML 은 제목이 아닌 YAML 상자로 그린다 */
 export function toHTML(md: string): string {
-  return view.parse(protectTildes(toLF(md)), { async: false }) as string;
+  const lf = toLF(md);
+  const fm = frontMatterLength(lf);
+  const body = view.parse(protectTildes(lf.slice(fm)), { async: false }) as string;
+  if (!fm) return body;
+  const yaml = lf.slice(0, fm).replace(/^﻿?---[ \t]*\n/, '').replace(/\n?(---|\.\.\.)[ \t]*\n?$/, '');
+  return `<pre class="db-frontmatter"><code class="language-yaml">${escHTML(yaml)}</code></pre>\n` + body;
 }
 
 export { marked };
