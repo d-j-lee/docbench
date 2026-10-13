@@ -83,6 +83,11 @@ const readOpfs = (page, name, p) => page.evaluate(async ([name, p]) => {
   for (const s of segs) d = await d.getDirectoryHandle(s);
   return [...new Uint8Array(await (await (await d.getFileHandle(f)).getFile()).arrayBuffer())];
 }, [name, p]).then((a) => Buffer.from(a));
+/**
+ * 기다리며 읽기 — 화면이 같은 파일을 쓰는 도중(createWritable 의 바꿔 끼우기)에 읽으면 Chromium 이 NotReadableError 를 낸다(CI 실측).
+ * 그때는 아직 아닌 것으로 보고 다시 읽는다
+ */
+const pollOpfs = (page, name, p) => readOpfs(page, name, p).catch((e) => { if (/NotReadableError|NotFoundError/.test(String(e?.message))) return Buffer.alloc(0); throw e; });
 const writeOpfs = (page, name, p, text) => page.evaluate(async ([name, p, text]) => {
   let d = await (await navigator.storage.getDirectory()).getDirectoryHandle(name);
   const segs = p.split('/'); const f = segs.pop();
@@ -542,7 +547,7 @@ test('OPFS 폴더: 섹션 편집·초안·밖에서 고친 피드백(볼 것)·C
   const area = page.locator('.db-editor textarea.db-ed-area');
   await area.fill((await area.inputValue()).replace('TODO: 멱등 키 확인 절차 정리', '멱등 키(요청 id)로 중복을 막는다.'));
   await page.locator('.db-editor .db-btn.primary').click();
-  await until(async () => (await readOpfs(page, name, 'docs/운영-런북.md')).toString().includes('멱등 키(요청 id)'), 6000);
+  await until(async () => (await pollOpfs(page, name, 'docs/운영-런북.md')).toString().includes('멱등 키(요청 id)'), 6000);
   // 이력 줄은 문서를 쓴 뒤 잠금 안에서 덧붙는다 — 그 줄이 생길 때까지
   let ch;
   await until(async () => { ch = (await readOpfs(page, name, '.docbench/changes.jsonl').catch(() => Buffer.from(''))).toString().trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((c) => c.docId === 'docs/운영-런북.md'); return !!ch; }, 6000);
@@ -592,7 +597,7 @@ test('OPFS 폴더: 섹션 편집·초안·밖에서 고친 피드백(볼 것)·C
   const ed2 = page.locator('.db-editor textarea.db-ed-area');
   await ed2.fill((await ed2.inputValue()) + '\n추가 줄\n');
   await page.locator('.db-editor .db-btn.primary').click();
-  await until(async () => (await readOpfs(page, name, winId)).toString().includes('추가 줄'), 6000);
+  await until(async () => (await pollOpfs(page, name, winId)).toString().includes('추가 줄'), 6000);
   const w = await readOpfs(page, name, winId);
   assert.deepEqual([...w.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'BOM 유지');
   const s = w.toString('utf8');
@@ -1026,7 +1031,7 @@ test('터미널 한 줄(설치 없음): 요청·맥락·Claude 자리는 기록 
   await card.locator('.db-diffslot .db-dl.add', { hasText: '배포 전후로 확인한다.' }).waitFor();
   await cardBtn(card, '되돌리기').click();
   await page.locator('.db-toast', { hasText: '요청은 초안으로 돌아왔습니다' }).waitFor();
-  await until(async () => (await readOpfs(page, a, '런북.md')).equals(Buffer.from(orig)), 6000);
+  await until(async () => (await pollOpfs(page, a, '런북.md')).equals(Buffer.from(orig)), 6000);
   const back = JSON.parse((await readOpfs(page, home, `${a}/feedback/${fid}.json`)).toString());
   assert.equal(back.status, 'draft');
   assert.ok(back.result.reverted);

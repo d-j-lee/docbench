@@ -10,10 +10,11 @@
  * Claude 는 문서 폴더 안을 **읽기만** 한다. 고칠 내용은 정해진 모양(RUN_SCHEMA)으로 돌려주고,
  * 실제 쓰기는 실행기가 docbench 규칙(판 비교·잠금·인코딩 보존·이력)으로 한다 — planRun 이 그 전에 검사한다.
  */
-import type { Feedback, Person, ReadingPlan, RunEffort, RunKind, RunLogLine, RunMode, RunRequest, RunnerInfo, RunStartInput, RunState, RunStatus, RunSummary } from '../types';
+import type { Feedback, FeedbackCategory, Person, ReadingPlan, Severity, RunEffort, RunKind, RunLogLine, RunMode, RunRequest, RunnerInfo, RunStartInput, RunState, RunStatus, RunSummary } from '../types';
 import { findSection, getSectionText, sectionSources, KEY_SEP } from './source';
 import { headingPlain, norm, toLF } from './markdown';
 import { MAX_SECTION_CHARS } from './prompt';
+import { FEEDBACK_CATEGORIES, categoryGuideLines, isCategory } from './feedback';
 
 /** 2 = 초안·공통 지시·선제안·문서 전체 고침·결과를 '볼 것'으로(0.6.0). 판이 다른 엔진은 살아 있어도 고르지 않는다 */
 export const RUN_PROTOCOL = 2;
@@ -300,6 +301,7 @@ export const RUN_SCHEMA = {
           section: { type: 'string', description: 'Only for whole-document feedback: a listed section key to replace, or "*" to rewrite the whole document (when "*" is offered)' },
           text: { type: 'string', description: 'edit/propose: the COMPLETE new section in Markdown, starting with its unchanged heading line — or, when section is "*", the COMPLETE new document. Other actions: empty string' },
           message: { type: 'string', description: 'One or two short sentences to the reviewer, in the same language as the document' },
+          category: { type: 'string', enum: [...FEEDBACK_CATEGORIES, ''], description: 'Only for items marked "Category: none": what kind of problem the feedback is about. Otherwise ""' },
         },
         required: ['feedbackId', 'action', 'text', 'message'],
         additionalProperties: false,
@@ -335,6 +337,7 @@ export function buildRunPrompt(ctx: RunContext): string {
     '- Whole-document requests (tone, duplicates, structure, folding Q&A into <details>, splitting or merging sections): when the item offers "*", set "section" to "*" and give the COMPLETE new document; keep every untouched line identical. Changing headings is a structural change the person reviews first.',
     '- If the reviewer wrote the replacement text themselves (SUGGESTION), use it as given unless it would clearly break the document.',
     'Items are listed in the reviewer\'s priority order; [high] marks urgent ones.',
+    ...(ctx.items.some((it) => !it.feedback.category) ? ['For each item marked "Category: none", also set "category" to the kind of problem it is about (never change a category that is already given):', ...categoryGuideLines()] : []),
     'For edit and propose you MUST put the complete new section in "text" — DocBench cannot apply a change without it.',
     'Write "summary" and every "message" in the same language as the documents (Korean documents → Korean): one or two short sentences to the reviewer.',
     'You may read the whole document or other documents in the folder when you need context. Do not try to read anything outside the folder.',
@@ -356,6 +359,8 @@ export function buildRunPrompt(ctx: RunContext): string {
     else if (f.target.kind === 'section') L.push(`Target: section "${f.target.path.join(KEY_SEP)}" — NOT FOUND in the current document (the heading may have changed). Answer or ask.`);
     else L.push('Target: whole document');
     L.push(`Allowed: ${it.allowed.join(', ')}`);
+    // 저장된 종류만 "주어진 것" — 예전 꼬리표에서 짐작한 것은 Claude 가 정한다(꼬리표는 위 Feedback 줄에 보인다)
+    L.push(`Category: ${f.category || 'none'}`);
     L.push(`Feedback by ${who}${f.kind ? ` (${f.kind})` : ''}${f.severity ? ` [${f.severity}]` : ''}:`, '<<<FEEDBACK', (f.title ? f.title + ' — ' : '') + f.body, 'FEEDBACK>>>');
     if (f.selector?.exact) L.push('Quoted text:', '<<<QUOTE', f.selector.exact, 'QUOTE>>>');
     if (f.suggestion) L.push(f.selector?.exact ? 'The reviewer\'s replacement for the quoted text:' : 'The reviewer\'s replacement text for this target:', '<<<SUGGESTION', f.suggestion, 'SUGGESTION>>>');
@@ -383,6 +388,8 @@ export interface PlannedAction {
   before?: string;
   text?: string;
   message: string;
+  /** 종류가 없던 피드백에 Claude 가 붙인 종류 — 사람이 고른 종류는 바꾸지 않는다 */
+  category?: FeedbackCategory;
   /** 실행기가 바꾼 이유 (화면 로그·회신에 붙인다) */
   note?: 'not-allowed' | 'bad-text' | 'no-section' | 'same-section' | 'no-change' | 'propose-only' | 'changed-meanwhile' | 'structure';
   problem?: string;
@@ -437,6 +444,7 @@ export function planRun(ctx: RunContext, output: unknown): RunPlan {
     let action = (['edit', 'propose', 'answer', 'ask', 'decline'] as const).find((a) => a === x.action) || 'ask';
     const message = typeof x.message === 'string' ? x.message.trim().slice(0, 2000) : '';
     const p: PlannedAction = { feedbackId: id, action, docId: it.docId, message };
+    if (isCategory(x.category) && !it.feedback.category) p.category = x.category;
     if (action === 'edit' && ctx.mode === 'propose') { action = 'propose'; p.note = 'propose-only'; }
     if (!it.allowed.includes(action)) {
       if (action === 'edit' && it.allowed.includes('propose')) { action = 'propose'; p.note ||= 'not-allowed'; }
@@ -516,12 +524,14 @@ export const REVIEW_SCHEMA = {
           docId: { type: 'string' },
           section: { type: 'string', description: 'A listed section key, or "*" for a whole-document suggestion' },
           kind: { type: 'string', enum: ['suggest', 'question'] },
+          category: { type: 'string', enum: [...FEEDBACK_CATEGORIES], description: 'What kind of problem this is (see the list in the instructions)' },
+          severity: { type: 'string', enum: ['high', 'medium', 'low'], description: 'high: wrong or harmful if left, or blocks the purpose · medium: fix before sharing · low: nice to have' },
           title: { type: 'string', description: 'A short label (under 60 characters)' },
           message: { type: 'string', description: 'Why, in one or two sentences' },
           quote: { type: 'string', description: 'Optional: an exact short phrase from the section this is about' },
           text: { type: 'string', description: 'suggest: the COMPLETE new section (heading line unchanged) — or the COMPLETE new document when section is "*". question: empty string' },
         },
-        required: ['docId', 'section', 'kind', 'title', 'message', 'text'],
+        required: ['docId', 'section', 'kind', 'category', 'severity', 'title', 'message', 'text'],
         additionalProperties: false,
       },
     },
@@ -558,6 +568,8 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
     ...(view ? [] : [
       '- suggest: a concrete improvement — give the COMPLETE new section in "text" (heading line unchanged, every subsection kept, untouched characters identical). For a whole-document change (structure, duplicates, consistent tone, folding Q&A into <details>), use section "*" and give the COMPLETE new document.',
       '- question: information is missing, contradictory or ambiguous — ask one specific question (text empty).',
+      '- Give every item a "category" — the kind of problem — and a "severity" (high: wrong or harmful if left, or blocks the document\'s purpose; medium: fix before sharing; low: nice to have). Categories:',
+      ...categoryGuideLines(),
       '- Skip trivial style nits unless the instructions ask for them. Do not invent facts, numbers or sources; keep evidence tags such as [실측] [문서] [추정] [미확인].',
       // 폴더 범위(문서 여럿) — 화면 안내(review.scope.folder.hint)가 약속하는 일
       ...(ctx.docs.length > 1 ? ['- Several documents are given: also flag terms, numbers or rules that disagree between them, and content duplicated across them (name the other document).'] : []),
@@ -586,6 +598,8 @@ export interface PlannedCreate {
   /** 섹션 키, 문서 전체면 '*' */
   sectionKey: string;
   kind: 'suggest' | 'question';
+  category?: FeedbackCategory;
+  severity?: Severity;
   title: string;
   message: string;
   quote?: string;
@@ -621,6 +635,8 @@ export function planReview(ctx: ReviewContext, output: unknown): ReviewPlan {
     if (before == null) { dropped.push({ docId: d.id, why: `없는 섹션: ${sec.slice(0, 80)}` }); continue; }
     if (focusSet && !whole && !focusSet.some((k) => key === k || key.startsWith(k + KEY_SEP))) { dropped.push({ docId: d.id, why: '고른 섹션 밖' }); continue; }
     const p: PlannedCreate = { docId: d.id, sectionKey: key, kind, title, message };
+    if (isCategory(x.category)) p.category = x.category;
+    if (x.severity === 'high' || x.severity === 'medium' || x.severity === 'low') p.severity = x.severity;
     const q = typeof x.quote === 'string' ? x.quote.trim().slice(0, 300) : '';
     if (q && before.includes(q)) p.quote = q;
     if (kind === 'suggest') {

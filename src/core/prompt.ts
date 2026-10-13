@@ -4,6 +4,7 @@
  */
 import type { ProposeRequest } from '../types';
 import { KEY_SEP } from './source';
+import { categoryOf } from './feedback';
 
 export const PROPOSAL_SCHEMA = {
   type: 'object',
@@ -40,7 +41,7 @@ export function buildProposePrompt(req: ProposeRequest): string {
     '',
     `Document: ${req.docTitle}`,
     `Section path: ${req.sectionPath.join(KEY_SEP)}`,
-    `Feedback${f.kind ? ` (${f.kind})` : ''}${f.severity ? ` [${f.severity}]` : ''}: ${f.title ? f.title + ' — ' : ''}${f.body}`,
+    `Feedback${categoryOf(f) || f.kind ? ` (${[categoryOf(f), f.kind].filter((x, i, l) => x && l.indexOf(x) === i).join(', ')})` : ''}${f.severity ? ` [${f.severity}]` : ''}: ${f.title ? f.title + ' — ' : ''}${f.body}`,
     f.selector?.exact ? `Quoted text: "${f.selector.exact}"` : '',
     thread ? `Discussion so far:\n${thread}` : '',
     '',

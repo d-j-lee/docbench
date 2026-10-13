@@ -46,12 +46,13 @@ description: DocBench 작업 폴더에서 사람이 보낸 문서 피드백을 �
    - **되묻는다** (정보가 없거나 요청이 모호할 때)
      `docbench fb reply <id> -m "<구체적인 질문>" --ask`
    - 하지 않는 게 맞다고 보면 이유와 함께 `--decline`.
+   - **종류**: `fb show` 에 "종류: 없음"이면 회신에 `--category <종류>` 를 붙인다 — `typo`(오탈자) `fact`(사실·수치) `conflict`(충돌) `duplicate`(중복) `gap`(누락) `structure`(구조) `clarity`(표현) `risk`(위험) `direction`(방향) 중 문제의 종류 하나. 이미 있으면 바꾸지 않는다.
 4. **마무리**: 처리 건수와 되물은 것을 사용자에게 짧게 알리고, `docbench inbox --clear` 로 요청함을 비운다.
 
 ## 먼저 말 걸기 (사람이 "먼저 검토해 줘"라고 할 때)
 
 피드백을 기다리지 않고 문서를 먼저 읽고 제안·질문을 올린다. 가치 있는 것부터 몇 개만 — 사소한 문체는 빼고, 사실을 지어내지 않는다.
-- 질문·지적: `docbench fb add --doc <docId> --section "<섹션 키>" --title "<짧은 제목>" -m "<왜, 한두 문장>"` — 작성자 Claude, 사람의 볼 것으로
+- 질문·지적: `docbench fb add --doc <docId> --section "<섹션 키>" --title "<짧은 제목>" -m "<왜, 한두 문장>" --category <종류> --severity <high|medium|low>` — 작성자 Claude, 사람의 볼 것으로. 종류·중요도는 늘 붙인다(화면이 이것으로 골라 보고 말풍선을 거른다 — high 그대로 두면 틀리거나 해가 됨, medium 공유 전에 고칠 것, low 하면 좋은 것)
 - 고친 글까지: 위처럼 올린 뒤 `docbench fb propose <새 id> --file <섹션 새 글> -m "<이유>"`
 - 읽는 순서·접을 곳을 묻는 부탁이면 화면의 **Claude 검토 → 읽기 정리**를 권한다(화면 접기 상태는 화면이 정한다).
 

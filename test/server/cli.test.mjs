@@ -72,6 +72,20 @@ test('CLI: 초안은 사람의 메모 — Claude 는 목록에서 보지 않고,
   assert.deepEqual([st.feedback.draft, st.feedback.owner], [1, 1]);
 });
 
+test('CLI: 종류(D85) — fb add --category 는 고정 종류만, fb reply --category 는 종류가 없을 때만 붙고 사람이 고른 것은 그대로', async (t) => {
+  const dir = await tempWorkspace(); t.after(() => rm(dir));
+  await assert.rejects(db(dir, 'fb', 'add', '--doc', 'README.md', '-m', 'x', '--category', '오타'), (e) => e.code === 1 && /typo · fact/.test(e.stderr));
+  const c = JSON.parse((await db(dir, 'fb', 'add', '--doc', 'README.md', '--title', '용어', '-m', '"작업대"와 "워크벤치"', '--category', 'conflict', '--severity', 'medium', '--json')).stdout);
+  assert.deepEqual([c.category, c.severity], ['conflict', 'medium']);
+  const h1 = JSON.parse((await db(dir, 'fb', 'add', '--as', 'human:dj', '--doc', 'README.md', '-m', '오타 확인', '--json')).stdout);
+  const h2 = JSON.parse((await db(dir, 'fb', 'add', '--as', 'human:dj', '--doc', 'README.md', '-m', '구조 바꾸기', '--category', 'structure', '--json')).stdout);
+  assert.match((await db(dir, 'fb', 'show', h1.id)).stdout, /종류: 없음 — 회신할 때 --category/);
+  const r1 = JSON.parse((await db(dir, 'fb', 'reply', h1.id, '-m', '고쳤습니다', '--category', 'typo', '--json')).stdout);
+  const r2 = JSON.parse((await db(dir, 'fb', 'reply', h2.id, '-m', '확인', '--category', 'typo', '--json')).stdout);
+  assert.deepEqual([r1.category, r2.category], ['typo', 'structure']);
+  assert.match((await db(dir, 'fb', 'list', '--waiting', 'owner')).stdout, new RegExp(`${h1.id}  \\[owner\\] typo`));
+});
+
 test('CLI: 판이 바뀌었으면 쓰기 거부(종료 코드 3)', async (t) => {
   const dir = await tempWorkspace(); t.after(() => rm(dir));
   await assert.rejects(db(dir, 'doc', 'write', 'README.md', '--file', path.join(dir, 'README.md'), '--base', 'ffffffffffffffff'), (e) => e.code === 3);

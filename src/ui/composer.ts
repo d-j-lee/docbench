@@ -6,7 +6,8 @@
  *  - ★ 급함: 보낼 때 먼저, "★만 보내기"로 골라 보낸다
  * 적던 글은 잃지 않는다: 다른 곳에 새로 적거나 화면을 옮기면 초안으로 남기고, Esc·닫기는 한 번 더 눌러야 버린다.
  */
-import type { Feedback, TextSelector } from '../types';
+import type { Feedback, FeedbackCategory, TextSelector } from '../types';
+import { FEEDBACK_CATEGORIES, isCategory } from '../core/feedback';
 import { KEY_SEP, parseKey, getSectionText } from '../core/source';
 import { h, icon } from './dom';
 import type { App } from './app';
@@ -120,6 +121,12 @@ export class Composer {
     const rwBox = h('div', { class: 'db-cmp-rw' }, h('div', { class: 'db-hint', text: target.selector ? t('compose.rewrite.quote') : t('compose.rewrite.section') }), rw, why);
     const tabs = h('div', { class: 'db-seg sm', role: 'tablist' });
     const star = h('button', { class: 'db-star', type: 'button', 'aria-pressed': String(urgent), title: t('fb.urgent.hint'), html: '★' }) as HTMLButtonElement;
+    // 종류(D85) — 고르지 않으면 보낼 때 Claude 가 붙인다. 고른 것은 Claude 가 바꾸지 않는다
+    const cat = h('select', { class: 'db-cmp-cat', 'aria-label': t('compose.cat'), title: t('compose.cat') },
+      h('option', { value: '', text: t('compose.cat.auto') }),
+      ...FEEDBACK_CATEGORIES.map((c) => h('option', { value: c, title: t('cat.' + c + '.hint'), text: t('cat.' + c) }))) as HTMLSelectElement;
+    cat.value = existing?.category || '';
+    const catOf = (): FeedbackCategory | undefined => (isCategory(cat.value) ? cat.value : undefined);
     star.addEventListener('click', () => { urgent = !urgent; star.setAttribute('aria-pressed', String(urgent)); });
     const paint = () => {
       tabs.replaceChildren(h('button', { type: 'button', role: 'tab', 'aria-pressed': String(mode === 'ask'), onclick: () => { mode = 'ask'; paint(); ta.focus(); } }, t('compose.mode.ask')));
@@ -155,7 +162,7 @@ export class Composer {
         let f: Feedback;
         if (existing) {
           // null = 지운다(요청으로 바꾸면 바꿀 글을, ★ 를 끄면 급함을)
-          const ok = await app.updateFeedback(existing, { body, suggestion: suggestion ?? null, severity: urgent ? 'high' : existing.severity === 'high' ? null : existing.severity ?? null });
+          const ok = await app.updateFeedback(existing, { body, suggestion: suggestion ?? null, severity: urgent ? 'high' : existing.severity === 'high' ? null : existing.severity ?? null, category: catOf() ?? null });
           if (!ok) { saveBtn.removeAttribute('disabled'); return; }
           f = app.fb.find((x) => x.id === existing.id) || existing;
         } else {
@@ -166,6 +173,7 @@ export class Composer {
             body,
             ...(suggestion != null ? { suggestion } : {}),
             severity: urgent ? 'high' : undefined,
+            category: catOf(),
             status: 'draft',
             waitingOn: 'owner',
             author: app.me,
@@ -191,6 +199,7 @@ export class Composer {
     const el = h('div', { class: 'db-cmp', role: 'dialog', 'aria-label': t('compose.title') },
       h('div', { class: 'db-cmp-h' },
         h('span', { class: 'db-cmp-where', title: where }, h('span', { class: 'ic', html: icon('chat') }), where),
+        cat,
         star,
         h('button', { class: 'db-btn ghost sm db-cmp-x', type: 'button', 'aria-label': t('close'), onclick: () => this.requestClose(), html: icon('close') })),
       target.selector ? h('q', { class: 'db-cmp-q', text: target.selector.exact }) : null,
@@ -201,8 +210,8 @@ export class Composer {
         sendBtn, saveBtn));
     el.addEventListener('keydown', keys);
     this.el = el;
-    const initial = { ta: ta.value, rw: rw.value, why: why.value, urgent };
-    this.pristine = () => ta.value.trim() === initial.ta.trim() && rw.value === initial.rw && why.value.trim() === initial.why.trim() && urgent === initial.urgent;
+    const initial = { ta: ta.value, rw: rw.value, why: why.value, urgent, cat: cat.value };
+    this.pristine = () => ta.value.trim() === initial.ta.trim() && rw.value === initial.rw && why.value.trim() === initial.why.trim() && urgent === initial.urgent && cat.value === initial.cat;
     this.keep = () => save(false, true);
     this.warn = () => { note.textContent = t('compose.discard'); note.classList.add('warn'); (mode === 'rewrite' ? rw : ta).focus(); };
     el.addEventListener('input', () => { if (this.armed) { this.armed = 0; note.textContent = t('compose.draftNote'); note.classList.remove('warn'); } });

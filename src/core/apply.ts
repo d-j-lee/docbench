@@ -138,6 +138,8 @@ async function updateFb(host: ApplyHost, req: Req, id: string, patchOf: (f: Feed
 }
 
 const resultOf = (kind: FeedbackResult['kind'], req: Req, extra: Partial<FeedbackResult> = {}): FeedbackResult => ({ kind, at: now(), run: req.id, ...extra });
+/** 저장된 종류가 없던 피드백에만 Claude 가 붙인 종류를 — 그 사이 사람이 골랐으면 그대로 둔다 */
+const withCategory = (fb: Feedback, a: PlannedAction): Pick<Feedback, 'category'> => (a.category && !fb.category ? { category: a.category } : {});
 
 /**
  * 반영하지 못한 것은 사람의 "볼 것"으로(결과 failed + 까닭) — 보냄에 말없이 남아 처리 중인지 잊혔는지 모르게 두지 않는다.
@@ -183,7 +185,7 @@ async function applyOne(host: ApplyHost, req: Req, a: PlannedAction, actor: Pers
         host.emit?.({ type: 'doc', id: a.docId });
         host.emit?.({ type: 'changes' });
         const change = { docId: a.docId, ...(whole ? {} : { section: a.sectionKey }), from: doc.version, to: w.version };
-        const r = await updateFb(host, req, a.feedbackId, (fb) => ({ waitingOn: 'owner', result: resultOf('edit', req, { change }), thread: [...fb.thread, { author: actor, text: msg(a.message, note), at: now() }] }));
+        const r = await updateFb(host, req, a.feedbackId, (fb) => ({ waitingOn: 'owner', result: resultOf('edit', req, { change }), thread: [...fb.thread, { author: actor, text: msg(a.message, note), at: now() }], ...withCategory(fb, a) }));
         await host.log({ k: 'apply.edit', v: { fb: a.feedbackId, doc: a.docId, section: whole ? '' : a.sectionKey }, ref });
         if (r === 'gone') await host.log({ k: 'warn', v: { message: '문서는 고쳤지만 그 사이 피드백이 바뀌어 회신은 남기지 못했습니다' }, ref });
         return 'edit';
@@ -203,6 +205,7 @@ async function applyOne(host: ApplyHost, req: Req, a: PlannedAction, actor: Pers
       proposal: { path: whole ? [] : keyToPath(a.sectionKey!), before: a.before || '', after: a.text!, rationale: a.message, author: actor, at: now(), state: 'pending' },
       result: resultOf('propose', req),
       thread: [...fb.thread, { author: actor, text: msg(a.message, note), at: now() }],
+      ...withCategory(fb, a),
     }));
     if (r === 'gone') return 'gone';
     await host.log({ k: 'apply.propose', v: { fb: a.feedbackId, doc: a.docId || '', section: whole ? '' : a.sectionKey, note: note || '' }, ref });
@@ -211,7 +214,7 @@ async function applyOne(host: ApplyHost, req: Req, a: PlannedAction, actor: Pers
   if (action === 'propose') { action = 'ask'; note ||= 'no-section'; }
 
   const kind = action as 'answer' | 'ask' | 'decline';
-  const r = await updateFb(host, req, a.feedbackId, (fb) => ({ waitingOn: 'owner', result: resultOf(kind, req), thread: [...fb.thread, { author: actor, text: msg(a.message, note), at: now() }] }));
+  const r = await updateFb(host, req, a.feedbackId, (fb) => ({ waitingOn: 'owner', result: resultOf(kind, req), thread: [...fb.thread, { author: actor, text: msg(a.message, note), at: now() }], ...withCategory(fb, a) }));
   if (r === 'gone') return 'gone';
   await host.log({ k: 'apply.' + action, v: { fb: a.feedbackId, note: note || '', problem: a.problem || undefined }, ref, text: a.message });
   return action;
@@ -272,6 +275,7 @@ export async function applyReviewOutput(host: ApplyHost, req: Req, ctx: ReviewCo
       const f = await host.createFeedback({
         docId: c.docId, target, ...(c.quote ? { selector: { exact: c.quote } } : {}),
         title: c.title || undefined, body: c.message, author: actor, status: 'open', waitingOn: 'owner',
+        ...(c.category ? { category: c.category } : {}), ...(c.severity ? { severity: c.severity } : {}),
         result: { kind: 'review', at: now(), run: req.id },
         ...(kind === 'suggest' && before != null && c.text != null ? { proposal: { path: whole ? [] : keyToPath(c.sectionKey), before, after: c.text, rationale: c.message, author: actor, at: now(), state: 'pending' as const } } : {}),
       });

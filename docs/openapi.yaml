@@ -152,7 +152,8 @@ components:
         selector: { type: object, properties: { exact: { type: string }, prefix: { type: string }, suffix: { type: string } } }
         title: { type: string }
         body: { type: string }
-        kind: { type: string }
+        kind: { type: string, description: '예전 자유 꼬리표("사실 갱신" 등) — category 가 없으면 화면이 여기서 종류를 짐작한다' }
+        category: { enum: [typo, fact, conflict, duplicate, gap, structure, clarity, risk, direction], description: '종류(D85) — 사람이 고르거나 Claude 가 붙인다. 사람이 고른 것은 Claude 가 바꾸지 않는다. 지우기 = null' }
         severity: { enum: [high, medium, low] }
         status: { enum: [draft, open, resolved, declined], description: 'draft = 보내기 전 사람의 메모(D73 — 쓴 사람만 보고, waitingOn 은 owner 로 읽는다). open + waitingOn assistant = 보냄, open + owner = 볼 것' }
         waitingOn: { enum: [owner, assistant] }

@@ -53,17 +53,18 @@
    - `set changes/<새 id>` `{ at, docId, by, summary, fromVersion: 'v', toVersion: 'v+1', feedbackIds, sections }`
    - `update feedback/<id>` `{ waitingOn: 'owner', result: { kind: 'edit', at, run: 'chat', change: { docId, section: <키>, from: 'v', to: 'v+1' } }, version: n+1, updatedAt, thread: [...기존, { author: Claude, text: 한두 문장, at }] }` — 닫지 않는다(사람이 "볼 것"에서 확인·되돌리기)
 5. 되물을 때는 `update feedback/<id>` 로 `waitingOn: 'owner'`, `result: { kind: 'ask', at, run: 'chat' }` 와 질문 한 줄. 제안만이면 `proposal` 과 `result.kind: 'propose'`.
+6. 종류(D85): 처리한 피드백 행에 `category` 가 없으면 같은 `update` 에 `category` 를 넣는다 — 고정 종류 하나(`typo` `fact` `conflict` `duplicate` `gap` `structure` `clarity` `risk` `direction`, 뜻은 `docs/FEEDBACK-PROTOCOL.md` 종류 표). 예전 꼬리표(`kind`)가 있으면 참고한다. 이미 있는 `category` 는 바꾸지 않는다.
 
 ### Claude 가 먼저 의견을 남길 때 (사전 리뷰)
 
-사람이 보내기 전에 대화의 Claude 가 문서를 읽고 짚을 곳을 남기려면 `set feedback/<새 id>` 로 `{ docId, target: { kind: 'section', path, heading }, selector?: { exact }, title, body, kind?, severity?, author: { kind: 'assistant', name: 'Claude' }, status: 'open', waitingOn: 'owner', thread: [], version: 1, createdAt, updatedAt }` — `result` 는 넣지 않는다.
+사람이 보내기 전에 대화의 Claude 가 문서를 읽고 짚을 곳을 남기려면 `set feedback/<새 id>` 로 `{ docId, target: { kind: 'section', path, heading }, selector?: { exact }, title, body, category, severity, author: { kind: 'assistant', name: 'Claude' }, status: 'open', waitingOn: 'owner', thread: [], version: 1, createdAt, updatedAt }` — `result` 는 넣지 않는다. `category` 는 고정 종류 하나(`typo` `fact` `conflict` `duplicate` `gap` `structure` `clarity` `risk` `direction` — 뜻은 `docs/FEEDBACK-PROTOCOL.md` 종류 표, `dist/core.mjs` 의 `CATEGORY_GUIDE`), `severity` 는 `high`·`medium`·`low`.
 화면은 이것을 볼 것의 "Claude 가 먼저 남긴 것"에 "Claude 의견"으로 보이고, 사람이 **반영해**를 누르면 `thread` 에 "반영해 주세요"가 붙은 초안이 되었다가 다음 묶음과 함께 보내진다(위 1번으로 다시 온다). 바꿀 글까지 있으면 `proposal`(`state: 'pending'`)을 함께 넣는다 — 그러면 "제안"으로 적용·거절. 값을 물어야 하는 것이면 `result: { kind: "review", at }`(run 없이)을 넣는다 — 같은 묶음에 "질문"으로 보여 답하기가 먼저 뜬다(D83).
 
 화면이 열려 있으면 구독으로 바로 반영되고, 고친 섹션에 "바뀜" 표시가 뜬다.
 
 ## 한계
 
-- 게시 검사는 claude.ai 쪽 판정이라 이유가 늘 정확하지 않다(0.7.0 은 다른 종류의 페이지로 오인되어 거부되었다). 거부되면 마지막으로 올라간 판의 빌드와 지금 빌드 사이의 바뀐 코드를 반씩 되돌려 게시해 보며 범위를 좁히고, 게시본을 손으로 고치지 말고 저장소 코드를 고친다(0.7.1). 번들의 날것 U+FFFD·제어 문자는 `npm run check` 가 먼저 막는다.
+- 게시 검사는 claude.ai 쪽 판정이라 이유가 늘 정확하지 않다(0.7.0·0.8.0 화면이 다른 종류의 페이지로 오인되어 거부되었다). 번들의 날것 U+FFFD·제어 문자처럼 저장소가 아는 원인은 `npm run check` 가 먼저 막는다. 그 밖의 거부는 검사를 이리저리 두드려 피해 가지 말고(변형을 여러 번 올려 보는 것 포함) 마지막으로 올라간 판을 그대로 쓰면서 오판으로 알린다(Claude 답변의 피드백). 0.7.1 은 바뀐 코드를 반씩 게시해 보며 통과시켰지만, 그것도 검사를 피해 가는 일이라 다시 하지 않는다.
 
 - 기준본(게시 파일)은 화면에서 바꾸지 않는다. 편집본을 기준본으로 굳히려면 Claude 가 게시 파일을 다시 올리고 `docs/<key>` 를 지운다.
 - 공유 링크로 들어온 사람(로그인 안 함)은 db 가 없어 읽기 전용이고, 피드백은 그 브라우저에만 남는다.

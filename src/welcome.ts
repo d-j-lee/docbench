@@ -9,6 +9,7 @@ import { KEY_SEP, sectionSources } from './core/source';
 import { RUN_PROTOCOL, type ReviewContext, type RunContext } from './core/runs';
 import { applyReviewOutput, applyRunOutput, buildReviewContext, buildRunContext, failUnreadable, type ApplyHost } from './core/apply';
 import { standingInstructions } from './core/room';
+import { inferCategory } from './core/feedback';
 import { titleFromText } from './core/workspace';
 // 연습 공간의 문서는 마크다운 파일 그대로(src/welcome/<언어>/*.md) — 빌드가 글로 싣는다(esbuild text 로더, vitest 는 같은 일을 하는 플러그인)
 import koStart from './welcome/ko/start.md';
@@ -47,7 +48,7 @@ export function welcomeContent(locale: 'ko' | 'en'): WelcomeContent {
       body: ko
         ? '시범 운영 기간과 확대 담당이 비어 있습니다. 답글로 알려 주시면(예: 11월 3~14일, 김민지) 일정표에 넣겠습니다.'
         : 'The pilot dates and the roll-out owner are empty. Reply with them (e.g. Nov 3–14, Kim) and I will fill in the schedule.',
-      author: claude, waitingOn: 'owner', status: 'open', severity: 'medium',
+      author: claude, waitingOn: 'owner', status: 'open', severity: 'medium', category: 'gap',
       // 질문 카드로 보이게(답하기가 먼저) — 꼬리표 없이 두면 "Claude 의견"이 되어 반영해가 먼저 뜬다
       result: { kind: 'review', at: now },
       thread: [], createdAt: now, updatedAt: now,
@@ -62,7 +63,7 @@ export function welcomeContent(locale: 'ko' | 'en'): WelcomeContent {
       suggestion: ko
         ? '| 위험 | 대응 |\n|---|---|\n| 원본을 다른 곳으로 옮기면 관리 부담이 커진다 | 원본은 지금 자리에 두고, 의견과 이력만 따로 쌓는다 |\n| 반영됐는지 놓치는 의견이 생긴다 | 회차마다 볼 것에서 확인하고, 남은 것은 다시 보낸다 |'
         : '| Risk | Response |\n|---|---|\n| Moving the originals elsewhere adds overhead | Keep the originals where they are; store notes and history separately |\n| Some notes are never confirmed as applied | Check each round under To review and resend what is left |',
-      author: claude, waitingOn: 'owner', status: 'open', severity: 'low',
+      author: claude, waitingOn: 'owner', status: 'open', severity: 'low', category: 'structure',
       thread: [], createdAt: now, updatedAt: now,
     }],
   };
@@ -119,8 +120,8 @@ export function demoRuns(mem: DocBenchAdapters & { control: MemoryControl }, loc
   });
 
   /** 보낸 묶음 → RUN_SCHEMA 모양의 결과 */
-  function simulateRun(ctx: RunContext): { items: { feedbackId: string; action: string; text: string; message: string; section?: string }[]; summary: string } {
-    const items: { feedbackId: string; action: string; text: string; message: string; section?: string }[] = [];
+  function simulateRun(ctx: RunContext): { items: { feedbackId: string; action: string; text: string; message: string; section?: string; category?: string }[]; summary: string } {
+    const items: { feedbackId: string; action: string; text: string; message: string; section?: string; category?: string }[] = [];
     for (const it of ctx.items) {
       const f = it.feedback;
       const change = it.allowed.includes('edit') ? 'edit' : it.allowed.includes('propose') ? 'propose' : null;
@@ -163,6 +164,12 @@ export function demoRuns(mem: DocBenchAdapters & { control: MemoryControl }, loc
         ? `"${input.replace(/\s+/g, ' ').slice(0, 60)}" — 연습용 흉내라 요청 글을 이해하지는 못합니다. 진짜 Claude 는 이 요청대로 고칩니다. 고침·되돌리기를 보려면 "이렇게 바꿔"로 바꿀 글을 적어 보내 보세요.`
         : `"${input.replace(/\s+/g, ' ').slice(0, 60)}" — as a simulation I cannot understand requests. The real Claude edits as asked. To see edit and revert, write the new text with "Rewrite as" and send it.`) });
     }
+    // 종류가 없던 피드백에 종류 붙이기(D85) — 흉내는 글을 이해하지 못해 낱말로 짐작한다(빈칸은 누락, 이렇게 바꿔는 표현). 고른 종류는 엔진이 지킨다
+    for (const x of items) {
+      const it = ctx.items.find((i) => i.feedback.id === x.feedbackId);
+      if (!it || it.feedback.category) continue;
+      x.category = inferCategory(humanInput(it.feedback)) || (it.sectionText?.includes('[TODO]') ? 'gap' : it.feedback.suggestion != null ? 'clarity' : 'direction');
+    }
     const n = items.filter((x) => x.action === 'edit' || x.action === 'propose').length;
     return { items, summary: P + (ko ? `${items.length}건 중 ${n}건을 고쳤습니다.` : `Changed ${n} of ${items.length}.`) };
   }
@@ -186,7 +193,7 @@ export function demoRuns(mem: DocBenchAdapters & { control: MemoryControl }, loc
       for (const s of todo) {
         const n = (d.md.slice(s.start, s.end).match(/\[TODO\]/g) || []).length;
         blanks += n;
-        items.push({ docId: d.id, section: s.key, kind: 'question', title: ko ? `빈칸 ${n}곳` : `${n} blank(s)`, message: P + (ko ? '이 섹션에 빈칸([TODO])이 있습니다. 값을 답글로 주시면 채우겠습니다.' : 'This section has blanks ([TODO]). Reply with the values and I will fill them in.'), quote: '[TODO]', text: '' });
+        items.push({ docId: d.id, section: s.key, kind: 'question', category: 'gap', severity: 'medium', title: ko ? `빈칸 ${n}곳` : `${n} blank(s)`, message: P + (ko ? '이 섹션에 빈칸([TODO])이 있습니다. 값을 답글로 주시면 채우겠습니다.' : 'This section has blanks ([TODO]). Reply with the values and I will fill them in.'), quote: '[TODO]', text: '' });
       }
       for (const s of leaf) {
         if (d.readOnly) break;
@@ -198,7 +205,7 @@ export function demoRuns(mem: DocBenchAdapters & { control: MemoryControl }, loc
         if (sentences.length < 2) continue;
         const text = [...lines.slice(0, idx), ...sentences.map((x) => '- ' + x), ...lines.slice(idx + 1)].join('\n');
         longs++;
-        items.push({ docId: d.id, section: s.key, kind: 'suggest', title: ko ? '문장을 목록으로' : 'Sentences as a list', message: P + (ko ? '두 문장 이상인 문단을 목록으로 나누면 한눈에 읽힙니다. 진짜 Claude 는 내용을 보고 제안합니다.' : 'Splitting this paragraph into a list makes it scannable. The real Claude suggests based on the content.'), text });
+        items.push({ docId: d.id, section: s.key, kind: 'suggest', category: 'clarity', severity: 'low', title: ko ? '문장을 목록으로' : 'Sentences as a list', message: P + (ko ? '두 문장 이상인 문단을 목록으로 나누면 한눈에 읽힙니다. 진짜 Claude 는 내용을 보고 제안합니다.' : 'Splitting this paragraph into a list makes it scannable. The real Claude suggests based on the content.'), text });
         if (longs >= 2) break;
       }
     }

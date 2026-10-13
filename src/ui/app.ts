@@ -1,8 +1,8 @@
 /**
  * 작업대 본체 — 골격·데이터·이동·상단 바·레일·단축키.
  */
-import type { Action, AskOptions, DocBenchAdapters, DocBenchEvent, DocBenchOptions, DocEvent, Feedback, FeedbackPatch, Manifest, Person, ReadingPlan, RunnerInfo, RunStartInput, RunStatus, SendVia, Unsubscribe, ViewState } from '../types';
-import { normalizeFeedback, countTurns, turnOf, isMyDraft } from '../core/feedback';
+import type { Action, AskOptions, DocBenchAdapters, DocBenchEvent, DocBenchOptions, DocEvent, Feedback, FeedbackLens, FeedbackPatch, Manifest, Person, ReadingPlan, RunnerInfo, RunStartInput, RunStatus, SendVia, Unsubscribe, ViewState } from '../types';
+import { normalizeFeedback, countTurns, turnOf, isMyDraft, cleanLens } from '../core/feedback';
 import { compileRules, countPlaceholders, type Compiled } from './render';
 import { h, $, fmtTime, debounce, icon } from './dom';
 import { makeT, type T } from './i18n';
@@ -148,6 +148,24 @@ export class App {
   inScope(id: string | undefined): boolean { return !this.scope || !id || id === this.scope || id.startsWith(this.scope + '/'); }
   /** 범위 안의 피드백 (지도 항목 피드백은 범위가 없을 때만) */
   scopedFb(): Feedback[] { return this.scope ? this.fb.filter((f) => f.target.kind !== 'item' && this.inScope(f.docId)) : this.fb; }
+
+  /** 골라 보기·말풍선(D85) — 모양이 틀린 보기 상태는 무시한다 */
+  get lens(): FeedbackLens | undefined { return cleanLens(this.state.lens); }
+  /** 골라 보기 창이 열려 있으면 다시 그린다 */
+  lensChanged?: () => void;
+  /** 골라 보기를 바꾼다(undefined 값은 그 조건을 지운다) — 문서의 표시·말풍선, 검토 패널, 도구줄이 함께 */
+  setLens(patch: Partial<FeedbackLens>): void {
+    // 다 지워도 빈 값으로 남긴다 — 빠진 키는 다른 기기의 옛 골라 보기를 되살린다
+    this.state.lens = cleanLens({ ...(this.lens || {}), ...patch }) || {};
+    this.saveState();
+    this.refreshLens();
+  }
+  private refreshLens(): void {
+    this.doc?.anchorFeedback();
+    this.doc?.paintLens();
+    this.panel.render();
+    this.lensChanged?.();
+  }
   isPinned(key: string): boolean { return (this.state.pins || []).includes(key); }
   togglePin(key: string): void {
     const pins = this.state.pins || [];
@@ -282,6 +300,7 @@ export class App {
         try { localStorage.setItem(this.stateKey, JSON.stringify(this.state)); } catch { /* 무시 */ }
         if (this.doc) this.doc.applyFolds();
         this.renderRail();
+        this.refreshLens();
       }
     } catch { /* 원격 없음 */ }
   }
@@ -934,6 +953,8 @@ export class App {
         return;
       }
       if (this.dialogs.isOpen()) return;
+      // 단추·링크·메뉴(골라 보기 창 포함) 위의 Enter·Space 는 그 단추의 것 — 섹션 접기로 가로채지 않는다
+      if ((e.key === 'Enter' || e.key === ' ') && el?.closest?.('button, a[href], summary, [role="button"], [role="menuitem"], .db-menu')) return;
       const d = this.doc;
       switch (e.key) {
         case 'j': d?.step(1); break;
@@ -941,6 +962,7 @@ export class App {
         case 'o': case 'Enter': if (!d || !d.toggleCurrent()) return; break;
         case 'e': d?.editCurrent(); break;
         case 'c': d?.commentCurrent(); break;
+        case 'b': this.setLens({ bubbles: !this.lens?.bubbles }); break;
         case '/': d?.focusFind(); break;
         case 'f': {
           const open = this.root.classList.toggle('panel-open');

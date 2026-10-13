@@ -184,6 +184,24 @@ export interface DocSource {
 // ---------------------------------------------------------------- 피드백
 
 export type Severity = 'high' | 'medium' | 'low';
+
+/**
+ * 피드백의 종류 — 사람과 Claude 가 같은 고정 목록을 쓴다(D85). 무엇이 문제인가로 나눈다(요청·질문 같은 말투가 아니라).
+ * typo 오탈자 · fact 사실·수치 · conflict 충돌 · duplicate 중복 · gap 누락 · structure 구조 · clarity 표현 · risk 위험 · direction 방향
+ */
+export type FeedbackCategory = 'typo' | 'fact' | 'conflict' | 'duplicate' | 'gap' | 'structure' | 'clarity' | 'risk' | 'direction';
+
+/** 피드백 골라 보기 — 문서 위 말풍선과 검토 패널(초안 칸은 빼고)이 함께 따른다 */
+export interface FeedbackLens {
+  /** 문서 안 그 자리에 말풍선으로 보인다 */
+  bubbles?: boolean;
+  /** 이 중요도 이상만 — 없으면 모두. 중요도가 없는 피드백은 보통으로 친다 */
+  severity?: 'medium' | 'high';
+  /** 이 종류만 — 없거나 비면 모두. 'none' = 종류가 없는 것 */
+  cats?: (FeedbackCategory | 'none')[];
+  /** 끝난 것(닫음·안 함)도 말풍선으로 */
+  closed?: boolean;
+}
 /**
  * draft = 보내기 전의 내 메모(초안) — Claude·CLI·알림이 집어 가지 않는다. 디스크에는 늘 waitingOn 'owner' 로 적어
  * 옛 판도 "Claude 차례"로 오인하지 않게 한다(D73). open = 주고받는 중, resolved = 끝남, declined = 하지 않기로 함
@@ -252,7 +270,10 @@ export interface Feedback {
   selector?: TextSelector;
   title?: string;
   body: string;
+  /** 예전 자유 꼬리표(0.1 사전 리뷰의 "사실 갱신" 등) — 종류가 없으면 여기서 짐작한다(categoryOf) */
   kind?: string;
+  /** 고정 종류(D85). 사람이 고르거나, Claude 가 남기거나 처리하며 붙인다 — 사람이 고른 것은 Claude 가 바꾸지 않는다 */
+  category?: FeedbackCategory;
   severity?: Severity;
   status: FeedbackStatus;
   waitingOn: WaitingOn;
@@ -332,6 +353,8 @@ export interface ViewState {
     viewSeen?: string[] };
   /** 변경 표시(더한 글·지운 글)를 문서 위에 그릴지 */
   showChanges?: boolean;
+  /** 피드백 골라 보기·말풍선 */
+  lens?: FeedbackLens;
   /** 왼쪽 문서 목록: 폴더 나무 / config.json 의 모음 */
   railView?: 'folder' | 'groups';
   /** 고정한 폴더('경로/')·문서 — 왼쪽 위 "작업 중"에 늘 보인다 */

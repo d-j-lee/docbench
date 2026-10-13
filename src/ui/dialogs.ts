@@ -188,7 +188,7 @@ export class Dialogs {
 
   help(): void {
     const t = this.app.t;
-    const rows: [string, string][] = [['j', 'help.j'], ['k', 'help.k'], ['o', 'help.o'], ['e', 'help.e'], ['c', 'help.c'], ['/', 'help.slash'], ['f', 'help.f'], ['1 2 3 0', 'help.num'], ['Ctrl Enter', 'help.ctrlEnter'], ['j k x s e a u r', 'help.panel'], ['?', 'help.q'], ['Esc', 'help.esc']];
+    const rows: [string, string][] = [['j', 'help.j'], ['k', 'help.k'], ['o', 'help.o'], ['e', 'help.e'], ['c', 'help.c'], ['b', 'help.b'], ['/', 'help.slash'], ['f', 'help.f'], ['1 2 3 0', 'help.num'], ['Ctrl Enter', 'help.ctrlEnter'], ['j k x s e a u r', 'help.panel'], ['?', 'help.q'], ['Esc', 'help.esc']];
     const grid = h('div', { class: 'db-keys' });
     for (const [k, l] of rows) grid.append(h('span', {}, ...k.split(' ').map((x) => h('kbd', { text: x }))), h('span', { text: t(l) }));
     this.show(h('div', { class: 'db-sheet' }, h('h3', { text: t('help.title') }), grid,

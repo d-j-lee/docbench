@@ -5,14 +5,28 @@ import type { ChangeEntry, DocContent, Feedback } from '../types';
 import { diffSections, sectionSources, getSectionText, KEY_SEP, type SectionDiff } from '../core/source';
 import { locate, makeSelector } from '../core/selectors';
 import { norm } from '../core/markdown';
-import { turnOf, countTurns } from '../core/feedback';
+import { turnOf, countTurns, lensMatch, lensFilters } from '../core/feedback';
 import { lineDiff } from '../core/diff';
 import { titleFromText } from '../core/workspace';
-import { renderMarkdown, decorate, sectionize, textIndex, wrapRange, type Section } from './render';
+import { renderMarkdown, decorate, sectionize, textIndex, selectedSpan, wrapRange, type Section } from './render';
 import { h, $$, icon, fmtBytes, fmtTime, debounce, relTime } from './dom';
 import { Editor, renderDiff } from './editor';
 import { markSectionChanges, clearChangeMarks } from './track';
+import { placeBubbles, clearBubbles } from './bubbles';
+import { openLens, lensSummary } from './lens';
 import type { App } from './app';
+
+/** 문구 인용으로 남기는 가장 긴 글(공백 정규화 기준) — 넘으면 인용 없이 섹션·문서 전체에 적는다 */
+const MAX_QUOTE = 500;
+/** 고른 범위의 자리 — 짧으면 범위 전체, 화면 절반보다 길면 고르기를 끝낸 곳(아래 끝이 화면 밖일 수 있다) */
+function selRect(sel: Selection, main: HTMLElement): DOMRect {
+  const whole = sel.getRangeAt(0).getBoundingClientRect();
+  if (whole.height <= main.clientHeight / 2 || !sel.focusNode) return whole;
+  const f = document.createRange();
+  f.setStart(sel.focusNode, sel.focusOffset);
+  const r = f.getClientRects()[0] || (sel.focusNode.nodeType === 1 ? (sel.focusNode as Element) : sel.focusNode.parentElement)?.getBoundingClientRect();
+  return r && (r.width || r.height) ? r : whole;
+}
 
 export class DocView {
   readonly app: App;
@@ -37,7 +51,7 @@ export class DocView {
   private textCache = new Map<string, string>();
   private outlineBtns = new Map<string, HTMLElement>();
   private cleanup: (() => void)[] = [];
-  private els: { head?: HTMLElement; toolbar?: HTMLElement; banner?: HTMLElement; busy?: HTMLElement; fresh?: HTMLElement; diffSlot?: HTMLElement; orphans?: HTMLElement; guide?: HTMLElement; stats?: HTMLElement; seg?: HTMLElement; chips?: HTMLElement; find?: HTMLInputElement; findCnt?: HTMLElement } = {};
+  private els: { head?: HTMLElement; toolbar?: HTMLElement; banner?: HTMLElement; busy?: HTMLElement; fresh?: HTMLElement; diffSlot?: HTMLElement; orphans?: HTMLElement; guide?: HTMLElement; stats?: HTMLElement; seg?: HTMLElement; chips?: HTMLElement; find?: HTMLInputElement; findCnt?: HTMLElement; bub?: HTMLButtonElement; lens?: HTMLButtonElement } = {};
   private destroyed = false;
 
   constructor(app: App, id: string) {
@@ -164,6 +178,11 @@ export class DocView {
     // 양방향: 내가 다 읽기 전에 Claude 에게 먼저 — 제안·질문 받기, 읽기 정리(접기·먼저 볼 곳)
     if (this.app.canReview()) tb.append(h('button', { class: 'db-btn sm db-review-btn', type: 'button', title: this.t('review.btn.hint'), onclick: () => void this.app.reviewMenu(), html: icon('spark') }, this.t('review.btn')));
     if (this.app.can('feedback.create')) tb.append(h('button', { class: 'db-btn sm', type: 'button', title: this.t('doc.feedback.whole.hint'), onclick: (e: Event) => this.app.composer.open({ docId: this.id, whole: true }, e.currentTarget as HTMLElement), html: icon('chat') }, this.t('doc.feedback.whole')));
+    // 피드백을 그 자리에 말풍선으로 · 중요도·종류로 골라 보기(D85) — 말풍선과 검토 패널이 같은 조건을 따른다
+    this.els.bub = h('button', { class: 'db-btn sm db-bub-btn', type: 'button', title: this.t('lens.bubbles.hint'), onclick: () => this.app.setLens({ bubbles: !this.app.lens?.bubbles }) }) as HTMLButtonElement;
+    this.els.lens = h('button', { class: 'db-btn sm db-lens-btn', type: 'button', 'data-lens': 'doc', 'aria-expanded': 'false', 'aria-haspopup': 'dialog', title: this.t('lens.btn.hint'), onclick: (e: Event) => openLens(this.app, e.currentTarget as HTMLElement) }) as HTMLButtonElement;
+    tb.append(this.els.bub, this.els.lens);
+    this.paintLens();
     this.els.stats = h('span', { class: 'db-stats' });
     tb.append(this.els.stats);
     return tb;
@@ -727,18 +746,21 @@ export class DocView {
   private secOfFb = new Map<string, string>();
   anchorFeedback(): void {
     if (!this.article) return;
+    clearBubbles(this.article);
     for (const m of $$('mark.db-fbq', this.article)) m.replaceWith(...Array.from(m.childNodes));
     this.article.normalize();
     this.textCache.clear();
     this.secOfFb.clear();
-    const rows = this.app.fb.filter((f) => f.docId === this.id && f.target.kind === 'section');
+    const lens = this.app.lens;
+    const rows = this.app.fb.filter((f) => f.docId === this.id && (f.target.kind === 'section' || (f.target.kind === 'doc' && f.selector)));
     let orphans = 0;
     for (const f of rows) {
-      const s = this.sectionOf(f);
-      if (!s) { orphans++; continue; }
-      this.secOfFb.set(f.id, s.key);
-      if (!f.selector) continue;
-      const idx = textIndex(s.el);
+      const s = f.target.kind === 'section' ? this.sectionOf(f) : null;
+      if (f.target.kind === 'section' && !s) { orphans++; continue; }
+      if (s) this.secOfFb.set(f.id, s.key);
+      // 골라 보기에 들지 않는 것은 문구 표시도 하지 않는다(섹션 옆 수는 그대로 — 어디에 무엇이 남았는지는 보이게)
+      if (!f.selector || !lensMatch(f, lens)) continue;
+      const idx = textIndex(s ? s.el : this.article);
       const at = locate(idx.s, f.selector);
       if (!at) continue;
       const t = turnOf(f);
@@ -751,7 +773,16 @@ export class DocView {
     const o = this.els.orphans!;
     o.hidden = !orphans;
     o.textContent = orphans ? this.t('doc.orphans', { n: orphans }) : '';
+    placeBubbles(this.app, this.article, this.id, (f) => this.sectionOf(f)?.el || null);
     this.updateBadges();
+  }
+
+  /** 위 도구줄의 말풍선·골라 보기 단추 */
+  paintLens(): void {
+    const lens = this.app.lens;
+    const b = this.els.bub, l = this.els.lens;
+    if (b) { b.setAttribute('aria-pressed', String(!!lens?.bubbles)); b.innerHTML = icon('bubble') + ' '; b.append(this.t('lens.bubbles')); }
+    if (l) { l.classList.toggle('on', lensFilters(lens)); l.innerHTML = icon('filter') + ' '; l.append(lensFilters(lens) ? lensSummary(this.t, lens) : this.t('lens.title')); }
   }
   sectionKeyOf(fid: string): string | undefined { return this.secOfFb.get(fid); }
 
@@ -856,26 +887,29 @@ export class DocView {
   private bindSelection(): void {
     const btn = this.app.els.selbtn;
     const main = this.app.els.main;
-    let ctx: { sec: Section | null; selector: { exact: string; prefix?: string; suffix?: string } } | null = null;
+    let ctx: { sec: Section | null; selector?: { exact: string; prefix?: string; suffix?: string } } | null = null;
     const onSel = () => {
       const sel = window.getSelection();
       if (!sel || sel.isCollapsed || !sel.rangeCount || !this.app.can('feedback.create')) { btn.hidden = true; return; }
       const rg = sel.getRangeAt(0);
-      if (!this.article.contains(rg.commonAncestorContainer) || (rg.commonAncestorContainer as Element).closest?.('.db-editor')) { btn.hidden = true; return; }
-      const exact = norm(sel.toString());
-      if (exact.length < 2 || exact.length > 500) { btn.hidden = true; return; }
-      const node = rg.startContainer.nodeType === 1 ? (rg.startContainer as Element) : rg.startContainer.parentElement!;
-      const secEl = node.closest('.db-sec');
+      const anc = rg.commonAncestorContainer;
+      const ancEl = anc.nodeType === 1 ? (anc as Element) : anc.parentElement!;
+      // 문서 밖에서부터(제목 위·목차) 끌어 고른 경우도 문서에 걸쳐 있으면 받는다 — 문서 전체에 적기
+      const inside = this.article.contains(anc);
+      if ((!inside && !rg.intersectsNode(this.article)) || ancEl.closest('.db-editor') || $$('.db-editor', this.article).some((e) => rg.intersectsNode(e))) { btn.hidden = true; return; }
+      if (norm(sel.toString()).length < 2) { btn.hidden = true; return; }
+      // 고른 범위를 다 담는 가장 안쪽 섹션(두 섹션에 걸치면 그 위 섹션, 그것도 없으면 문서 전체)
+      const secEl = inside ? ancEl.closest('.db-sec') : null;
       const sec = this.secs.find((s) => s.el === secEl) || null;
-      let selector = { exact } as { exact: string; prefix?: string; suffix?: string };
-      if (sec) {
-        const idx = textIndex(sec.el);
-        let at = idx.map.findIndex(([n, off]) => n === rg.startContainer && off >= rg.startOffset);
-        if (at < 0 || idx.s.slice(at, at + exact.length) !== exact) at = idx.s.indexOf(exact);
-        if (at >= 0) selector = makeSelector(idx.s, at, at + exact.length);
-      }
-      ctx = { sec, selector };
-      const r = rg.getBoundingClientRect();
+      // 고른 글은 문서 글자로만 다시 읽는다 — sel.toString() 은 제목 옆 단추(적기·편집)·지운 글 표시까지 담아
+      // 문서에서 다시 찾지 못하는 인용이 된다(제목부터 본문까지 고른 경우)
+      const span = selectedSpan(textIndex(sec ? sec.el : this.article), rg);
+      if (!span || span.exact.length < 2) { btn.hidden = true; return; }
+      // 인용은 짧을 때만. 길게(섹션 여럿·문서 대부분) 고르면 인용 없이 그 섹션 또는 문서 전체에 적는다
+      const selector = span.exact.length <= MAX_QUOTE ? makeSelector(span.text, span.start, span.end) : undefined;
+      // 긴 범위가 맨 위 제목(H1) 섹션에 걸리면 — 문서 하나를 감싼 제목이 흔하다 — 그 섹션이 아니라 문서 전체에
+      ctx = { sec: !selector && sec?.level === 1 ? null : sec, selector };
+      const r = selRect(sel, main);
       const mr = main.getBoundingClientRect();
       btn.hidden = false;
       const bw = btn.offsetWidth;
@@ -891,9 +925,9 @@ export class DocView {
     const onClick = () => {
       if (!ctx) return;
       const sel = window.getSelection();
-      const rect = sel && sel.rangeCount ? sel.getRangeAt(0).getBoundingClientRect() : btn.getBoundingClientRect();
+      const rect = sel && sel.rangeCount ? selRect(sel, main) : btn.getBoundingClientRect();
       btn.hidden = true;
-      this.app.composer.open({ docId: this.id, sec: ctx.sec, selector: ctx.selector }, rect);
+      this.app.composer.open(ctx.sec || ctx.selector ? { docId: this.id, sec: ctx.sec, selector: ctx.selector } : { docId: this.id, whole: true }, rect);
     };
     btn.addEventListener('mousedown', onDown);
     btn.addEventListener('click', onClick);

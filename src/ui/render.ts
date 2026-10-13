@@ -192,6 +192,35 @@ export function textIndex(root: Element): { s: string; map: [Text, number][] } {
   return { s, map };
 }
 
+/**
+ * 고른 범위(Range)가 textIndex 글의 어디인가 — 앞뒤 공백은 뺀다. 범위 안의 문서 글자가 없으면 null.
+ * Selection.toString() 대신 이것을 쓴다: 그쪽은 제목 옆 단추·지운 글 표시처럼 문서 글자가 아닌 것까지 담는다.
+ */
+export function selectedSpan(idx: { s: string; map: [Text, number][] }, rg: Range): { text: string; start: number; end: number; exact: string } | null {
+  let a = boundaryAt(idx.map, rg.startContainer, rg.startOffset);
+  let b = boundaryAt(idx.map, rg.endContainer, rg.endOffset);
+  while (a < b && idx.s[a] === ' ') a++;
+  while (b > a && idx.s[b - 1] === ' ') b--;
+  return a < b ? { text: idx.s, start: a, end: b, exact: idx.s.slice(a, b) } : null;
+}
+
+/** 경계(노드·오프셋) 바로 뒤에 오는 첫 글자의 자리 — 없으면 map.length. map 은 문서 순서 */
+function boundaryAt(map: [Text, number][], c: Node, o: number): number {
+  const ref = c.nodeType === Node.TEXT_NODE ? null : c.childNodes[o] || null;
+  const after = (n: Node): boolean => {
+    if (c.nodeType === Node.TEXT_NODE) return !!(c.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING);
+    if (ref) return ref === n || !!(ref.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING);
+    return !c.contains(n) && !!(c.compareDocumentPosition(n) & Node.DOCUMENT_POSITION_FOLLOWING);
+  };
+  let last: Node | null = null;
+  for (let i = 0; i < map.length; i++) {
+    const [n, off] = map[i];
+    if (n === c) { if (off >= o) return i; continue; }
+    if (n !== last) { last = n; if (after(n)) return i; }
+  }
+  return map.length;
+}
+
 /** 정규화 구간 [a,b) 를 텍스트 노드별로 감싼다 */
 export function wrapRange(map: [Text, number][], a: number, b: number, make: () => HTMLElement): HTMLElement[] {
   const segs: { n: Text; start: number; end: number }[] = [];

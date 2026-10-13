@@ -32,7 +32,7 @@ export const $$ = <T extends Element = HTMLElement>(sel: string, root: ParentNod
 
 export const CARET = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-export type IconName = 'caret' | 'close' | 'edit' | 'chat' | 'spark' | 'folder' | 'folderOpen' | 'doc' | 'history' | 'map' | 'refresh' | 'copy' | 'check' | 'stop' | 'clock' | 'warn' | 'eye' | 'pin' | 'file' | 'user' | 'plug' | 'down' | 'plus';
+export type IconName = 'caret' | 'close' | 'edit' | 'chat' | 'spark' | 'folder' | 'folderOpen' | 'doc' | 'history' | 'map' | 'refresh' | 'copy' | 'check' | 'stop' | 'clock' | 'warn' | 'eye' | 'pin' | 'file' | 'user' | 'plug' | 'down' | 'plus' | 'filter' | 'bubble';
 
 export function icon(name: IconName): string {
   const s = (d: string, vb = '0 0 14 14') => `<svg viewBox="${vb}" aria-hidden="true">${d}</svg>`;
@@ -61,6 +61,8 @@ export function icon(name: IconName): string {
     case 'plug': return s(`<path d="M4.6 1.8v2.6M9.4 1.8v2.6M3.2 4.4h7.6v2.2a3.8 3.8 0 0 1-7.6 0zM7 10.4v1.8" ${st}/>`);
     case 'down': return s(`<path d="M3.4 5.4L7 9l3.6-3.6" ${st}/>`);
     case 'plus': return s(`<path d="M7 2.6v8.8M2.6 7h8.8" ${st}/>`);
+    case 'filter': return s(`<path d="M1.8 2.6h10.4L8.2 7.4v3.8l-2.4 1.2v-5z" ${st}/>`);
+    case 'bubble': return s(`<path d="M3 2.2h8a1.4 1.4 0 0 1 1.4 1.4v4.4A1.4 1.4 0 0 1 11 9.4H7.4L4.6 11.8V9.4H3A1.4 1.4 0 0 1 1.6 8V3.6A1.4 1.4 0 0 1 3 2.2z" ${st}/>`);
   }
 }
 

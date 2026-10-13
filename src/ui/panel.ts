@@ -7,7 +7,7 @@
  *   끝남   확인했거나 하지 않기로 한 것 — 다시 열면 초안으로.
  */
 import type { Feedback, FeedbackPatch, PanelFilter, RunStatus } from '../types';
-import { countTurns, sortFeedback, turnOf } from '../core/feedback';
+import { countTurns, lensFilters, lensMatch, sortFeedback, turnOf } from '../core/feedback';
 import { getSectionText, KEY_SEP } from '../core/source';
 import { lineDiff } from '../core/diff';
 import { planRevert } from '../core/apply';
@@ -15,6 +15,7 @@ import { RUN_EFFORTS, RUN_MODELS } from '../core/runs';
 import { h, relTime, icon } from './dom';
 import { renderDiff, applyProposal } from './editor';
 import type { App } from './app';
+import { catChip, lensSummary, openLens } from './lens';
 
 const LEGACY: Record<string, PanelFilter> = { active: 'review', owner: 'review', assistant: 'sent', closed: 'done' };
 const FILTERS: PanelFilter[] = ['draft', 'review', 'sent', 'done'];
@@ -85,6 +86,11 @@ export class Panel {
     const f = this.app.fb.find((x) => x.id === id);
     if (!f) return;
     const t = turnOf(f);
+    // 골라 보기에 가려진 카드(섹션 옆 수·문구 표시는 거르지 않는다) — 열어도 없으니 그렇다고 말하고 모두 보기를 권한다
+    if (t !== 'draft' && !lensMatch(f, this.app.lens)) {
+      this.app.toast(this.t('lens.hidden'), { action: this.t('lens.reset'), onAction: () => { this.app.setLens({ severity: undefined, cats: undefined }); this.focus(id); } });
+      return;
+    }
     this.open(this.scope === 'doc' && f.docId !== this.app.view ? 'all' : undefined, t === 'draft' ? 'draft' : t === 'owner' ? 'review' : t === 'assistant' ? 'sent' : 'done');
     requestAnimationFrame(() => {
       const c = this.el.querySelector<HTMLElement>(`.db-card[data-id="${CSS.escape(id)}"]`);
@@ -107,8 +113,13 @@ export class Panel {
     const v = this.app.view;
     return this.app.pendingReadingPlans().filter((r) => this.scope === 'all' || !v || r.view!.some((p) => p.docId === v));
   }
-  private rowsOf(filter: PanelFilter): Feedback[] {
-    const all = this.app.scopedFb();
+  /**
+   * 골라 보기(D85)는 볼 것·보냄·끝남에만 — 초안은 늘 모두(보내기가 숨은 초안까지 보내지 않게, 고를 수 있게).
+   * lensed = 걸러 내기 전 수를 알려고 끌 때 false
+   */
+  private rowsOf(filter: PanelFilter, lensed = true): Feedback[] {
+    const lens = lensed && filter !== 'draft' ? this.app.lens : undefined;
+    const all = this.app.scopedFb().filter((f) => lensMatch(f, lens));
     const inScope = (f: Feedback) => this.inScope(f);
     const want = (f: Feedback) => {
       const x = turnOf(f);
@@ -142,6 +153,7 @@ export class Panel {
       h('div', { class: 'db-ph-top' },
         h('h2', { text: t('panel.title') }),
         h('button', { class: 'db-btn sm ghost', type: 'button', 'aria-pressed': String(this.scope === 'doc'), title: t('panel.scope.hint'), onclick: () => this.setPanel({ scope: this.scope === 'doc' ? 'all' : 'doc' }) }, this.scope === 'doc' ? t('panel.scope.doc') : t('panel.scope.all')),
+        h('button', { class: 'db-btn sm ghost db-lens-btn' + (lensFilters(app.lens) ? ' on' : ''), type: 'button', 'data-lens': 'panel', 'aria-expanded': 'false', 'aria-haspopup': 'dialog', title: t('lens.btn.hint') + ' — ' + lensSummary(t, app.lens), 'aria-label': t('lens.title'), onclick: (e: Event) => openLens(app, e.currentTarget as HTMLElement), html: icon('filter') }),
         app.canReview() ? h('button', { class: 'db-btn sm', type: 'button', title: t('review.ask.hint'), onclick: (e: Event) => app.reviewMenu(e.currentTarget as HTMLElement), html: icon('spark') + ' ' + t('review.ask') }) : null),
       h('div', { class: 'db-tabs', role: 'tablist' },
         tab('draft', t('panel.f.draft'), c.draft),
@@ -156,6 +168,14 @@ export class Panel {
     const caret = focusKey && 'selectionStart' in act! ? [act!.selectionStart, act!.selectionEnd] as const : null;
     const parts: HTMLElement[] = [head, this.list];
     const rows = this.rowsOf(filter);
+    if (filter !== 'draft' && lensFilters(app.lens)) {
+      const n = this.rowsOf(filter, false).length;
+      this.list.append(h('div', { class: 'db-lens-bar' },
+        h('span', { text: t('lens.banner', { what: lensSummary(t, app.lens), n, m: rows.length }) }),
+        h('span', { class: 'db-grow' }),
+        h('button', { class: 'db-btn sm ghost', type: 'button', 'data-lens': 'bar', 'aria-haspopup': 'dialog', onclick: (e: Event) => openLens(app, e.currentTarget as HTMLElement) }, t('lens.change')),
+        h('button', { class: 'db-btn sm', type: 'button', onclick: () => app.setLens({ severity: undefined, cats: undefined }) }, t('lens.reset'))));
+    }
     // 보내기 막대는 보낼 초안이 있을 때만 — 빈 칸에 "0개 보내기"를 늘 세워 두지 않는다(붙일 말은 기억해 둔다)
     if (filter === 'draft' && rows.length) {
       this.list.append(this.draftTools(rows));
@@ -218,6 +238,8 @@ export class Panel {
     const who = f.author.kind === 'assistant' ? t('fb.by.assistant') : app.personLabel(f.author);
     return h('div', { class: 'db-c-top' },
       ...(extra || []),
+      catChip(t, f),
+      f.status !== 'draft' && f.severity ? h('span', { class: 'db-sev ' + f.severity, text: t('fb.sev.' + f.severity) }) : null,
       h('button', { class: 'db-c-loc', type: 'button', title: t('fb.goto'), onclick: () => void this.jump(f) }, '↳ ' + this.loc(f)),
       h('span', { class: 'db-grow' }),
       h('span', { class: 'db-hint', text: who + ' · ' + relTime(f.updatedAt, t) }));
@@ -347,12 +369,14 @@ export class Panel {
     const line = (f: Feedback) => `- ${same ? '' : this.loc(f) + ': '}${f.selector?.exact ? `“${f.selector.exact}” — ` : ''}${said(f)}${f.suggestion != null ? ` → ${f.suggestion}` : ''}`.trim();
     const body = rows.map(line).join('\n');
     const firstReply = this.pendingReply(first);
-    const undoFirst: FeedbackPatch = { body: first.body, suggestion: first.suggestion ?? null, selector: first.selector ?? null, target: first.target, severity: first.severity ?? null, thread: first.thread };
+    const undoFirst: FeedbackPatch = { body: first.body, suggestion: first.suggestion ?? null, selector: first.selector ?? null, target: first.target, severity: first.severity ?? null, category: first.category ?? null, thread: first.thread };
     const ok = await app.updateFeedback(first, {
       body, suggestion: null,
       selector: same && rows.every((f) => f.selector?.exact === first.selector?.exact) ? first.selector ?? null : null,
       target: same ? first.target : { kind: 'doc' },
       severity: rows.some((f) => f.severity === 'high') ? 'high' : first.severity ?? null,
+      // 사람이 고른 종류가 하나뿐이면 남기고, 서로 다르면 비워 Claude 가 붙이게(짐작한 종류는 저장하지 않는다)
+      category: (() => { const c = new Set(rows.map((f) => f.category).filter(Boolean)); return c.size === 1 ? [...c][0]! : null; })(),
       // 첫 초안의 답은 본문으로 옮겼다 — 같은 말이 두 번 가지 않게
       ...(firstReply ? { thread: first.thread.slice(0, -1) } : {}),
     });

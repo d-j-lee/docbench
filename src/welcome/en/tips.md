@@ -14,11 +14,12 @@
 
 ## Writing notes
 
-- **Anywhere**: the bubble next to a section notes the whole section, selecting text notes that phrase, and **Whole document** at the top notes the document. A note on a folded section covers everything inside it.
+- **Anywhere**: the bubble next to a section notes the whole section, selecting text notes that phrase, and **Whole document** at the top notes the document. A long selection (over 500 characters) is noted without a quote on the section that holds it, or on the whole document if it covers most of it. A note on a folded section covers everything inside it.
 - **Drafts go nowhere**: notes only collect as drafts. Edit, delete and merge them as you read (**Merge**: into one section if they share it, otherwise into one whole-document request).
 - **Not sure how to phrase it**: tap a quick button (**Shorter · Clearer · Evidence · As table · Fold · Split · Remove · Check only**) or type the new text with **Rewrite as**. One line of "why" helps Claude keep your intent.
 - **Ask without editing**: **Check only** adds "check whether this is right (answer only, do not edit)". Note questions as you read an unfamiliar policy or manual, send them together, and the answers collect under **To review**.
 - **Urgent**: turn on ★ and you can later send **★ only** first.
+- **Category**: in the note box you can pick one of Typo · Fact · Conflict · Duplicate · Missing · Structure · Clarity · Risk · Direction. Leave it empty and Claude adds one when you send; Claude never changes one you picked. Notes Claude leaves first always carry a category and a severity.
 - **Nothing gets lost**: if you start another note or switch documents, what you were writing stays as a draft. Esc needs a second press to discard.
 - **Keyboard**: `c` notes the current section, `Ctrl+Enter` keeps it as a draft, `Ctrl+Shift+Enter` sends just this one now.
 
@@ -39,6 +40,8 @@
 - **Not done**: anything Claude could not apply comes back with the reason. **Send again** or **Back to drafts**.
 - **Confirm all · Revert this round · Copy summary**: buttons on each round's header. Paste the summary into a team update or a commit message.
 - **Keyboard**: open the review panel with `f` (or click inside it once), move between cards with `j` `k`, then `a` (confirm, apply, do it), `u` (revert), `r` (reply).
+- **Bubbles**: turn on **Bubbles** above the document (key `b`) and feedback shows right where it points — under the selected text, under the section heading for section notes, at the top for whole-document notes. Click one to jump to its card in the review panel.
+- **Filter**: the funnel button picks a severity (All · Medium and up · High only) and categories; bubbles and the review panel (except Drafts) follow it. With many notes, take **High only** first, then gather the **Typo** ones and handle them in one go. Your choice is remembered.
 
 ## Claude first
 
@@ -67,6 +70,7 @@
 |---|---|
 | A long report, ten minutes before the meeting | Claude review → Reading plan → read only what is open, note questions in place |
 | Twenty comments from your manager | Note each as a draft → send ★ only first → send the rest together |
+| Dozens of notes from Claude | Filter **High only** → turn on bubbles and handle them while reading → next, gather the **Typo** ones and Do it |
 | Action items from meeting notes | Add a `## Action items` heading with an empty table (item · owner · due), then **Whole document**: "Pull the decisions and action items from the discussion into this table; leave unknown cells as `TBD`" → Send → ask people only about the highlighted cells |
 | You keep getting the same correction | Put that correction in standing instructions as one line |
 | Claude's edit is not quite right | Revert → Ask again with one line of why |
@@ -82,6 +86,7 @@
 | `1` `2` `3` · `0` | Depth · all |
 | `/` | Find |
 | `c` | Note on the current section |
+| `b` | Bubbles on or off |
 | `e` | Edit the current section |
 | `f` | Open or close the review panel |
 | `?` | All shortcuts |

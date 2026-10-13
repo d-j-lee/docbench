@@ -2,12 +2,79 @@
  * 피드백 모델 — 정규화·차례·집계·정렬.
  * 예전(작업대 v1) 행도 읽어서 같은 모양으로 맞춘다.
  */
-import type { Feedback, FeedbackResult, FeedbackStatus, Person, Severity, WaitingOn } from '../types';
+import type { Feedback, FeedbackCategory, FeedbackLens, FeedbackResult, FeedbackStatus, Person, Severity, WaitingOn } from '../types';
 import { makeKey, parseKey } from './source';
 
 const SEV: Record<string, Severity> = { 높음: 'high', 중간: 'medium', 낮음: 'low', high: 'high', medium: 'medium', low: 'low', h: 'high', m: 'medium', l: 'low' };
 
 const isoOr = (v: unknown, fallback: string): string => (typeof v === 'string' && v ? v : fallback);
+
+// ---------------------------------------------------------------- 종류(D85)
+
+/** 고정 종류 — 이 순서로 보인다(손으로 고치는 것 → 판단이 드는 것) */
+export const FEEDBACK_CATEGORIES: readonly FeedbackCategory[] = ['typo', 'fact', 'conflict', 'duplicate', 'gap', 'structure', 'clarity', 'risk', 'direction'];
+export const isCategory = (v: unknown): v is FeedbackCategory => typeof v === 'string' && (FEEDBACK_CATEGORIES as readonly string[]).includes(v);
+
+/** Claude 에게 주는 종류 풀이 — 실행 지시·스킬·아티팩트 문서가 같은 말을 쓴다 */
+export const CATEGORY_GUIDE: Record<FeedbackCategory, string> = {
+  typo: 'typos, spelling, spacing, punctuation or notation — a mechanical fix',
+  fact: 'a fact, number, date or name that is wrong or outdated',
+  conflict: 'disagrees with another place in this or another document — terms, numbers, rules, decisions',
+  duplicate: 'the same content is said in more than one place',
+  gap: 'something needed is missing — a blank, an unverified claim, an open question, a to-do',
+  structure: 'order, grouping, headings, splitting or merging sections, where content lives',
+  clarity: 'hard to read or ambiguous — wording, length, tone',
+  risk: 'could cause harm if missed — security, legal, privacy, compliance, deadlines, reputation',
+  direction: 'scope, purpose, strategy or the overall approach',
+};
+/** 프롬프트에 넣는 종류 목록 한 덩어리 */
+export const categoryGuideLines = (): string[] => FEEDBACK_CATEGORIES.map((c) => `- ${c}: ${CATEGORY_GUIDE[c]}`);
+
+/**
+ * 예전 자유 꼬리표(0.1 사전 리뷰의 "사실 갱신"·"불일치" 등)에서 종류 짐작 — 앞의 것이 먼저. 화면 표시용이다:
+ * 저장된 category 가 없으면 Claude 가 처리하며 붙인다(짐작과 다를 수 있다). 영어는 낱말 단위로(artifact·milestone 이 걸리지 않게)
+ */
+const INFER: [RegExp, FeedbackCategory][] = [
+  [/누락|빈칸|할 ?일|확인 ?필요|질문 ?추가|\bmissing\b|\bgaps?\b|\bto-?dos?\b|\bblanks?\b/i, 'gap'],
+  [/오탈|오타|맞춤법|띄어쓰기|표기 ?(?:오류|통일|법)|\btypos?\b|\bspelling\b|\bgrammar\b|\bpunctuation\b/i, 'typo'],
+  [/중복|되풀이|\bduplicat|\bredundan/i, 'duplicate'],
+  [/불일치|충돌|모순|어긋|용어|\bconflicts?\b|\binconsisten|\bmismatch|\bcontradict|\bterminology\b/i, 'conflict'],
+  [/사실|갱신|수치|숫자|일정|날짜|낡은|\bfacts?\b|\boutdated\b|\baccura|\bnumbers?\b|\bdates?\b/i, 'fact'],
+  [/구조|순서|배치|위생|\bstructur|\borgani[sz]|\blayout\b/i, 'structure'],
+  [/명료|표현|문장|가독|어조|\bclarity\b|\bwording\b|\breadab|\btone\b|\bstyle\b/i, 'clarity'],
+  // "주의"는 꼬리표 전체일 때만("주의 문구 다듬기"는 위험이 아니다)
+  [/^\s*주의\s*$|리스크|위험|보안|법률|법적|법무|규정|개인정보|\brisks?\b|\bsecurity\b|\blegal\b|\bprivacy\b|\bcomplian/i, 'risk'],
+  [/방향|전략|범위|목표|발표|\bdirection\b|\bstrategy\b|\bscope\b|\bgoals?\b/i, 'direction'],
+];
+export function inferCategory(kind?: string): FeedbackCategory | undefined {
+  if (!kind) return undefined;
+  if (isCategory(kind)) return kind;
+  for (const [re, c] of INFER) if (re.test(kind)) return c;
+  return undefined;
+}
+/** 보이는 종류 — 붙인 종류, 없으면 예전 꼬리표에서 짐작 */
+export const categoryOf = (f: Pick<Feedback, 'category' | 'kind'>): FeedbackCategory | undefined => f.category || inferCategory(f.kind);
+
+/** 골라 보기에 드는가 — 중요도가 없으면 보통으로, 종류가 없으면 'none' 으로 친다 */
+export function lensMatch(f: Pick<Feedback, 'category' | 'kind' | 'severity'>, lens?: FeedbackLens | null): boolean {
+  if (!lens) return true;
+  if (lens.severity && SEV_RANK[f.severity || 'medium'] > SEV_RANK[lens.severity]) return false; // SEV_RANK: 높음 0 · 보통 1 · 낮음 2
+  if (lens.cats?.length && !lens.cats.includes(categoryOf(f) || 'none')) return false;
+  return true;
+}
+/** 무엇이든 걸러 내는 중인가(말풍선 켜기·끝난 것은 거르기가 아니다) */
+export const lensFilters = (lens?: FeedbackLens | null): boolean => !!(lens && (lens.severity || lens.cats?.length));
+/** 보기 상태에서 읽은 골라 보기 — 남이 쓸 수 있는 파일이라 모양을 확인한다 */
+export function cleanLens(x: unknown): FeedbackLens | undefined {
+  if (!x || typeof x !== 'object') return undefined;
+  const o = x as Record<string, unknown>;
+  const out: FeedbackLens = {};
+  if (o.bubbles === true) out.bubbles = true;
+  if (o.severity === 'medium' || o.severity === 'high') out.severity = o.severity;
+  if (Array.isArray(o.cats)) { const cats = [...new Set(o.cats.filter((c): c is FeedbackCategory | 'none' => c === 'none' || isCategory(c)))]; if (cats.length) out.cats = cats; }
+  if (o.closed === true) out.closed = true;
+  return Object.keys(out).length ? out : undefined;
+}
 
 /** 어떤 모양의 행이 와도 Feedback 으로 맞춘다. 예전 필드는 옮겨 담고, 모르는 필드는 버린다(저장소가 지저분해지지 않게) */
 export function normalizeFeedback(raw: Record<string, any>, id?: string): Feedback {
@@ -53,7 +120,9 @@ export function normalizeFeedback(raw: Record<string, any>, id?: string): Feedba
     selector,
     title: r.title || undefined,
     body: String(r.body ?? ''),
-    kind: r.kind || r.category || undefined,
+    // 예전 판의 category 는 자유 꼬리표였다 — 고정 종류가 아니면 꼬리표(kind)로 옮긴다
+    kind: r.kind || (typeof r.category === 'string' && !isCategory(r.category) ? r.category : undefined) || undefined,
+    category: isCategory(r.category) ? r.category : undefined,
     severity: r.severity ? SEV[String(r.severity)] : undefined,
     status,
     waitingOn,

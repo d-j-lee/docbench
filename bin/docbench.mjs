@@ -17,8 +17,8 @@
  *   docbench status [--json]                   차례별 피드백 수 · Claude 작업(엔진·맡겨 둔 피드백)
  *   docbench fb list [--waiting assistant|owner] [--status open|resolved|declined|all] [--doc ID] [--json]
  *   docbench fb show <id> [--json]             피드백 + 지금 그 섹션 원문·판·인코딩
- *   docbench fb add --doc ID [--section KEY] -m 글 [--severity high|medium|low] [--quote 문구] [--to assistant|owner]
- *   docbench fb reply <id> -m 글 [--resolve | --ask | --decline]
+ *   docbench fb add --doc ID [--section KEY] -m 글 [--severity high|medium|low] [--category 종류] [--quote 문구] [--to assistant|owner]
+ *   docbench fb reply <id> -m 글 [--resolve | --ask | --decline] [--category 종류]
  *   docbench fb propose <id> --file 제안.md [-m 이유]
  *   docbench doc list [--json]
  *   docbench doc sections <docId> [--json]
@@ -71,11 +71,13 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
                                              차례: assistant = 사람이 보낸 것(Claude 가 할 일) · owner = 볼 것(사람이 확인할 결과)
                                              초안(draft)은 아직 보내지 않은 사람의 메모 — Claude 는 손대지 않는다
   docbench fb show <id> [--json]             피드백 + 지금 그 섹션 원문·판·인코딩
-  docbench fb add --doc ID [--section KEY] -m 글 [--title 제목] [--severity high|medium|low] [--quote 문구] [--to assistant|owner] [--draft]
-                                             Claude 가 쓰면 제안·질문으로 "볼 것"에(먼저 말 걸기). 사람이 쓰면 바로 보냄(--draft 면 초안)
-  docbench fb reply <id> -m 글 [--resolve | --ask | --decline]
+  docbench fb add --doc ID [--section KEY] -m 글 [--title 제목] [--severity high|medium|low] [--category 종류] [--quote 문구] [--to assistant|owner] [--draft]
+                                             Claude 가 쓰면 제안·질문으로 "볼 것"에(먼저 말 걸기 — 종류·중요도를 붙인다). 사람이 쓰면 바로 보냄(--draft 면 초안)
+                                             종류: typo fact conflict duplicate gap structure clarity risk direction
+  docbench fb reply <id> -m 글 [--resolve | --ask | --decline] [--category 종류]
                                              Claude 의 회신은 사람이 확인할 때까지 "볼 것"에 남는다(--resolve = 다 했다는 답 —
-                                             닫는 것은 사람). 사람이 쓰면 --resolve·--decline 이 닫는다
+                                             닫는 것은 사람). 사람이 쓰면 --resolve·--decline 이 닫는다.
+                                             --category 는 종류가 없는 피드백에만 붙는다(사람이 고른 종류는 바꾸지 않는다)
   docbench fb propose <id> --file 제안.md [-m 이유]
   docbench doc list [--json]
   docbench doc sections <docId> [--json]
@@ -223,6 +225,15 @@ function inputText(buf) {
   if (/\u0000|\uFFFD/.test(d.text)) die('입력에 깨진 글자(NUL·U+FFFD)가 있습니다.');
   return d.text;
 }
+/** --category 값 — 고정 종류(D85)만 받는다 */
+function categoryArg(a) {
+  if (a.category == null) return undefined;
+  if (a.category === true) die(`--category 에 종류를 주세요: ${core.FEEDBACK_CATEGORIES.join(' · ')}`);
+  const c = String(a.category).trim();
+  if (!core.isCategory(c)) die(`종류는 ${core.FEEDBACK_CATEGORIES.join(' · ')} 중 하나입니다: ${c}`);
+  return c;
+}
+
 async function readInput(a) {
   if (a.stdin) { const chunks = []; for await (const c of process.stdin) chunks.push(c); return inputText(Buffer.concat(chunks)); }
   if (!a.file || a.file === true) die('--file <경로> 또는 --stdin 이 필요합니다');
@@ -378,7 +389,7 @@ async function main() {
       if (a.waiting) rows = rows.filter((f) => f.status === 'open' && f.waitingOn === a.waiting);
       if (a.doc) rows = rows.filter((f) => f.docId === ws.canonId(String(a.doc)));
       rows = core.sortFeedback(rows, [...ws.docs.keys()]);
-      out(a, rows, (r) => r.length ? r.map((f) => `${f.id}  [${turn(f)}]${f.severity ? ' ' + f.severity : ''}  ${f.docId} › ${where(f)}\n    ${(f.title ? f.title + ' — ' : '') + f.body.replace(/\s+/g, ' ').slice(0, 140)}`).join('\n') : '해당 피드백 없음');
+      out(a, rows, (r) => r.length ? r.map((f) => `${f.id}  [${turn(f)}]${f.severity ? ' ' + f.severity : ''}${core.categoryOf(f) ? ' ' + core.categoryOf(f) : ''}  ${f.docId} › ${where(f)}\n    ${(f.title ? f.title + ' — ' : '') + f.body.replace(/\s+/g, ' ').slice(0, 140)}`).join('\n') : '해당 피드백 없음');
       return;
     }
     if (sub === 'show') {
@@ -401,6 +412,7 @@ async function main() {
         f.title ? '제목: ' + f.title : '', '내용: ' + f.body,
         f.selector?.exact ? '인용: "' + f.selector.exact + '"' : '',
         f.severity === 'high' ? '급함(★)' : '',
+        f.category ? '종류: ' + f.category : `종류: 없음${core.categoryOf(f) ? ` (꼬리표 "${f.kind}" — 화면은 ${core.categoryOf(f)} 로 짐작)` : ''} — 회신할 때 --category 로 붙인다(typo fact conflict duplicate gap structure clarity risk direction)`,
         // 사람이 "이렇게 바꿔"로 직접 쓴 글 — 고른 문구면 그 문구, 섹션이면 본문
         f.suggestion != null ? `이렇게 바꿔${f.selector?.exact ? '(인용 문구를)' : '(본문을)'}:\n----\n${f.suggestion.replace(/\n*$/, '')}\n----` : '',
         ...f.thread.map((m) => `  - ${m.author.kind === 'assistant' ? (m.author.name || 'AI') : (m.author.name || '사람')}: ${m.text}`),
@@ -412,6 +424,7 @@ async function main() {
     }
     if (sub === 'add') {
       if (!a.doc || !a.m) die('--doc 와 -m 이 필요합니다');
+      const category = categoryArg(a);
       const docId = ws.canonId(String(a.doc));
       const target = a.section ? { kind: 'section', heading: core.keyToPath(String(a.section)).pop(), ...core.parseKey(String(a.section)) } : { kind: 'doc' };
       if (a.section) {
@@ -421,7 +434,7 @@ async function main() {
       // Claude 가 먼저 올리는 제안·질문은 "볼 것"(사람이 확인) — 결과 표시(result)로 화면이 회차에 묶는다. 사람이 쓰면 보낸 것(또는 --draft 초안)
       const ai = ws.actor.kind === 'assistant';
       const f = await ws.createFeedback({
-        docId, target, body: a.m, title: a.title, severity: a.severity, kind: a.kind, selector: a.quote ? { exact: String(a.quote) } : undefined,
+        docId, target, body: a.m, title: a.title, severity: a.severity, kind: a.kind, category, selector: a.quote ? { exact: String(a.quote) } : undefined,
         // --to 를 주면 그대로(사람 차례·Claude 차례를 직접 고름)
         ...(a.draft && !ai ? { status: 'draft', waitingOn: 'owner' } : a.to === 'assistant' || a.to === 'owner' ? { waitingOn: a.to } : ai ? { waitingOn: 'owner', result: { kind: 'review', at: new Date().toISOString(), run: 'cli' } } : {}),
       });
@@ -436,6 +449,10 @@ async function main() {
       const now = new Date().toISOString();
       const msg = { author: ws.actor, text: String(a.m), at: now };
       const patch = { thread: [...f.thread, msg] };
+      // 종류(D85) — 없던 것에만. 사람이 고른 것·예전 꼬리표로 짐작되는 것은 그대로
+      const category = categoryArg(a);
+      if (category && !f.category) patch.category = category;
+      else if (category) process.stderr.write(`종류는 이미 ${f.category} — 바꾸지 않았습니다(사람이 고른 종류는 그대로)\n`);
       if (ai) {
         // Claude 의 회신은 사람이 확인할 때까지 "볼 것"(D73) — 끝내는 것은 사람. 방금 doc write --fb 로 고친 결과(edit)는 그대로 둔다
         const kind = a.decline ? 'decline' : a.ask ? 'ask' : 'answer';

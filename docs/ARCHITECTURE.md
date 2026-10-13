@@ -79,7 +79,7 @@ DocBench 앱 화면 ─ app-shell.ts ─ rest 어댑터 ─ HTTP(127.0.0.1·열�
 { id, version, docId,
   target: { kind:'section', path:[...], heading, occurrence? } | { kind:'doc' } | { kind:'item', itemId },
   selector?: { exact, prefix, suffix },       // W3C TextQuoteSelector
-  body, kind?, severity?: high|medium|low,
+  body, kind?, category?: typo|fact|conflict|duplicate|gap|structure|clarity|risk|direction, severity?: high|medium|low,
   status: open|resolved|declined,
   waitingOn: owner|assistant,                  // 다음 수를 둘 쪽
   author, thread: [{author, text, at}],        // author = { kind: human|assistant|external, id?(계정), name?(표시 이름) }

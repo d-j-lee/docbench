@@ -2,13 +2,14 @@
  * 마우스를 올리면 보이는 것들.
  *  - 본문의 피드백 표시(형광 문구)·섹션 옆 피드백 수 → 그 피드백 미리보기 (누가·언제·차례·내용·마지막 답)
  *  - 바뀐 글(더한 글·지운 글)·"바뀜" 표 → 누가·언제 바꿨는지
- *  - 피드백 패널의 카드 → 본문에서 그 피드백이 붙은 문구·섹션을 밝힌다
+ *  - 피드백 패널의 카드·문서 안 말풍선 → 본문에서 그 피드백이 붙은 문구·섹션을 밝힌다. 말풍선이 보이는 문구는 미리보기 대신 그 말풍선을 밝힌다
  */
 import type { Feedback } from '../types';
 import { turnOf } from '../core/feedback';
 import { KEY_SEP } from '../core/source';
 import { h, relTime } from './dom';
 import type { App } from './app';
+import { catChip } from './lens';
 
 export class Hover {
   private app: App;
@@ -35,13 +36,17 @@ export class Hover {
   private get t() { return this.app.t; }
 
   private target(el: Element | null): Element | null {
-    return el?.closest?.('mark.db-fbq, .db-sec-badges .db-badge.assistant, .db-sec-badges .db-badge.owner, .db-sec-badges .db-badge.closed, .db-sec-badges .db-badge.chg, ins.db-chg-ins, del.db-chg-del, .db-card[data-id]') || null;
+    return el?.closest?.('mark.db-fbq, .db-sec-badges .db-badge.assistant, .db-sec-badges .db-badge.owner, .db-sec-badges .db-badge.closed, .db-sec-badges .db-badge.chg, ins.db-chg-ins, del.db-chg-del, .db-card[data-id], .db-bub[data-id]') || null;
   }
 
   private over(el: Element, focus = false): void {
     const tg = this.target(el);
     if (!tg) return;
-    if (tg.classList.contains('db-card')) { this.light((tg as HTMLElement).dataset.id!); return; }
+    if (tg.classList.contains('db-card') || tg.classList.contains('db-bub')) { this.light((tg as HTMLElement).dataset.id!); return; }
+    // 말풍선이 떠 있는 문구 — 같은 글을 미리보기로 또 띄우지 않고 그 말풍선을 밝힌다
+    const bub = tg.matches('mark.db-fbq') ? this.app.els.main.querySelector(`.db-bub[data-id="${CSS.escape((tg as HTMLElement).dataset.fb || '')}"]`) : null;
+    const onScreen = (e: Element) => { const r = e.getBoundingClientRect(), m = this.app.els.main.getBoundingClientRect(); return r.bottom > m.top && r.top < m.bottom; };
+    if (bub && onScreen(bub)) { this.light((tg as HTMLElement).dataset.fb!); bub.classList.add('hl'); this.lit.push(bub); return; }
     if (tg === this.anchor && !this.pop.hidden) { clearTimeout(this.hideT); return; }
     clearTimeout(this.showT);
     clearTimeout(this.hideT);
@@ -51,7 +56,7 @@ export class Hover {
     const tg = this.target(el);
     if (!tg) return;
     if (to && (tg.contains(to) || this.pop.contains(to))) return;
-    if (tg.classList.contains('db-card')) { this.unlight(); return; }
+    if (tg.classList.contains('db-card') || tg.classList.contains('db-bub') || this.lit.some((e) => e.classList.contains('db-bub'))) { this.unlight(); return; }
     clearTimeout(this.showT);
     this.hideSoon();
   }
@@ -142,6 +147,7 @@ export class Hover {
       h('div', { class: 'db-pop-h' },
         h('span', { class: 'db-turnlbl ' + turn, text: run ? t('run.busy') : t('turn.' + turn) }),
         h('span', { text: who }), h('span', { class: 'db-hint', text: relTime(f.updatedAt, t) }),
+        catChip(t, f),
         f.severity ? h('span', { class: 'db-sev ' + f.severity, text: t('fb.sev.' + f.severity) }) : null),
       f.title ? h('div', { class: 'db-c-title', text: f.title }) : null,
       h('div', { class: 'db-pop-body', text: f.body || f.kind || '' }));
