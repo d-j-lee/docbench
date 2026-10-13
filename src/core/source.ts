@@ -7,7 +7,7 @@
  * 키 규칙: 상위 제목부터 현재 제목까지 화면 글자를 ' › ' 로 잇는다.
  * 같은 키가 또 나오면 ' #2', ' #3' 을 붙인다(문서 순서 기준).
  */
-import { marked, headingPlain, toLF } from './markdown';
+import { marked, headingPlain, toLF, frontMatterLength } from './markdown';
 
 export const KEY_SEP = ' › ';
 
@@ -38,9 +38,11 @@ function htmlBoxDelta(raw: string): number {
 
 export function sectionSources(mdIn: string): SectionSource[] {
   const md = toLF(mdIn);
-  const tokens = marked.lexer(md);
+  // 앞머리 YAML 은 섹션이 아니다(첫 제목 앞 머리말) — 화면(toHTML)과 같은 함수로 떼고, 오프셋은 원문 기준으로 잇는다
+  const fm = frontMatterLength(md);
+  const tokens = marked.lexer(fm ? md.slice(fm) : md);
   const heads: { level: number; title: string; start: number }[] = [];
-  let off = 0;
+  let off = fm;
   // 열린 HTML 상자(<details> <div> …) 안의 제목은 브라우저가 그 상자 안에 넣는다 → 화면에서 섹션이 아니므로 여기서도 세지 않는다
   let boxDepth = 0;
   for (const t of tokens) {

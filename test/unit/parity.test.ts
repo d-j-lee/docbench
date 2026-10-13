@@ -22,6 +22,7 @@ function mdFiles(dir: string): string[] {
 }
 const files = [
   path.join(here, '../fixtures/tricky.md'),
+  path.join(here, '../fixtures/frontmatter.md'),
   ...mdFiles(path.join(here, '../../examples/sample-workspace')),
   ...(process.env.DOCBENCH_PARITY_DIR && existsSync(process.env.DOCBENCH_PARITY_DIR) ? mdFiles(process.env.DOCBENCH_PARITY_DIR) : []),
 ];

@@ -244,6 +244,7 @@
 .docbench .db-md code { font-family: var(--db-font-mono); font-size: .86em; background: var(--db-sunk); border-radius: 4px; padding: .08em .35em; }
 .docbench .db-md pre { background: var(--db-sunk); border-radius: 8px; padding: 12px 14px; overflow: auto; font-size: 13px; line-height: 1.55; }
 .docbench .db-md pre code { background: none; padding: 0; font-size: inherit; }
+.docbench .db-md pre.db-frontmatter { color: var(--db-ink-3); font-size: 12px; border: 1px dashed var(--db-line); background: transparent; }
 .docbench .db-md strong { font-weight: 650; }
 .docbench .db-md del { color: var(--db-ink-3); }
 .docbench .db-md img { max-width: 100%; }

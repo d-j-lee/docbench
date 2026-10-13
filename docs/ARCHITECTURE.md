@@ -67,6 +67,7 @@ DocBench 앱 화면 ─ app-shell.ts ─ rest 어댑터 ─ HTTP(127.0.0.1·열�
 - 제목 글자는 `headingPlain` — 인라인 마크다운을 HTML 로 그린 뒤 태그를 지우고 엔티티를 푼 값 = 브라우저 `textContent`.
 - 화면 쪽(`ui/render.ts sectionize`)은 마크다운이 만든 제목(`data-md` 표시)의 `textContent` 로 같은 규칙을 적용한다. 문서에 HTML 로 직접 쓴 `<h2>` 는 섹션이 아니다.
 - 열린 HTML 상자(`<details>`·`<div>` …) 안의 마크다운 제목은 브라우저가 상자 안에 넣으므로, 원문 쪽도 세지 않는다.
+- 문서 맨 앞 YAML 앞머리(`---` … `---`/`...`, 안쪽이 `키: 값` 모양)는 섹션이 아니라 첫 제목 앞 머리말이다. 두 쪽 모두 `frontMatterLength` 하나로 떼고(원문은 그 뒤부터 lexer, 오프셋은 원문 기준), 화면은 YAML 상자로 그린다(D86).
 - `test/unit/parity.test.ts` 가 예제·까다로운 고정 문서(+ `DOCBENCH_PARITY_DIR`)로 둘이 같은지 확인한다.
 
 섹션 하나를 바꾸면(`replaceSection`) 그 범위 밖 글자는 바이트 그대로이고, 끝의 빈 줄 모양도 유지된다.

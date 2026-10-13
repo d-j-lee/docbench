@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sectionSources, findSection, getSectionText, replaceSection, diffSections, keyToPath, parseKey, makeKey, KEY_SEP } from '../../src/core/source';
-import { marked, protectTildes, toHTML, headingPlain } from '../../src/core/markdown';
+import { marked, protectTildes, toHTML, headingPlain, frontMatterLength } from '../../src/core/markdown';
 
 // jsdom 환경의 URL 은 Node 의 URL 이 아니라서 경로로 읽는다
 const tricky = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../fixtures/tricky.md'), 'utf8');
@@ -96,6 +96,45 @@ describe('키 ↔ 경로', () => {
     expect(makeKey(['a', 'b'], 1)).toBe('a › b');
     expect(keyToPath('a › b #2')).toEqual(['a', 'b']);
     expect(KEY_SEP).toBe(' › ');
+  });
+});
+
+describe('앞머리 YAML', () => {
+  const fmDoc = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), '../fixtures/frontmatter.md'), 'utf8');
+
+  it('앞머리는 섹션이 아니고, 본문의 가로줄·setext 제목은 그대로', () => {
+    expect(sectionSources(fmDoc).map((s) => s.key)).toEqual(['앞머리 있는 문서', '앞머리 있는 문서 › 첫째', '앞머리 있는 문서 › 둘째 제목(setext)']);
+    const html = toHTML(fmDoc);
+    expect(html).toContain('<pre class="db-frontmatter"><code class="language-yaml">name: &quot;예시-스킬&quot;');
+    expect(html).not.toMatch(/<h2[^>]*>[^<]*description:/);
+    expect(html).toContain('<hr>');
+  });
+  it('섹션 오프셋은 원문 기준', () => {
+    const s = findSection(fmDoc, '앞머리 있는 문서')!;
+    expect(s.start).toBe(fmDoc.indexOf('# 앞머리 있는 문서'));
+    expect(getSectionText(fmDoc, '앞머리 있는 문서 › 첫째')!.startsWith('## 첫째\n')).toBe(true);
+  });
+  it('섹션을 바꿔도 앞머리 바이트는 그대로', () => {
+    const fm = frontMatterLength(fmDoc);
+    const next = replaceSection(fmDoc, '앞머리 있는 문서 › 첫째', '## 첫째\n\n바꾼 글.\n')!;
+    expect(next.slice(0, fm)).toBe(fmDoc.slice(0, fm));
+    expect(diffSections(fmDoc, next)).toMatchObject({ changed: ['앞머리 있는 문서 › 첫째'], preamble: false });
+    expect(diffSections(fmDoc, fmDoc.replace('예시-스킬', '다른-스킬')).preamble).toBe(true);
+  });
+  it('가로줄로 시작하는 문서·닫히지 않은 앞머리·키 없는 블록은 앞머리가 아니다', () => {
+    for (const md of ['---\n\n# 제목\n\n본문\n', '---\nname: x\n\n# 제목\n', '---\n# 주석만\n---\n\n# 제목\n', '---\n문단 글\n---\n\n# 제목\n']) {
+      expect(frontMatterLength(md)).toBe(0);
+      expect(toHTML(md)).not.toContain('db-frontmatter');
+    }
+    expect(sectionSources('---\n\n# 제목\n').map((s) => s.key)).toEqual(['제목']);
+  });
+  it('`...` 로 닫기, CRLF, 맨 앞 BOM, 닫는 줄이 파일 끝', () => {
+    expect(frontMatterLength('---\na: 1\n...\n# 제목\n')).toBe('---\na: 1\n...\n'.length);
+    expect(sectionSources('---\r\na: 1\r\n---\r\n# 제목\r\n').map((s) => s.key)).toEqual(['제목']);
+    const bom = '﻿---\na: 1\n---\n# 제목\n';
+    expect(sectionSources(bom)[0]).toMatchObject({ key: '제목', start: bom.indexOf('# 제목') });
+    expect(frontMatterLength('---\na: 1\n---')).toBe('---\na: 1\n---'.length);
+    expect(toHTML('---\na: <b>\n---')).toBe('<pre class="db-frontmatter"><code class="language-yaml">a: &lt;b&gt;</code></pre>\n');
   });
 });
 
