@@ -273,7 +273,10 @@ export type RuleSpec =
   | (RuleBase & { kind: 'readme'; minFiles?: number })
   /** 파일·폴더 이름(확장자 앞)이 이 규칙들을 모두 따른다. README·LICENSE 같은 관례 이름과 숨김 파일은 뺀다 */
   | (RuleBase & { kind: 'naming'; style: NameStyle[] })
-  /** 문서를 days 일 안에 다시 본다 — 앞머리 검토일(reviewed·updated …) 과 마지막 변경(git 커밋·파일 시각) 중 늦은 것 */
+  /**
+   * 문서를 days 일 안에 다시 본다 — 앞머리 검토일(reviewed·updated …) 과 마지막 변경(git 커밋·파일 시각) 중 늦은 것.
+   * field 를 주면 그 앞머리 날짜만 본다(고친 시각은 검토가 아니다 — 없으면 걸린다)
+   */
   | (RuleBase & { kind: 'review'; days: number; field?: string })
   /** 이 경로의 파일·폴더를 두지 않는다 */
   | (RuleBase & { kind: 'forbid' })

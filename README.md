@@ -1,6 +1,10 @@
 # DocBench
 
+**한국어** · [English](README.en.md)
+
 사람과 AI가 같은 문서를 **읽고 · 피드백하고 · 고치고 · 기록**하는 작업대 — 그리고 그 문서들이 사는 **작업 공간**을 한눈에.
+
+![설계 노트를 읽으며 그 자리에 피드백 — 문서 안의 말풍선과 검토 패널에 모인 초안](docs/images/ko-review.png)
 
 - **작업 공간 개요**: 처음 열면 이 공간이 **무엇을 위한 곳인지**(README 첫 문단·설정 `purpose`), 폴더마다 하는 일, 무엇이 들었는지(문서·데이터·코드·오피스·그림 …), 문서 앞머리의 상태·담당·꼬리표·검토 기한, CLAUDE.md·AGENTS.md·스킬 같은 AI 협업 파일, 그리고 **살펴볼 것** — 비밀로 보이는 파일, 판 사본(_v2·최종·(1)), 임시 파일, 깨진 링크, 기한 지난 문서, README 없는 폴더 … 그 자리에서 README 를 만들거나 Claude 에게 맡길 초안을 남긴다
 - **팀 규칙과 CI 점검**: 맨 위 `docbench.json` 에 팀 약속(앞머리 키·폴더 README·이름 규칙·검토 주기·두지 않을 파일·크기 한도·있어야 할 파일)을 적으면 개요가 그것으로도 점검하고, 같은 점검을 `docbench check` 로 CI·pre-commit 에서 돌린다 — GitHub Action 이 PR 에 주석을 단다. 아래 [팀 규칙과 CI 점검](#팀-규칙과-ci-점검)
@@ -85,6 +89,8 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 
 ## 문서 형식
 
+![YAML 은 키마다 섹션 — Claude 는 제안만](docs/images/ko-formats.png)
+
 작업대가 여는 파일은 정해 둔 형식뿐이다(허용 목록 — 함께 쓰는 설정으로 넓혀도 `.env`·키·실행 파일·숨김 폴더는 문서가 되지 않는다). 형식마다 섹션을 세는 법과 **Claude 가 할 수 있는 일**이 다르다.
 
 | 형식 | 화면 | 섹션 | 사람 | Claude |
@@ -106,6 +112,8 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 - 이 작업 공간의 목적·폴더 역할은 README 로 충분하다(맨 위 README 의 첫 문단 · 폴더 README 의 첫 문단). 따로 적으려면 팀 규칙 파일 `docbench.json` 에 `"purpose": "…"`, `"folders": { "data": "원천 데이터 — 고치지 않는다" }` (README 보다 먼저).
 
 ## 팀 규칙과 CI 점검
+
+![작업 공간 개요 — 팀 규칙(docbench.json)으로도 점검](docs/images/ko-overview.png)
 
 작업 공간은 목적에 맞게 관리되어야 한다 — 그 약속을 문서 폴더 맨 위 **`docbench.json`** 에 적는다. 사람이 쓰고 git 으로 함께 나누는 문서다(DocBench 는 읽기만 한다. 개요의 **규칙 파일 만들기**가 틀을 만들어 준다).
 
@@ -131,7 +139,7 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 | `front-matter` | 마크다운 문서의 앞머리에 `keys` 가 있는가, `values` 의 값만 쓰는가 |
 | `readme` | 이 폴더들(`"*"` = 맨 위 폴더마다)에 README 가 있는가 — 파일이 `minFiles` 개 이상인 폴더만 |
 | `naming` | 이름(확장자 앞)이 `kebab-case` · `snake_case` · `lowercase` · `no-spaces` · `ascii` · `date-prefix` · `number-prefix` · `no-version-marks`(_v2·최종·(1) 없음)를 따르는가. README·LICENSE 같은 관례 이름은 뺀다 |
-| `review` | `days` 일 안에 다시 봤는가 — 앞머리 검토일(`reviewed`·`updated` …)과 마지막 변경(git 커밋, 없으면 파일 시각) 중 늦은 날 |
+| `review` | `days` 일 안에 다시 봤는가 — 앞머리 검토일(`reviewed`·`updated` …)과 마지막 변경(git 커밋, 없으면 파일 시각) 중 늦은 날. `field` 를 주면 그 앞머리 날짜만(고친 것은 검토가 아니다 — 날짜가 없으면 걸린다) |
 | `forbid` · `max-size` · `require` | 두지 않을 파일·폴더 / 크기 한도 / 패턴마다 하나는 있어야 할 파일·폴더 |
 
 - 모든 규칙에 `paths`·`except`(glob — `**` 폴더 여럿, `*`·`?` 이름 안, `{a,b}` 갈래, 폴더는 끝에 `/`), `name`(점검 제목), `hint`(까닭·고치는 법), `level`(`risk`·`action`(기본)·`tidy`·`info`). `ignore` 는 모든 점검에서 빼고, `checks` 는 늘 하는 점검의 수준을 바꾸거나 끈다(`"off"`). 규칙 파일이 틀리면 조용히 넘어가지 않고 "규칙 파일에 문제"로 뜬다 — 편집기에서는 `$schema` 로 자동 완성·검사.
@@ -213,6 +221,7 @@ npm test            # 단위 + 서버
 npm run test:e2e    # Chromium 필요: npx playwright install chromium
 # 실행은 Node 20.11+, 개발(npm ci 의 시험 도구)은 Node 22.22+
 npm run check       # 전부
+node scripts/screenshots.mjs   # README 의 화면 사진(docs/images) 다시 찍기 — 화면을 바꿨으면
 ```
 
 빌드 결과물: `dist/docbench.js`(ESM), `dist/docbench.iife.js`(전역 `DocBench`), `dist/docbench.css`, `dist/app.js`(앱 화면), `dist/core.mjs`(서버·CLI), `dist/docbench.html`(단일 HTML), `dist/docbench.mjs`(CLI 파일 하나 — 앱 화면까지 묶음), `dist/types/`.

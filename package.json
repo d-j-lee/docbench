@@ -27,6 +27,7 @@
     "integrations",
     "docs",
     "README.md",
+    "README.en.md",
     "THIRD_PARTY_NOTICES.md",
     "LICENSE",
     "release"

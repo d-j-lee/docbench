@@ -71,7 +71,7 @@ test('check --json · --lang en · --rules (다른 자리의 규칙 파일) · �
   assert.equal(o.failOn, 'action');
   assert.match(o.rules.file, /ci[\\/]rules\.json$/);
   const c = o.checks.find((x) => x.code === 'rule-require');
-  assert.deepEqual([c.paths, c.title], [['CHANGELOG.md'], '1 required files or folders are missing']);
+  assert.deepEqual([c.paths, c.title], [['CHANGELOG.md'], 'Required files or folders missing: 1']);
   assert.ok(c.hint);
   assert.equal((await db(dir, ['check', '--fail-on', 'loud'])).code, 1);
   assert.equal((await db(dir, ['check', '--format', 'xml'])).code, 1);
@@ -94,11 +94,11 @@ test('check --format github: PR 주석(저장소 기준 경로) · 작업 요약
   const summary = path.join(repoDir, 'summary.md');
   const r = await db(repoDir, ['check', 'site', '--format', 'github', '--lang', 'en'], { GITHUB_WORKSPACE: repoDir, GITHUB_STEP_SUMMARY: summary });
   assert.equal(r.code, 5);
-  assert.match(r.stdout, /^::error file=site\/docs\/b\.md,title=1 documents not meeting the front-matter rule \(owner\)::owner — /m);
-  assert.match(r.stdout, /^::notice file=site\/docs\/my notes\.md,title=1 names not matching the naming rule \(no-spaces\)::no-spaces — /m);
+  assert.match(r.stdout, /^::error file=site\/docs\/b\.md,title=Documents not meeting the front-matter rule \(owner\)%3A 1::owner — /m);
+  assert.match(r.stdout, /^::notice file=site\/docs\/my notes\.md,title=Names not matching the naming rule \(no-spaces\)%3A 1::no-spaces — /m);
   const md = await fs.readFile(summary, 'utf8');
   assert.match(md, /^### DocBench check: site/m);
-  assert.match(md, /\| To do \| 1 documents not meeting the front-matter rule \(owner\) \| 1 \|/);
+  assert.match(md, /\| To do \| Documents not meeting the front-matter rule \(owner\): 1 \| 1 \|/);
 });
 
 test('개요(서버·REST): 규칙 파일의 목적이 README 보다 먼저, 점검에 팀 규칙', async (t) => {

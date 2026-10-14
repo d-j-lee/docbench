@@ -108,11 +108,11 @@
         {
           "if": { "properties": { "kind": { "const": "review" } } },
           "then": {
-            "description": "Documents in paths (default **) are looked at again within days. Uses the later of the front-matter review date (reviewed, last_reviewed, updated, lastmod … or field) and the last change (git commit, else file time).",
+            "description": "Documents in paths (default **) are looked at again within days. Uses the later of the front-matter review date (reviewed, last_reviewed, updated, lastmod …) and the last change (git commit, else file time). With field, only that front-matter date counts — edits are not reviews, and a missing date fails.",
             "properties": {
               "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true,
               "days": { "type": "integer", "minimum": 1, "maximum": 36500 },
-              "field": { "type": "string", "description": "Front-matter key holding the last review date." }
+              "field": { "type": "string", "description": "Front-matter key holding the last review date — when set, only this date counts." }
             },
             "required": ["days"],
             "additionalProperties": false

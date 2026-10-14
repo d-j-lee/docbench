@@ -11,6 +11,7 @@ npm test             # 단위(vitest) + 서버·CLI(node:test) — Claude 는 te
 npm run test:e2e     # Playwright Chromium — npx playwright install chromium (한 번)
 npm run check        # 전부 + release 사본·플러그인 버전 확인. 끝내기 전에 이것
 node bin/docbench.mjs check .   # 이 저장소의 팀 규칙(docbench.json)·깨진 링크 — CI 의 docs 단계와 같다
+node scripts/screenshots.mjs    # README(ko·en) 의 화면 사진 docs/images — 개요·검토·형식 화면을 바꿨으면 다시 찍는다
 npm run release      # 화면·CLI 를 고쳤으면: release/docbench.{html,mjs} + 플러그인 cli/ 갱신(함께 커밋)
 claude plugin validate . && claude plugin validate ./integrations/claude-code --strict   # 스킬·플러그인을 고쳤으면
 ```

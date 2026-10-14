@@ -335,18 +335,21 @@ export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unc
       }
       case 'review': {
         want = String(r.days);
+        // field 를 정했으면 그 앞머리 날짜만(파일을 고쳐도 검토로 치지 않는다 — 없으면 걸린다). 아니면 앞머리 검토일과 마지막 변경 중 늦은 날
+        const strict = !!r.field;
         const fields = r.field ? [r.field] : LAST_FIELDS;
         for (const f of ctx.files) {
           if (!ctx.isDoc(f.id) || !inRule(r, f.id)) continue;
-          let last = ctx.changedAt(f);
-          let from = '';
           const fm = ctx.meta[f.id];
+          if (strict && !fm) { if (isMarkdownPath(f.id)) unread.add(f.id); continue; }
+          let last = strict ? NaN : ctx.changedAt(f);
+          let from = '';
           if (fm) for (const k of fields) {
             const v = fmValue(fm, k);
             const ms = typeof v === 'string' ? ctx.dateMs(v) : null;
             if (ms != null) { if (!(ms <= last)) { last = ms; from = k; } break; }
           }
-          if (!Number.isFinite(last)) continue;
+          if (!Number.isFinite(last)) { if (strict) hit(f.id, r.field + ' ?'); continue; }
           if (ctx.now - last > r.days * DAY) hit(f.id, new Date(last).toISOString().slice(0, 10) + (from ? ' · ' + from : ''));
         }
         break;

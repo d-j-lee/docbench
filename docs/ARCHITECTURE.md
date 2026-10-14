@@ -129,7 +129,7 @@ core.computeOverview  →  WorkspaceOverview { purpose, scope, totals, groups, f
         │  parseRulesText: 틀린 값은 그 규칙을 빼고 문제(at·code·value)로 — 조용히 넓게 읽지 않는다. 256 KB·규칙 100·패턴 50·300자
         ▼
 evaluateRules(규칙마다)  front-matter(마크다운 앞머리 키·값 목록 — 아직 못 읽은 문서는 unchecked) · readme(폴더 glob, minFiles)
-                         naming(정해 둔 이름 규칙 8가지, 관례 이름·숨김 파일 빼고) · review(앞머리 검토일 ∨ 마지막 변경 > days)
+                         naming(정해 둔 이름 규칙 8가지, 관례 이름·숨김 파일 빼고) · review(앞머리 검토일 ∨ 마지막 변경 > days, field 면 그 날짜만)
                          forbid(폴더가 걸리면 폴더 하나로) · max-size · require(패턴마다 하나는 — 다 훑었을 때만)
         ▼
 OverviewCheck { code: rule-<kind> | rules-invalid, level(규칙의 level, 기본 action), n, paths, rule{index·want·scope·name·hint}, notes{경로: 까닭}, problems? }

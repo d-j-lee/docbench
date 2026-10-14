@@ -11,6 +11,11 @@ describe('장식', () => {
     const tags = [...d.querySelectorAll('.db-tag')].map((e) => e.className.split(' ').pop() + ':' + e.textContent);
     expect(tags).toEqual(['tone-good:[실측]', 'tone-warn:[추정]', 'tone-bad:[미확인 — 사유]']);
   });
+  it('영어 근거 표기도 칩 — 낱말로만(대괄호 안의 다른 글은 아니다)', () => {
+    const d = render('p95 [measured 10/2], [documented] and `[estimate]`, [unverified — no log] but not [docs/a] or [measurements]');
+    const tags = [...d.querySelectorAll('.db-tag')].map((e) => e.className.split(' ').pop() + ':' + e.textContent);
+    expect(tags).toEqual(['tone-good:[measured 10/2]', 'tone-info:[documented]', 'tone-warn:[estimate]', 'tone-bad:[unverified — no log]']);
+  });
   it('빈칸이 칩보다 먼저: [확인 필요] 는 빈칸', () => {
     const d = render('여기 [확인 필요] 와 [확인] 과 [(작업 후 기입)] 과 TODO');
     expect([...d.querySelectorAll('mark.db-todo')].map((e) => e.textContent)).toEqual(['[확인 필요]', '[(작업 후 기입)]', 'TODO']);

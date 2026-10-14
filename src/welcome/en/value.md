@@ -44,7 +44,7 @@ Effects differ by team, so measure them on your own work. The feedback files in 
 | Back-and-forth per review | Number of rounds sent | [TODO] |
 | Missed changes | Items not done and drafts left when a round ends | [TODO] |
 
-One run we timed: three notes sent through the terminal line, 13.9 seconds from running the command until Claude produced the result `[실측]` (Claude Code 2.1.295, one document, 2026-10-09). The page picked up and applied the result a few seconds later.
+One run we timed: three notes sent through the terminal line, 13.9 seconds from running the command until Claude produced the result `[measured]` (Claude Code 2.1.295, one document, 2026-10-09). The page picked up and applied the result a few seconds later.
 
 ## Common questions
 

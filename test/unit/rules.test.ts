@@ -199,6 +199,16 @@ describe('팀 규칙 점검', () => {
     // 늘 하는 "오래된 문서"도 커밋 시각으로
     expect(pick(ov, 'stale-docs')!.paths.sort()).toEqual(['docs/b.md', 'docs/plan.md']);
   });
+  it('검토 주기 field — 그 앞머리 날짜만(고친 시각은 검토가 아니다), 없으면 걸린다', () => {
+    const items = [file('README.md'), file('p/a.md'), file('p/b.md'), file('p/c.md'), file('p/d.md')];
+    const ov = overview({ rules: [{ kind: 'review', paths: 'p/**', days: 90, field: 'reviewed' }] }, {
+      meta: { 'p/a.md': { reviewed: '2026-09-01' }, 'p/b.md': { reviewed: '2025-01-01' }, 'p/c.md': { updated: '2026-10-01' } },
+    }, items);
+    const c = pick(ov, 'rule-review')!;
+    expect(c.paths.sort()).toEqual(['p/b.md', 'p/c.md']);
+    expect(c.notes).toEqual({ 'p/b.md': '2025-01-01 · reviewed', 'p/c.md': 'reviewed ?' });
+    expect(ov.rules!.unchecked).toBe(1);
+  });
   it('두지 않기(폴더는 하나로) · 크기 한도 · 있어야 할 것', () => {
     const ov = overview({ rules: [{ kind: 'forbid', paths: ['archive', '**/*.docx'] }, { kind: 'max-size', paths: '**/*.png', max: '1 MB' }, { kind: 'require', paths: ['CHANGELOG.md', 'docs/adr/', 'docs/*.md'] }] });
     expect(pick(ov, 'rule-forbid')!.paths).toEqual(['archive/']);
@@ -258,7 +268,7 @@ describe('점검 문구 한 벌 (화면·CLI)', () => {
   });
   it('두 말의 낱말이 같다 · 값 채우기', () => {
     expect(Object.keys(CHECK_TEXT.en).sort()).toEqual(Object.keys(CHECK_TEXT.ko).sort());
-    expect(checkText('en', 'overview.check.rule-review', { n: 2, want: 90 })).toBe('2 documents past their 90-day review cycle');
+    expect(checkText('en', 'overview.check.rule-review', { n: 2, want: 90 })).toBe('Documents past their 90-day review cycle: 2');
     expect(checkText('fr', 'overview.check.no-readme')).toBe(CHECK_TEXT.ko['overview.check.no-readme']);
   });
 });
