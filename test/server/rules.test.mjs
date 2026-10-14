@@ -188,15 +188,18 @@ test('독립 검토 고침: 폴더 지도 밖(.github·build)의 글자 그대�
   await fs.mkdir(outside, { recursive: true });
   await fs.writeFile(path.join(outside, 'creds.json'), '{"token":"ghp_SECRET_0123"}');
   await fs.rm(path.join(dir, 'docbench.json'));
-  await fs.symlink(path.join(outside, 'creds.json'), path.join(dir, 'docbench.json'));
+  // Windows 는 개발자 모드·관리자가 아니면 링크를 만들 수 없다 — 그때는 이 부분을 건너뛴다
+  if (!(await fs.symlink(path.join(outside, 'creds.json'), path.join(dir, 'docbench.json')).then(() => true, (e) => { if (e.code === 'EPERM') return false; throw e; }))) return;
   const r = await db(dir, ['check']);
   assert.ok(!r.stdout.includes('ghp_SECRET'), r.stdout);
   assert.match(r.stdout, /link outside the docs folder/);
 });
 
 test('check --format github: 남이 만든 글(파일 이름·규칙 hint)의 줄바꿈이 워크플로 명령·요약 표를 만들지 못한다', async (t) => {
+  // 줄바꿈·쌍점이 든 파일 이름은 Windows 에서 만들 수 없다 — 거기서는 규칙의 name·hint 로만
+  const evil = process.platform === 'win32' ? { 'docs/Bad Name.md': '# e\n' } : { 'docs/evil\n::warning title=INJECTED::x.md': '# e\n' };
   const dir = await plainFolder(t, {
-    'README.md': '# x\n', 'docs/evil\n::warning title=INJECTED::x.md': '# e\n',
+    'README.md': '# x\n', ...evil,
     'docbench.json': JSON.stringify({ rules: [{ kind: 'naming', paths: 'docs/**', style: 'kebab-case', name: 'n\n| injected | row |', hint: 'h\n::error title=INJECTED::boom' }] }),
   });
   const summary = path.join(dir, 'summary.md');
