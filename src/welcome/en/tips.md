@@ -57,12 +57,14 @@
 
 ## Files and environments
 
-- **Documents stay put**: the originals are the `.md` files in your folder, and DocBench never sends them anywhere.
+- **Documents stay put**: the originals are the files in your folder, and DocBench never sends them anywhere.
+- **Manage the space from the Overview**: the first paragraph of the top README is the workspace's **purpose**; a README in each folder gives that folder's **role**. Put `status`, `owner`, `tags` or `review` (review date) in a document's front matter and the Overview gathers status, owners and tags — past review dates show up under Worth a look. Broken links and overdue documents become drafts for Claude right there.
+- **Config files have sections too**: in YAML, JSON, TOML and INI each key (table) is a section, so you write on that key and edit only that key. Programs read these files, so Claude only proposes.
 - **Older formats kept**: documents in legacy Korean encoding (EUC-KR) or with Windows line endings are saved back with untouched lines exactly as they were (for IT: CP949, UTF-16LE, BOM, CRLF). If you type characters that format cannot store, you are asked before saving.
 - **Big folders open fast**: even a whole drive opens instantly; like an explorer, only expanded folders are read.
 - **Phones**: phone and tablet browsers cannot write to folders, so they are for looking around and practice.
 - **New to Markdown**: it is plain text you can write in Notepad. A line starting with `#` is a heading, and each heading starts a section (`##` is one level down). `-` starts a list item; lines split with `|` make a table. Save from Notepad with a `.md` name to make a new document.
-- **Word or HWP files**: drafting and review work best in `.md`, with final formatting applied in the original program. For the conversion, ask Claude Code: "convert this Word file to .md".
+- **Word or HWP files**: opening one shows its extracted text, so you can read, write notes and ask for a Claude review (the original is untouched — **Download original**). For documents you will keep editing together, `.md` with final formatting in the original program works best — ask Claude Code: "convert this Word file to .md".
 
 ## Recipes
 

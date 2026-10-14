@@ -27,6 +27,12 @@ import {
   looksBigRoot, toTreeEntries, SCAN_LIMITS, TREE_MAX,
 } from '../core/workspace';
 import { FsReadOnlyError, subFs, type FsEntry, type FsLike, type FsStat } from './folder-fs';
+import { formatFor, formatOf, editableFormat, claudeChanges, titledFormat, isMarkdownPath, TEXT_MAX_BYTES, TEXT_PREVIEW_BYTES, BYTES_MAX, DERIVE_MAX_BYTES, bigVersion as coreBigVersion, type FormatSpec } from '../core/formats';
+import { deriveText } from '../core/derive';
+import { frontMatterData } from '../core/markdown';
+import { computeOverview, pickReadmes, relativeLinks, OVERVIEW_LINK_LIMITS } from '../core/overview';
+import { sectionSources } from '../core/source';
+import type { WorkspaceOverview } from '../types';
 import { cleanRunEntry, completeJsonLines, liveRunners, outdatedRunners, runnerIsMine, makeRunRequest, pickRunner, runnerAlive, runFiles, validRunId, normalizeRunInput, buildRunPrompt, buildReviewPrompt, TERMINAL_RUNNER, isTerminalRunner, validDocId, RUN_MAX_DOCS, emptySummary, safeAccountId } from '../core/runs';
 import { buildRunContext, buildReviewContext, applyRunOutput, applyReviewOutput, failUnreadable, type ApplyHost } from '../core/apply';
 import { ROOM_FILES, ROOM_MARK, INBOX_RE, roomSettingsWritable, terminalStep, parseResultText, RESULT_SETTLE_MS, roomClaudeMd, roomSettings, roomInstructionsSeed, standingInstructions, terminalPromptFile, terminalCommands } from '../core/room';
@@ -126,8 +132,15 @@ const guessWindows = () => {
   return /win/i.test(nav?.userAgentData?.platform || nav?.platform || '');
 };
 
-interface DocInfo extends FsStat { title?: string; titleMtime?: number }
+interface DocInfo extends FsStat { title?: string; titleMtime?: number; meta?: Record<string, string | string[]> }
 type Raw = Decoded & { bytes: Uint8Array; st: FsStat; version: string };
+/** 문서의 지금 모양 (형식마다, D87) */
+type Snap = { fmt: FormatSpec; st: FsStat; version: string; text: string; kind: 'text' | 'large' | 'derived' | 'binary'; raw?: Raw; truncated?: { bytes: number; total: number }; head?: Decoded; deriveError?: string; unchanged?: boolean };
+
+/** 앞부분만 보일 때: 마지막 줄바꿈까지 */
+const cutAtLine = (b: Uint8Array): Uint8Array => { const nl = b.lastIndexOf(0x0a); return nl > 0 ? b.subarray(0, nl + 1) : b; };
+/** 한도보다 큰 파일의 판 — 통째로 읽지 않는다(크기·시각). core.bigVersion — 서버와 같은 규칙(판은 기록 폴더로 함께 쓴다) */
+const bigVersion = (st: FsStat): string => coreBigVersion(st.size, st.mtimeMs);
 
 export class FolderWorkspace {
   config: WorkspaceConfig;
@@ -152,6 +165,8 @@ export class FolderWorkspace {
   private user: { id: string; name?: string };
   /** 문서 목록을 얼마나 찾았나 (manifest.index) */
   index: { complete: boolean; reason?: 'big-root' | 'many' } = { complete: true };
+  /** 판 → 뽑은 글 (같은 판을 다시 뽑지 않게, 최근 40개) */
+  private derived = new Map<string, string>();
 
   constructor(public fs: FsLike, private o: FolderOptions = {}) {
     this.ci = o.caseInsensitive ?? guessWindows();
@@ -340,7 +355,8 @@ export class FolderWorkspace {
         const st = await this.fs.stat(rel).catch(() => null);
         if (!st) continue;
         const prev = this.docs.get(rel);
-        found.set(rel, { ...st, title: prev?.titleMtime === st.mtimeMs ? prev.title : undefined, titleMtime: prev?.titleMtime });
+        const same = prev?.titleMtime === st.mtimeMs;
+        found.set(rel, { ...st, title: same ? prev!.title : undefined, meta: same ? prev!.meta : undefined, titleMtime: prev?.titleMtime });
       }
       if (visits > lim.visits || Date.now() - started > lim.ms) { capped = queue.length > 0; break; }
     }
@@ -396,19 +412,67 @@ export class FolderWorkspace {
     return { bytes: f.bytes, st: { size: f.size, mtimeMs: f.mtimeMs }, ...decodeBytes(f.bytes, this.legacy), version: await versionOf(f.bytes) };
   }
 
-  async readDoc(id: string): Promise<DocContent & { eol: string; bom: boolean; mixedEol?: boolean; size: number }> {
+  /**
+   * 문서의 지금 모양 — 판과 보일 글 (형식마다, D87 — 서버 server/workspace.mjs snapshot 과 같은 규칙).
+   *  글: 바이트 → 글(인코딩 보존). 한도보다 크면 앞부분만(too-large) · 뽑은 글: 원본에서 글을 뽑는다(format) · 미리보기: 글 없음(format)
+   */
+  async snapshot(id: string, o: { knownVersion?: string } = {}): Promise<Snap> {
+    const fmt = formatFor(id);
+    const p = this.resolve(id);
+    const st = await this.fs.stat(p);
+    if (!st) throw new FolderError('NOT_FOUND', 'not found: ' + id);
+    if (editableFormat(fmt)) {
+      if (st.size <= TEXT_MAX_BYTES) { const raw = await this.readRaw(id); return { fmt, st: raw.st, version: raw.version, text: raw.text, kind: 'text', raw }; }
+      const f = await this.fs.read(p, TEXT_PREVIEW_BYTES);
+      const head = cutAtLine(f?.bytes || new Uint8Array());
+      const d = decodeBytes(head, this.legacy);
+      return { fmt, st, version: bigVersion(st), text: d.text, kind: 'large', truncated: { bytes: head.length, total: st.size }, head: d };
+    }
+    if (fmt.kind === 'binary' || st.size > DERIVE_MAX_BYTES) {
+      const f = st.size <= BYTES_MAX ? await this.fs.read(p) : null;
+      return { fmt, st, version: f ? await versionOf(f.bytes) : bigVersion(st), text: '', kind: fmt.kind === 'binary' ? 'binary' : 'derived', ...(fmt.kind === 'derived' ? { deriveError: 'too-large' } : {}) };
+    }
+    const f = await this.fs.read(p);
+    if (!f) throw new FolderError('NOT_FOUND', 'not found: ' + id);
+    const version = await versionOf(f.bytes);
+    // 맞춰 보기만 할 때(reconcile) 판이 그대로면 글을 다시 뽑지 않는다
+    if (o.knownVersion === version && !this.derived.has(version)) return { fmt, st: { size: f.size, mtimeMs: f.mtimeMs }, version, text: '', kind: 'derived', unchanged: true };
+    let text = this.derived.get(version);
+    let deriveError: string | undefined;
+    if (text == null) {
+      try { text = (await deriveText(f.bytes, fmt, { locale: this.o.locale })) ?? ''; } catch (e) { text = ''; deriveError = (e as { reason?: string })?.reason || 'broken'; }
+      if (!deriveError) { this.derived.set(version, text); if (this.derived.size > 40) this.derived.delete(this.derived.keys().next().value!); }
+    }
+    return { fmt, st: { size: f.size, mtimeMs: f.mtimeMs }, version, text, kind: 'derived', deriveError };
+  }
+
+  async readDoc(id: string): Promise<DocContent & { eol?: string; bom?: boolean; mixedEol?: boolean; size: number }> {
     id = this.canonId(id);
-    const r = await this.readRaw(id);
-    await this.storeBlob(r.version, r.text);
+    const s = await this.snapshot(id);
+    // 본 판의 글을 둔다 — 글과 뽑은 글만(그림·PDF·앞부분만 보인 큰 글은 바뀐 섹션을 셀 글이 없다)
+    if (s.kind === 'text' || (s.kind === 'derived' && !s.deriveError)) await this.storeBlob(s.version, s.text);
     // 연 문서부터 따라간다(D64) — 처음 열면 판을 적어 두어, 그 뒤 바깥 편집을 이력에 남긴다. 알던 판은 덮지 않는다(바뀐 것을 잃지 않게)
-    await this.trackFirst(id, r.version);
+    await this.trackFirst(id, s.version);
     const cfgRO = !!this.config.readOnly || !!this.config.docs?.[id]?.readOnly;
-    return {
-      id, md: r.text, version: r.version, encoding: r.encoding, eol: r.eol, bom: r.bom, mixedEol: r.mixed || undefined,
-      updatedAt: new Date(r.st.mtimeMs).toISOString(), size: r.st.size,
-      readOnly: !r.writable || cfgRO || !this.writable || undefined,
-      readOnlyReason: !r.writable ? r.readOnlyReason : cfgRO ? 'config' : !this.writable ? 'folder' : undefined,
-    };
+    const base = { id, md: s.text, version: s.version, updatedAt: new Date(s.st.mtimeMs).toISOString(), size: s.st.size, ...(s.fmt.kind !== 'markdown' ? { format: s.fmt.id } : {}) };
+    if (s.kind === 'text') {
+      const r = s.raw!;
+      return {
+        ...base, encoding: r.encoding, eol: r.eol, bom: r.bom, mixedEol: r.mixed || undefined,
+        readOnly: !r.writable || cfgRO || !this.writable || undefined,
+        readOnlyReason: !r.writable ? r.readOnlyReason : cfgRO ? 'config' : !this.writable ? 'folder' : undefined,
+      };
+    }
+    if (s.kind === 'large') return { ...base, encoding: s.head!.encoding, eol: s.head!.eol, bom: s.head!.bom, readOnly: true, readOnlyReason: 'too-large', truncated: s.truncated };
+    return { ...base, readOnly: true, readOnlyReason: 'format', binary: { mime: s.fmt.mime, size: s.st.size }, ...(s.deriveError ? { deriveError: s.deriveError } : {}) };
+  }
+
+  /** 문서 파일의 바이트 (그림·PDF 미리보기·원본 내려받기). 한도를 넘으면 null */
+  async readBytes(id: string): Promise<Uint8Array | null> {
+    const p = this.resolve(this.canonId(id));
+    const st = await this.fs.stat(p);
+    if (!st || st.size > BYTES_MAX) return null;
+    return (await this.fs.read(p))?.bytes || null;
   }
 
   async writeDoc(id: string, md: string, o: { baseVersion?: string; summary?: string; feedbackIds?: string[]; convertTo?: 'utf-8'; by?: Person; force?: boolean } = {}): Promise<{ version: string; updatedAt?: string; unchanged?: boolean }> {
@@ -416,6 +480,10 @@ export class FolderWorkspace {
     if (this.config.readOnly || this.config.docs?.[id]?.readOnly) throw new DocReadOnlyError('config', '읽기 전용 문서');
     if (!this.writable) throw new DocReadOnlyError('folder', new FsReadOnlyError().message);
     if (typeof md !== 'string') throw new FolderError('BAD_REQUEST', 'md 가 필요합니다');
+    // 뽑은 글·미리보기는 원본을 고치지 않는다. 앞부분만 보인 큰 글도(나머지를 지운다) — D87
+    if (!editableFormat(formatFor(id))) throw new DocReadOnlyError('format', this.o.locale === 'en' ? 'DocBench does not edit this format — edit it in its own program.' : '이 형식은 작업대에서 고치지 않습니다 — 원래 프로그램에서 고치세요');
+    const st0 = await this.fs.stat(this.resolve(id)).catch(() => null);
+    if (st0 && st0.size > TEXT_MAX_BYTES) throw new DocReadOnlyError('too-large', this.o.locale === 'en' ? 'This file is too large to edit here (only its beginning is shown).' : '글이 커서 앞부분만 보이는 문서는 작업대에서 고치지 않습니다');
     // 이력·판·잠금은 기록 폴더에 — 아직 없으면 지금 묻는다(D65)
     await this.ensureData();
     return this.withLock(lockKey.doc(id), () => this.writeDocLocked(id, md, o));
@@ -439,7 +507,7 @@ export class FolderWorkspace {
     await this.storeBlob(cur.version, cur.text);
     await this.storeBlob(version, text);
     const updatedAt = new Date().toISOString();
-    const ds = diffSections(cur.text, text);
+    const ds = diffSections(cur.text, text, id);
     // 문서 쓰기와 그 이력 줄은 한 덩어리 — 이력 잠금을 먼저 잡고 쓴다(못 잡으면 문서도 쓰지 않는다). 잠금 순서: 문서 → 이력 → 상태
     await this.withLock(lockKey.changes, async () => {
       // 감시가 이 쓰기를 '외부 편집'으로 오해하지 않게 먼저 새 판을 알려 둔다
@@ -459,6 +527,46 @@ export class FolderWorkspace {
     const st = await this.fs.stat(this.resolve(id)).catch(() => null);
     if (st) this.docs.set(id, { ...st });
     return { version, updatedAt };
+  }
+
+  /**
+   * 새 문서 (D88 — 서버 createDoc 과 같은 규칙): 글로 고칠 수 있는 형식만, 폴더는 있어야 하고, 이미 있으면 DocConflictError(지금 글).
+   * UTF-8·LF 로 쓰고 이력에 남긴다. 기록 폴더가 아직 없으면 지금 묻는다(D65)
+   */
+  async createDoc(id: string, md: string, o: { summary?: string; by?: Person } = {}): Promise<{ id: string; version: string; updatedAt: string }> {
+    if (this.config.readOnly) throw new DocReadOnlyError('config', '읽기 전용 작업 폴더');
+    if (!this.writable) throw new DocReadOnlyError('folder', new FsReadOnlyError().message);
+    if (typeof md !== 'string') throw new FolderError('BAD_REQUEST', 'md 가 필요합니다');
+    const norm = normalizeDocId(id);
+    if (!norm) throw new FolderError('BAD_REQUEST', '잘못된 문서 경로');
+    const fmt = formatOf(norm);
+    if (!fmt || !editableFormat(fmt)) throw new FolderError('BAD_REQUEST', (this.o.locale === 'en' ? 'DocBench cannot create this format: ' : '작업대에서 만들 수 없는 형식입니다: ') + norm);
+    // Claude 는 바로 고칠 수 있는 형식만 새로 만든다(서버 createDoc 과 같은 규칙, D87)
+    if (o.by?.kind === 'assistant' && !claudeChanges(fmt).includes('edit')) throw new DocReadOnlyError('format', `${fmt.label}: ${o.by.name || 'Claude'} cannot create this format`);
+    this.resolve(norm);
+    const dir = norm.includes('/') ? norm.slice(0, norm.lastIndexOf('/')) : '';
+    if (!(await this.fs.list(dir).catch(() => null))) throw new FolderError('BAD_REQUEST', (this.o.locale === 'en' ? 'No such folder: ' : '폴더가 없습니다: ') + (dir || '/'));
+    await this.ensureData();
+    return this.withLock(lockKey.doc(norm), async () => {
+      if (await this.fs.stat(norm)) throw new DocConflictError(await this.readDoc(norm));
+      const text = md.replace(/\r\n?/g, '\n');
+      const bytes = new TextEncoder().encode(text);
+      const version = await versionOf(bytes);
+      const at = new Date().toISOString();
+      await this.withLock(lockKey.changes, async () => {
+        // 쓰기 직전에 한 번 더 — 잠금은 최선 노력이라 그 사이 누가 만들었으면 덮지 않는다(판을 적기 전에 — 남의 파일을 내 판으로 적지 않게)
+        if (await this.fs.stat(norm)) { const cur = await this.readDoc(norm); throw new DocConflictError(cur); }
+        this.noteOwnWrite(norm, version);
+        await this.fs.write(norm, bytes);
+        await this.setKnown(norm, version);
+        await this.data!.append(P.changes, changeLine({ at, docId: norm, by: o.by || this.me, summary: o.summary || undefined, toVersion: version, sections: sectionSources(text, norm).map((x) => x.key) }));
+      });
+      await this.storeBlob(version, text);
+      const st = await this.fs.stat(norm);
+      if (st) this.docs.set(norm, { ...st });
+      this.fromTree.add(norm);
+      return { id: norm, version, updatedAt: at };
+    });
   }
 
   async docVersion(id: string, v: string): Promise<{ id: string; md: string; version: string } | null> {
@@ -506,16 +614,18 @@ export class FolderWorkspace {
   /** 마지막으로 알던 판과 지금 파일이 다르면 '외부 편집' 기록을 남긴다. 바뀌었으면 true */
   async reconcile(id: string): Promise<boolean> {
     if (!this.writable || !this.data) return false;
-    let r: Raw;
-    try { r = await this.readRaw(id); } catch { return false; }
     const prev = (await this.known()).docs[id];
-    await this.storeBlob(r.version, r.text);
+    let r: Snap;
+    try { r = await this.snapshot(id, { knownVersion: prev }); } catch { return false; }
+    if (r.unchanged) return false;
+    const hasText = r.kind === 'text' || (r.kind === 'derived' && !r.deriveError);
+    if (hasText) await this.storeBlob(r.version, r.text);
     if (prev === r.version) return false;
     await this.setKnown(id, r.version);
     if (!prev) return false;
     if (lastChangeIs(await this.changes(200), id, r.version)) return true;
-    const old = await this.docVersion(id, prev);
-    const ds = old ? diffSections(old.md, r.text) : null;
+    const old = hasText ? await this.docVersion(id, prev) : null;
+    const ds = old ? diffSections(old.md, r.text, id) : null;
     await this.appendChange({ at: new Date(r.st.mtimeMs).toISOString(), docId: id, by: { kind: 'external' }, fromVersion: prev, toVersion: r.version, sections: ds ? [...ds.changed, ...ds.added] : undefined, removed: ds?.removed.length ? ds.removed : undefined });
     return true;
   }
@@ -537,8 +647,8 @@ export class FolderWorkspace {
     let n = 0;
     for (let i = 0; i < ids.length; i += 8) {
       const res = await Promise.all(ids.slice(i, i + 8).map(async (id) => {
-        let r: Raw;
-        try { r = await this.readRaw(id); } catch { return false; }
+        let r: Snap;
+        try { r = await this.snapshot(id, { knownVersion: known[id] }); } catch { return false; }
         return known[id] !== r.version ? this.reconcile(id) : false;
       }));
       n += res.filter(Boolean).length;
@@ -568,6 +678,8 @@ export class FolderWorkspace {
     if (!d) return titleFromText('', id);
     if (d.title && d.titleMtime === d.mtimeMs) return d.title;
     let title = titleFromText('', id);
+    // 제목을 글에서 찾지 않는 형식(코드·데이터·오피스·그림)은 파일 이름 — 열지 않는다
+    if (!titledFormat(formatFor(id))) { d.title = title; d.titleMtime = d.mtimeMs; return title; }
     try {
       const f = await this.fs.read(id, 8192);
       if (f) {
@@ -578,7 +690,10 @@ export class FolderWorkspace {
             try { new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, head.length - k)); head = head.subarray(0, head.length - k); break; } catch { /* 한 바이트 더 */ }
           }
         }
-        title = titleFromText(decodeBytes(head, this.legacy).text, id);
+        const text = decodeBytes(head, this.legacy).text;
+        title = titleFromText(text, id);
+        // 앞머리 YAML 의 값(상태·담당·꼬리표·검토일) — 개요와 문서 머리에 보인다(D88)
+        if (isMarkdownPath(id)) { const m = frontMatterData(text); d.meta = Object.keys(m).length ? m : undefined; }
       }
     } catch { /* 이름으로 */ }
     d.title = title; d.titleMtime = d.mtimeMs;
@@ -586,13 +701,15 @@ export class FolderWorkspace {
   }
 
   async manifest(): Promise<Manifest> {
-    const info = new Map<string, { title: string; size: number; mtimeMs: number }>();
-    // 제목(첫 # 줄)은 앞 8 KB 를 읽어야 한다 — 문서가 많으면 한 번에 TITLE_BUDGET 개만 새로 읽고 나머지는 파일 이름(다음에 채운다)
+    const info = new Map<string, { title: string; size: number; mtimeMs: number; meta?: Record<string, string | string[]> }>();
+    // 제목(첫 # 줄)은 앞 8 KB 를 읽어야 한다 — 문서가 많으면 한 번에 TITLE_BUDGET 개만 새로 읽고 나머지는 파일 이름(다음에 채운다).
+    // 제목을 글에서 찾지 않는 형식은 읽지 않으므로 세지 않는다
     let budget = TITLE_BUDGET;
     for (const [id, d] of this.docs) {
       const cached = d.title && d.titleMtime === d.mtimeMs;
-      const title = cached || budget-- > 0 ? await this.titleOf(id) : titleFromText('', id);
-      info.set(id, { title, size: d.size, mtimeMs: d.mtimeMs });
+      const titled = titledFormat(formatFor(id));
+      const title = cached || !titled || budget-- > 0 ? await this.titleOf(id) : titleFromText('', id);
+      info.set(id, { title, size: d.size, mtimeMs: d.mtimeMs, meta: d.meta });
     }
     const m = buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.fs.name, this.ci, { folders: this.folders, rootName: this.fs.name });
     // 기록 폴더의 표식이 다른 이름의 문서 폴더를 가리키면(같은 이름의 다른 폴더 등) 화면 아래 기록 자리 옆에 알린다
@@ -755,6 +872,39 @@ export class FolderWorkspace {
     };
     await walk('', '', 0);
     return { asof: new Date().toISOString(), source: this.fs.name + (items.length >= max ? ` (처음 ${max}개)` : ''), items, flagLabels: INVENTORY_FLAG_LABELS, open: [] };
+  }
+
+  /**
+   * 작업 공간 개요(D88 — 서버 overview 와 같은 재료): 폴더 지도 항목 + 매니페스트(제목·앞머리) + README 앞부분 + 문서 사이 링크(작은 작업 공간만)
+   */
+  async overview(): Promise<WorkspaceOverview> {
+    await this.manifest();
+    const inv = await this.inventory();
+    const capped = inv.items.length >= this.config.maxInventory;
+    const readmes: Record<string, { id: string; text: string }> = {};
+    for (const [dir, id] of Object.entries(pickReadmes(inv.items))) {
+      if (id.split('/').some((seg) => seg.startsWith('.'))) continue;
+      const f = await this.fs.read(id, 8192).catch(() => null);
+      if (f) readmes[dir] = { id, text: decodeBytes(cutAtLine(f.bytes), this.legacy).text };
+    }
+    let links: { from: string; to: string[] }[] | undefined;
+    const md = [...this.docs.keys()].filter(isMarkdownPath);
+    if (this.index.complete && !capped && md.length <= OVERVIEW_LINK_LIMITS.docs) {
+      links = [];
+      let total = 0;
+      for (const id of md) {
+        total += this.docs.get(id)?.size || 0;
+        if (total > OVERVIEW_LINK_LIMITS.bytes) { links = undefined; break; }
+        const r = await this.readRaw(id).catch(() => null);
+        if (r) links.push({ from: id, to: relativeLinks(r.text, id) });
+      }
+    }
+    const meta: Record<string, Record<string, string | string[]>> = {};
+    for (const [id, d] of this.docs) if (d.meta) meta[id] = d.meta;
+    return computeOverview({
+      root: this.fs.name, items: inv.items, complete: this.index.complete && !capped, reason: capped ? 'many' : this.index.reason,
+      isDoc: (p) => isDocPath(p, this.config, this.ci), meta, config: { purpose: this.config.purpose, folders: this.config.folders }, readmes, links,
+    });
   }
 
   // ------------------------------------------------------------ 바뀜 확인 (감시 대신)
@@ -1136,6 +1286,16 @@ export async function createFolderAdapters(fs: FsLike, o: FolderOptions = {}): P
       changes: (limit) => ws.changes(limit),
       inventory: () => ws.inventory(),
       subscribe: (cb) => on((e) => { if (e.type !== 'feedback') cb(e); }),
+      loadBytes: async (id) => {
+        const b = await ws.readBytes(id);
+        return b ? new Blob([b as BlobPart], { type: formatFor(id).mime || 'application/octet-stream' }) : null;
+      },
+      overview: () => ws.overview(),
+      create: ws.writable ? async (id, md, opts) => {
+        const r = await ws.createDoc(id, md, { summary: opts?.summary });
+        fire({ type: 'manifest' }); fire({ type: 'changes' });
+        return r;
+      } : undefined,
     },
     feedback: {
       subscribe(cb, onErr) {

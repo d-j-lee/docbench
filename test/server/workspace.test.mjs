@@ -10,18 +10,27 @@ import crypto from 'node:crypto';
 test('작업 폴더: 문서 목록·매니페스트·그룹', async (t) => {
   const dir = await tempWorkspace(); t.after(() => rm(dir));
   const ws = await new Workspace(dir).init();
-  assert.equal(ws.docs.size, 6);
+  // 마크다운 6 + CSV 1 (D87 — 여러 형식이 문서가 된다)
+  assert.equal(ws.docs.size, 7);
   const m = await ws.manifest();
   assert.equal(m.schema, 2);
-  assert.deepEqual(m.groups.map((g) => g.id), ['_bench', 'intro', 'core', 'qa', 'notes']);
+  assert.deepEqual(m.groups.map((g) => g.id), ['_bench', 'intro', 'core', 'qa', 'notes', 'dir:data']);
+  assert.equal(m.docs['data/지표.csv'].format, 'csv');
+  assert.equal(m.docs['data/지표.csv'].title, '지표.csv', '제목을 글에서 찾지 않는 형식은 파일 이름(확장자까지)');
+  assert.equal(m.docs['README.md'].format, undefined, '마크다운은 형식을 적지 않는다(예전 매니페스트와 같게)');
   assert.equal(m.docs['docs/설계-노트.md'].trust, 'draft');
   assert.equal(m.docs['notes/옛-회의록.md'].title, '옛 회의록 (2019)');
 });
 
 test('경로 밖·대상 아닌 파일은 거부', async (t) => {
   const dir = await tempWorkspace(); t.after(() => rm(dir));
+  // 코드는 기본 include 에서 빠진다(D87) · 모르는 형식 · 숨김 파일은 바닥 규칙(D71)
+  await fs.mkdir(path.join(dir, 'src'), { recursive: true });
+  await fs.writeFile(path.join(dir, 'src/main.ts'), 'export {};\n');
+  await fs.writeFile(path.join(dir, 'data/dump.bin'), 'x');
+  await fs.writeFile(path.join(dir, '.env'), 'X=1\n');
   const ws = await new Workspace(dir).init();
-  for (const bad of ['../x.md', '/etc/passwd', 'C:/x.md', 'docs/../../x.md', 'data/지표.csv', '.docbench/config.json', 'a\0b.md']) {
+  for (const bad of ['../x.md', '/etc/passwd', 'C:/x.md', 'docs/../../x.md', 'src/main.ts', 'data/dump.bin', '.env', '.docbench/config.json', 'a\0b.md']) {
     await assert.rejects(ws.readDoc(bad), { code: 'BAD_REQUEST' }, bad);
   }
 });
@@ -107,10 +116,12 @@ test('피드백: 만들기·고치기(판 충돌)·지우기, 파일 하나 = �
 
 test('폴더 지도: 문서 아닌 파일도 보이고 문서 표시', async (t) => {
   const dir = await tempWorkspace(); t.after(() => rm(dir));
+  await fs.writeFile(path.join(dir, 'data/dump.bin'), 'x');
   const ws = await new Workspace(dir).init();
   const inv = await ws.inventory();
-  const csv = inv.items.find((i) => i.id === 'data/지표.csv');
-  assert.ok(csv && !csv.docId);
+  const bin = inv.items.find((i) => i.id === 'data/dump.bin');
+  assert.ok(bin && !bin.docId);
+  assert.equal(inv.items.find((i) => i.id === 'data/지표.csv').docId, 'data/지표.csv');
   assert.ok(inv.items.find((i) => i.id === 'docs/설계-노트.md').flags.includes('doc'));
   assert.ok(!inv.items.some((i) => i.id.startsWith('.docbench')));
 });

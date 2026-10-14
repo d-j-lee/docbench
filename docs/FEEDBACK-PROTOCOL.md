@@ -112,7 +112,7 @@ docbench fb show <id> [--json]                   # 피드백 + 지금 그 섹션
 docbench doc write <문서> --section "<섹션 키>" --file new.md --base <판> -m "<요약>" --fb <id>
 docbench fb reply <id> -m "<무엇을 바꿨는지>" --resolve
 
-# 2) 제안만 — 사람이 화면에서 차이를 보고 적용
+# 2) 제안만 — 사람이 화면에서 차이를 보고 적용 (섹션 피드백은 그 섹션, 문서 전체 피드백은 문서 전체)
 docbench fb propose <id> --file new.md -m "<이유>"
 
 # 3) 되묻기
@@ -120,7 +120,26 @@ docbench fb reply <id> -m "<질문>" --ask
 
 # 먼저 말 걸기 — 사람이 부탁하면 제안·질문을 올린다(작성자 Claude, 볼 것)
 docbench fb add --doc <문서> --section "<섹션 키>" --title "<짧은 제목>" -m "<왜>"
+
+# 그 밖에
+docbench doc new <문서> --file new.md -m "<요약>"   # 새 문서 (폴더는 있어야 한다, 있으면 종료 3)
+docbench overview [--json]                          # 작업 공간 개요 — 목적·구성·폴더 역할·메타데이터·점검
 ```
+
+**형식마다 할 수 있는 일 (D87)** — `fb show` 가 그 문서의 형식과 함께 알려 준다. 앱의 Claude 작업과 같은 규칙이다.
+
+| 형식 | 섹션 | Claude 가 할 수 있는 일 |
+|---|---|---|
+| 마크다운 · AsciiDoc · rST · Org | 제목 | 고치기(`doc write`) · 제안 |
+| YAML · JSON · TOML · INI | 키·표 (`doc sections` 로 확인) | **제안만**(`fb propose`) — `doc write` 는 종료 4. 키 줄·들여쓰기를 지키고, JSON 은 저장 뒤에도 읽혀야 한다 |
+| 글 · CSV/TSV · JSON Lines · Mermaid · PlantUML · Graphviz | 없음(문서 전체) | 고치기 · 제안 |
+| 코드 · HTML · XML · SVG · SQL · diff · 의존성 목록(`requirements*.txt`) · `CODEOWNERS` | 없음(문서 전체) | **제안만** — 문서 전체 피드백에 `fb propose`(문서 전체 글) |
+| MDX · AI 지시 파일(`CLAUDE.md`·`AGENTS.md`·`GEMINI.md`·`SKILL.md`) | 제목 | **제안만** — 다음 세션의 지시가 되는 글 |
+| 로그 | 없음 | 읽고 답만(`fb reply`) |
+| Word · PowerPoint · Excel · 한글(HWPX) · Jupyter | 뽑은 글의 제목 | 읽고 답만 — `doc show` 가 DocBench 가 뽑은 글을 준다(오피스·HWPX 원본은 Read 도구로 읽을 수 없다) |
+| PDF · 그림 | 없음 | 읽고 답만 — 파일을 Read 도구로 직접 읽는다 |
+
+5 MB 넘는 글은 앞 512 KB 만 읽히고(`doc show --json` 의 `truncated`) 고치지 않는다.
 
 초안(`status: draft`)은 사람의 메모라 `fb reply`·`fb propose` 가 거부한다(종료 코드 1).
 
@@ -130,7 +149,7 @@ docbench fb add --doc <문서> --section "<섹션 키>" --title "<짧은 제목>
 | 1 | 잘못된 입력·없는 문서·안전장치에 걸림(제목 줄 없음, 하위 섹션 사라짐, `--base` 없음) | 메시지 확인 |
 | 2 | 작업 폴더·기록 폴더를 못 찾음 | `--root`(`DOCBENCH_ROOT`)·`--data`(`DOCBENCH_DATA`), 브라우저로 만든 기록이면 `docbench link <문서 폴더> --data <기록 폴더>`. 단일 HTML 은 처음 저장할 때 기록을 만든다 — 보기만 한 폴더에는 기록이 없다 |
 | 3 | 그 사이 문서가 바뀜 | `fb show` 로 다시 읽고 고친다 |
-| 4 | 읽기 전용 (EUC-KR + iconv 없음, 설정) | 사람에게 UTF-8 변환(`--convert-utf8`) 여부를 묻는다 |
+| 4 | 읽기 전용 (EUC-KR + iconv 없음, 설정, 형식 — 뽑은 글·그림·큰 글, Claude 가 제안만 하는 형식) | 인코딩이면 사람에게 UTF-8 변환(`--convert-utf8`) 여부를 묻는다. 형식이면 `fb propose` 또는 `fb reply` |
 
 **직접 편집도 된다.** 에디터·Edit 도구로 파일을 고치면 화면(서버·앱, 또는 단일 HTML 이 열려 있으면 그것)이 `by: external` 로 기록하고 바뀐 글을 문서 위에 표시한다 — 한 번이라도 연 문서만 따라간다(`fb show`·`doc show` 로 읽은 문서도). 연 적 없는 문서는 이력 없이 다시 읽기만 한다. 그 다음 `docbench log <문서> -m "<요약>" --fb <id>` 로 요약을 붙이면 같은 이력 줄에 합쳐진다.
 단, **CP949·UTF-16 문서는 Edit 도구로 고치지 않는다** — UTF-8 로 다시 써서 글자가 깨질 수 있다. 그런 문서는 `doc write` 로.
@@ -164,7 +183,8 @@ $ docbench doc sections docs/설계-노트.md
 
 - 상위 제목부터 ` › ` 로 잇는다. 같은 경로가 또 나오면 ` #2`.
 - 제목 글자는 화면에 보이는 글자다(`**굵게**` → `굵게`, `&amp;` → `&`).
-- 문서 맨 앞 YAML 앞머리(`---` 로 감싼 `키: 값`)는 섹션이 아니다 — 첫 제목 앞 머리말로 친다.
+- 문서 맨 앞 YAML 앞머리(`---` 로 감싼 `키: 값`)는 섹션이 아니다 — 첫 제목 앞 머리말로 친다. 개요·문서 머리는 그 안의 `status`·`owner(s)`·`tags`·`review`(검토 기한) 같은 키를 메타데이터로 읽는다.
+- 마크다운이 아닌 형식(D87): YAML·TOML·INI·JSON 은 키·표가 섹션이다(맨 위 키 = 2단계, 그 아래 블록 키 = 3단계 — 예 `server › tls`). YAML 은 바로 위 주석 줄이 그 키에 붙고 아래 키는 그 블록까지(뒤따르는 같은 단계 값은 위 섹션), JSON 은 값이 끝나는 줄까지가 섹션이다. 글·코드·표는 섹션이 없다(문서 전체).
 - 제목을 바꾸면 그 섹션에 달린 피드백이 떨어질 수 있다(인용문이 있으면 다른 섹션에서라도 찾는다). 바꾸라는 요청이 없으면 제목 줄은 그대로 둔다.
 
 ## 파일 모양
@@ -223,3 +243,4 @@ $ docbench doc sections docs/설계-노트.md
 - 확인하지 못한 사실은 지어내지 않는다 — `[미확인]` 으로 두거나 되묻는다.
 - 판이 바뀌었으면(종료 코드 3) 덮어쓰지 않는다.
 - 회신은 사람이 읽는 한두 문장. 무엇을 바꿨는지, 못 한 것은 왜인지.
+- 설정·코드 파일은 제안으로, 뽑은 글·로그·그림은 답으로 — 형식의 한도를 우회해 Edit 도구로 고치지 않는다(터미널 자리가 막는다).

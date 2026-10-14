@@ -11,7 +11,7 @@
 | Checking what was applied means comparing against the original again | Each round comes back sorted into edits, suggestions, questions and not done |
 | Undoing an AI edit you dislike is manual work | One click on **Revert** |
 | Nobody knows who changed what, when, or why | Every section keeps who changed it, when, and from which note |
-| Reviewing means moving the original into another tool | The original stays the `.md` file in your folder; untouched lines keep every character and line break |
+| Reviewing means moving the original into another tool | The original stays the file in your folder; untouched lines keep every character and line break |
 
 ## Easy to use
 
@@ -22,7 +22,7 @@
 
 ## Works everywhere
 
-- **Any role**: any document written in Markdown, from design docs to policies and press releases, works the same way (see **Uses by role**).
+- **Any role**: from design docs to policies and press releases, documents work the same way (see **Uses by role**). Markdown, text, CSV tables and config files (YAML, JSON, TOML) can be read and edited; Word, PowerPoint, Excel and HWPX are read as extracted text with feedback.
 - **Same screen everywhere**: a single file, the app on this PC, or a tab in your company dashboard all show the same workbench, and the records carry on as long as they use the same records folder.
 - **Documents as they are**: big folders such as whole drives, legacy Korean encoding (EUC-KR), and Windows line endings are handled without conversion.
 - **Inside company networks**: everything the screen needs ships in the one file, so nothing has to be downloaded from the internet.
@@ -53,13 +53,14 @@ One run we timed: three notes sent through the terminal line, 13.9 seconds from 
 - **Q:** What do I need to use the real Claude?
 - **A:** A Claude plan that includes Claude Code, and Claude Code installed on this PC. Using the screen alone needs nothing.
 - **Q:** Do Word or HWP files work?
-- **A:** Markdown is the format for now. Draft and review in `.md`, then apply the final formatting in the original program.
+- **A:** You can open them, read them and leave feedback or ask for a Claude review (their text is extracted). The original is not changed, so for documents you will keep editing together, convert to `.md` and apply the final formatting in the original program.
 - **Q:** What if the AI ruins a document?
 - **A:** Claude only returns rewritten text, and results stay under To review until you confirm them. One Revert takes the text back to before the edit.
 
 ## Limits
 
-- **Markdown only**: convert Word or HWP documents to `.md` for review (see "Word or HWP files" in **Tips**).
+- **Office files are read only**: Word, PowerPoint, Excel and HWPX are read as extracted text with feedback — editing (by people or Claude) happens in Markdown, text, tables and config files. Text is not yet extracted from legacy `.hwp` or PDF (Claude reads PDFs directly).
+- **Config and code files get proposals**: for files programs read, such as YAML, JSON or HTML, Claude does not edit directly but proposes — review the diff and apply.
 - **The real Claude connects through Claude Code**: no other AI has been tried yet. Requests and results travel as files in the records folder, so a tool that returns results in the same shape has a place to plug in.
 - **No live co-typing**: saves happen per section; overlapping edits show the difference and let you choose.
 - **What you hand to Claude goes to Claude**: DocBench itself never sends documents anywhere, but when you send a batch, the text it needs goes to Claude through your Claude account. For company documents, follow your company's AI usage rules.

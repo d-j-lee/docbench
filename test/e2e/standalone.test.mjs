@@ -61,7 +61,7 @@ async function seed(page) {
     }
   };
   await walk(sample, '');
-  files.push(['assets/logo.png', [137, 80, 78, 71]]);   // 문서가 없는 폴더 (왼쪽 나무에 흐리게)
+  files.push(['assets/logo.psd', [56, 66, 80, 83]]);   // 문서가 없는 폴더 (왼쪽 나무에 흐리게) — 작업대가 열지 않는 형식(D87: 그림 PNG 는 이제 문서)
   return page.evaluate(async (files) => {
     const root = await navigator.storage.getDirectory();
     const name = 'ws-' + Math.random().toString(36).slice(2, 8);
@@ -535,7 +535,8 @@ test('OPFS 폴더: 섹션 편집·초안·밖에서 고친 피드백(볼 것)·C
     const d = await (await navigator.storage.getDirectory()).getDirectoryHandle(n);
     await window.DocBenchStandalone.openHandle(document.getElementById('app'), d, 'dj');
   }, name);
-  await page.waitForSelector('.db-sec');
+  // 처음 여는 폴더는 개요부터(D88)
+  await page.waitForSelector('.db-ov');
   assert.ok(await listOpfs(page, name, '.docbench').then((l) => l.includes('.gitignore')), '.docbench/ 를 만든다 (CLI 가 작업 폴더로 알아봄)');
 
   // 섹션 편집 → 저장
@@ -721,10 +722,11 @@ test('Claude 작업(단일 HTML): 연결 없으면 보낼 곳은 터미널 한 �
   await page.locator('.db-runlog .db-ll.link .db-btn').first().click();
 
   // 왼쪽: 도구와 탐색기 — 문서가 없는 폴더도 펼치면 그 안의 파일이 보인다(문서가 아니라 흐리게)
-  assert.equal(await page.locator('.db-tools .db-tool').count(), 3);
+  // 개요(D88) · Claude 작업 · 변경 이력 · 폴더 지도
+  assert.deepEqual(await page.locator('.db-tools .db-tool').evaluateAll((els) => els.map((e) => e.dataset.tool)), ['overview', 'claude', 'changes', 'map']);
   if (await page.locator('.db-railview').count()) await page.locator('.db-railview button', { hasText: '폴더' }).click();
   await page.locator('.db-explorer .db-dir', { hasText: 'assets' }).click();
-  await page.locator('.db-explorer .db-file', { hasText: 'logo.png' }).waitFor();
+  await page.locator('.db-explorer .db-file', { hasText: 'logo.psd' }).waitFor();
   await stopSim(page);
   assert.deepEqual(errors, []);
 });
@@ -734,7 +736,7 @@ test('짝짓지 않은 연결은 저절로 고르지 않는다 — 내 것이면
   await page.waitForSelector('.db-sec');
   const name = await seed(page);
   await openOpfs(page, name, '김철수');
-  await page.waitForSelector('.db-sec');
+  await page.waitForSelector('.db-ov');
   await simRunner(page, name, { user: 'kimcs' });
   await page.locator('.db-claude, .db-tool[data-tool="claude"]').first().click();
   // 동료의 것일 수 있다 — 알리기만 하고 맡기지 않는다
@@ -743,9 +745,9 @@ test('짝짓지 않은 연결은 저절로 고르지 않는다 — 내 것이면
   assert.match(await page.locator('.db-dock-state').innerText(), /내 것인지 확인 필요/);
   await notMine.getByRole('button', { name: '내 실행기로 쓰기' }).click();
   await page.locator('.db-dock-state.ok').waitFor({ timeout: 8000 });
-  // 다시 열어도 고른 것을 쓴다
+  // 다시 열어도 고른 것을 쓴다 (주소가 #overview 라 시작하기도 개요로 열린다)
   await page.reload();
-  await page.waitForSelector('.db-sec');
+  await page.waitForSelector('.db-sec, .db-ov');
   await openOpfs(page, name, '김철수');
   await simRunner(page, name, { user: 'kimcs' });
   // 창은 열린 채로 기억된다(보기 상태) — 닫혀 있으면 연다
@@ -860,8 +862,12 @@ test('기록 폴더는 처음 저장할 때 한 번 — 문서 폴더에는 아�
   const a = 'a-' + Math.random().toString(36).slice(2, 6);
   await mkFolder(a, { '메모.md': '# 메모\n\n## 할 일\n\n본문\n' });
   await openAt(a, true);
-  await page.locator('.db-sec').first().waitFor();
+  // 개요(D88)를 그려도 아무것도 만들지 않는다 — 읽기만
+  await page.locator('.db-ov').waitFor();
   assert.deepEqual(await ls(a), ['메모.md']);
+  assert.deepEqual(await ls(home), []);
+  await page.evaluate(() => { location.hash = encodeURIComponent('메모.md'); });
+  await page.locator('.db-sec').first().waitFor();
   assert.deepEqual(await ls(home), []);
   // 처음 적어 두는 순간(초안도 기록이다) 기록 자리를 묻는다 → 보관함 고르기
   const k = '메모 › 할 일';
@@ -902,7 +908,7 @@ test('기록 폴더는 처음 저장할 때 한 번 — 문서 폴더에는 아�
   // 3) 예전 판처럼 안쪽 .docbench 가 있으면 그대로 쓰고, 옮기자고 한다 → 옮기면 안쪽은 지운다
   const name = await seed(page);
   await openAt(name, false);
-  await page.waitForSelector('.db-sec');
+  await page.waitForSelector('.db-ov');
   const toast = page.locator('.db-toast', { hasText: '문서 폴더 안(.docbench)' });
   await toast.waitFor();
   await toast.getByRole('button', { name: '기록 보관함으로 옮기기' }).click();
@@ -956,6 +962,8 @@ test('터미널 한 줄(설치 없음): 요청·맥락·Claude 자리는 기록 
     const d = await root.getDirectoryHandle(a), hh = await root.getDirectoryHandle(home, { create: true });
     await window.DocBenchStandalone.openWith(document.getElementById('app'), d, async () => hh);
   }, [a, home]);
+  await page.waitForSelector('.db-ov');
+  await page.evaluate(() => { location.hash = encodeURIComponent('런북.md'); });
   await page.waitForSelector('.db-sec');
   const ls = (p) => listOpfs(page, home, p).then((x) => x.sort()).catch(() => []);
 

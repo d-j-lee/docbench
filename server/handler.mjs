@@ -105,7 +105,7 @@ export function createDocBenchHandler(ws, opts = {}) {
         me: ws.me, permissions: perms,
         assistant: ws.config.assistant ? { name: ws.config.assistantName || 'Claude' } : null,
         notify: ws.config.notify?.inbox !== false || ws.config.notify?.command ? { label: /** @type {any} */ (ws.config).locale === 'en' ? 'Request inbox (/docbench-feedback)' : '요청함 (/docbench-feedback)' } : null,
-        features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn, tree: true, terminal: runsOn, instructions: true },
+        features: { base: !!ws.git, versions: true, inventory: true, changes: true, runs: runsOn, tree: true, terminal: runsOn, instructions: true, raw: true, overview: true, create: !ws.config.readOnly },
         identity: opts.identity === 'pc' ? 'pc' : 'host',
         workspace: { root: ws.root, git: !!ws.git, data: { mode: ws.dataMode, dir: ws.dir } },
       });
@@ -128,6 +128,26 @@ export function createDocBenchHandler(ws, opts = {}) {
       emit({ type: 'doc', id: q('id') }); emit({ type: 'changes' });
       return send(res, 200, out);
     }
+    // 새 문서 (D88) — 이미 있으면 409 + 지금 글, 폴더가 없으면 400
+    if (m === 'POST' && p === '/doc') {
+      const b = await body(req);
+      const out = await ws.createDoc(q('id'), b.md, { summary: typeof b.summary === 'string' ? b.summary.slice(0, 200) : undefined, by: ws.me });
+      emit({ type: 'manifest' }); emit({ type: 'doc', id: out.id }); emit({ type: 'changes' });
+      return send(res, 201, out);
+    }
+    // 문서 파일의 바이트 그대로 (그림·PDF 미리보기, 원본 내려받기 — D87). 화면이 형식에 맞춰 Blob 으로 만든다 — 서버는 내려받기로만 내준다
+    if (m === 'GET' && p === '/raw') {
+      const buf = await ws.readBytes(q('id'));
+      if (!buf) return send(res, 413, { error: 'TOO_LARGE', message: '파일이 커서 내주지 않습니다' });
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream', 'Content-Length': String(buf.length), 'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff', 'Content-Security-Policy': "sandbox; default-src 'none'",
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(path.posix.basename(q('id')))}`,
+      });
+      res.end(buf);
+      return;
+    }
+    if (m === 'GET' && p === '/overview') return send(res, 200, await ws.overview());
     if (m === 'GET' && p === '/doc/version') { const d = await ws.docVersion(q('id'), q('v')); return d ? send(res, 200, d) : send(res, 404, { error: 'NOT_FOUND' }); }
     if (m === 'GET' && p === '/doc/base') { const d = await ws.docBase(q('id')); return d ? send(res, 200, d) : send(res, 404, { error: 'NOT_FOUND' }); }
     if (m === 'GET' && p === '/changes') return send(res, 200, { items: await ws.changes(Number(q('limit')) || 300) });
@@ -248,7 +268,7 @@ export function createDocBenchHandler(ws, opts = {}) {
         'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
         'Cache-Control': file.endsWith('.html') ? 'no-cache' : 'max-age=300',
         'X-Content-Type-Options': 'nosniff',
-        ...(file.endsWith('.html') ? { 'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-ancestors ${["'self'", ...(opts.allowOrigins || [])].join(' ')}; base-uri 'none'`, 'Referrer-Policy': 'no-referrer' } : {}),
+        ...(file.endsWith('.html') ? { 'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self'; frame-ancestors ${["'self'", ...(opts.allowOrigins || [])].join(' ')}; base-uri 'none'`, 'Referrer-Policy': 'no-referrer' } : {}),
       });
       res.end(data);
     } catch { send(res, 404, { error: 'NOT_FOUND' }); }

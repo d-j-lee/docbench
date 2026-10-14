@@ -8,7 +8,7 @@
 1. 폴더 하나에 `docs/<id>.md`, `data/manifest.json`(스키마 2, `src/types.ts` 의 `Manifest`), 선택으로 `data/inventory.json`.
    문서 id 는 영문·숫자·`_-.` 로 짓는 것을 권한다(그대로 db 경로가 된다). 그 밖의 id 는 자동으로 `@base64url` 키가 된다.
 2. 페이지 만들기: `npm run build` 후 `node examples/claude-artifact/assemble.mjs <폴더>/index.html "<제목>"`.
-   CSS·스크립트가 인라인된 한 장(0.8 기준 약 700 KB)이 나온다. 아티팩트 CSP 는 허용된 CDN 밖의 스크립트를 막기 때문이다.
+   CSS·스크립트가 인라인된 한 장(0.9 기준 약 840 KB)이 나온다. 아티팩트 CSP 는 허용된 CDN 밖의 스크립트를 막기 때문이다.
 3. Artifact 도구로 `index.html` 을 게시하면서 `files` 에 문서·데이터를 같이 싣고, 선언은
    `capabilities: { db: {}, user: {}, comments: {}, sample: {}, downloads: true }`.
 

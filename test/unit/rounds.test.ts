@@ -185,6 +185,10 @@ describe('Claude 자리 (core/room.ts, D76)', () => {
     const inside = JSON.parse(roomSettings({ docsName: 'ops', docsPath: '/home/u/ops', roomPath: '/home/u/ops/.docbench', inside: true }));
     expect(inside.permissions.deny).toContain('Edit(//home/u/ops/**/*.md)');
     expect(inside.permissions.deny.some((d: string) => d === 'Edit(//home/u/ops/**)')).toBe(false);
+    // 여러 형식(D87): 문서 형식 전부 막는다 — 단, 기록이 안이면 결과 파일(.json)이 걸리지 않게 .json 은 빼고
+    expect(s.permissions.deny).toEqual(expect.arrayContaining(['Edit(//c/work/ops/**/*.yaml)', 'Edit(//c/work/ops/**/*.json)', 'Edit(//c/work/ops/**/*.docx)', 'Edit(//c/work/ops/**/Dockerfile)']));
+    expect(inside.permissions.deny).toContain('Edit(//home/u/ops/**/*.yaml)');
+    expect(inside.permissions.deny.some((d: string) => /\.json\)$/.test(d) && d.startsWith('Edit(//home'))).toBe(false);
   });
   it('위 폴더의 CLAUDE.md 는 뺀다 — Claude Code 는 켠 폴더 위의 CLAUDE.md 도 읽는다(기록이 문서 폴더 안이면 그 저장소의 지시가 섞인다)', () => {
     const ex = parentClaudeMd({ docsName: 'ops', roomPath: '/home/dj/work/ops/.docbench' });

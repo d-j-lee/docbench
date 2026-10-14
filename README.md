@@ -1,8 +1,10 @@
 # DocBench
 
-사람과 AI가 같은 문서를 **읽고 · 피드백하고 · 고치고 · 기록**하는 작업대.
+사람과 AI가 같은 문서를 **읽고 · 피드백하고 · 고치고 · 기록**하는 작업대 — 그리고 그 문서들이 사는 **작업 공간**을 한눈에.
 
-- **보기**: 제목 깊이별 접기(상태 기억), 근거 표기 칩(`[실측]` `[추정]` …), 빈칸 형광, 이름표 거르기, 찾기, 개요. 왼쪽은 탐색기 — 펼친 폴더만 읽어 드라이브를 통째로 열어도 바로 뜨고, 자주 쓰는 문서·폴더는 "작업 중"에 고정한다
+- **작업 공간 개요**: 처음 열면 이 공간이 **무엇을 위한 곳인지**(README 첫 문단·설정 `purpose`), 폴더마다 하는 일, 무엇이 들었는지(문서·데이터·코드·오피스·그림 …), 문서 앞머리의 상태·담당·꼬리표·검토 기한, CLAUDE.md·AGENTS.md·스킬 같은 AI 협업 파일, 그리고 **살펴볼 것** — 비밀로 보이는 파일, 판 사본(_v2·최종·(1)), 임시 파일, 깨진 링크, 기한 지난 문서, README 없는 폴더 … 그 자리에서 README 를 만들거나 Claude 에게 맡길 초안을 남긴다
+- **여러 형식**: 마크다운에 더해 YAML·JSON·TOML·INI(키마다 섹션), AsciiDoc·reStructuredText·Org, 글·로그·코드(색·줄 번호), CSV·TSV(표), HTML(정제한 읽기 화면)·SVG·그림, Word·PowerPoint·Excel·한글(HWPX)·Jupyter(글을 뽑아 읽고 피드백), PDF. 설정·코드는 Claude 가 **제안만**, 오피스 원본은 고치지 않는다 — 아래 [문서 형식](#문서-형식)
+- **보기**: 제목 깊이별 접기(상태 기억), 근거 표기 칩(`[실측]` `[추정]` …), 빈칸 형광, 이름표 거르기, 찾기, 목차. 왼쪽은 탐색기 — 펼친 폴더만 읽어 드라이브를 통째로 열어도 바로 뜨고, 자주 쓰는 문서·폴더는 "작업 중"에 고정한다
 - **검토 회차**: 읽으면서 섹션·문구 옆 작은 칸에 적어 **초안**으로 모으고(요청 문구가 고민되면 "이렇게 바꿔"로 바꿀 글을 직접, ★ 급함), 다 읽은 뒤 고른 것을 **한 번에 보낸다** — 묶음에 붙일 말 한 줄과 함께. Claude 가 한 일은 **볼 것**에 회차별로 모여 확인·되돌리기·다시 요청을 고른다. 피드백 하나마다 대화가 오가지 않는다
 - **말풍선·골라 보기**: 피드백을 패널 카드로도, 문서 안 그 자리의 **말풍선**으로도 본다(`b`). 중요도(높음만·중간 이상)와 **종류**(오탈자·사실·수치·충돌·중복·누락·구조·표현·위험·방향)로 걸러 보면 말풍선과 패널이 함께 따른다. 종류는 사람이 고르거나, 비워 두면 Claude 가 처리하며 붙인다 — Claude 가 먼저 남기는 의견에는 늘 붙는다
 - **양방향**: **Claude 검토**로 내가 읽기 전에 Claude 가 먼저 제안·질문을 올리거나, 긴 문서의 **읽기 정리**(접을 곳·먼저 볼 곳)를 준다
@@ -12,7 +14,7 @@
 
 열자마자 쓴다. 처음 열면 이름도 폴더도 묻지 않고 연습용 문서가 든 "시작하기" 작업대가 뜬다 — 여기서는 흉내 Claude 가 답해 한 회차(초안 모으기 → 보내기 → 볼 것에서 되돌리기 → Claude 검토)를 미리 해 볼 수 있다(휴대폰에서도). 그 안의 **활용 가이드**(직군별 활용 · 사용 팁 · 효용과 한계)는 개발부터 인사·법무·리더까지 직군마다 쓰는 법을 연습 문서 그대로 보여 준다([src/welcome/ko](src/welcome/ko)). 계정은 저절로 생기고(표시 이름은 오른쪽 위 "나"에서), 기록 자리는 처음 저장할 때, Claude 연결은 처음 맡길 때 그 자리에서 묻는다. 내 문서와 진짜 Claude 작업은 PC 의 엣지·크롬에서(휴대폰 브라우저는 폴더에 쓰지 못한다).
 
-문서 원본은 언제나 **문서 폴더의 `.md` 파일**이다. 피드백·이력은 사람도 읽을 수 있는 JSON 으로 **기록 폴더**에 남는다 — 기본은 문서 폴더 밖의 "기록 보관함"이라 문서 폴더에는 문서만 있다(같은 폴더에서 일하는 다른 프로그램·다른 Claude 세션이 헷갈리지 않게). 팀이 git 으로 함께 쓰려면 문서 폴더 안 `.docbench/` 에 둘 수도 있다.
+문서 원본은 언제나 **문서 폴더의 파일 그 자체**다(DocBench 가 다른 곳으로 옮기거나 바꿔 담지 않는다). 피드백·이력은 사람도 읽을 수 있는 JSON 으로 **기록 폴더**에 남는다 — 기본은 문서 폴더 밖의 "기록 보관함"이라 문서 폴더에는 문서만 있다(같은 폴더에서 일하는 다른 프로그램·다른 Claude 세션이 헷갈리지 않게). 팀이 git 으로 함께 쓰려면 문서 폴더 안 `.docbench/` 에 둘 수도 있다.
 
 ![흐름](docs/flow.svg)
 
@@ -80,6 +82,27 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 - Claude Code 플러그인으로 스킬 둘과 CLI 를 깐다: `claude plugin marketplace add d-j-lee/docbench` → `claude plugin install docbench@docbench`
   — `docbench-setup`(대시보드·폴더에 붙이기)과 `docbench-feedback`(피드백 처리). 플러그인에 CLI 파일이 들어 있어 따로 설치할 것이 없다(Node 20.11+). 작업 폴더에만 두려면 `docbench init . --claude`([integrations/claude-code](integrations/claude-code)).
 
+## 문서 형식
+
+작업대가 여는 파일은 정해 둔 형식뿐이다(허용 목록 — 함께 쓰는 설정으로 넓혀도 `.env`·키·실행 파일·숨김 폴더는 문서가 되지 않는다). 형식마다 섹션을 세는 법과 **Claude 가 할 수 있는 일**이 다르다.
+
+| 형식 | 화면 | 섹션 | 사람 | Claude |
+|---|---|---|---|---|
+| 마크다운 | 그대로 | 제목 | 읽기·고치기 | 고치기·제안 |
+| YAML · JSON · TOML · INI | 색 입힌 원문, 줄 번호 | 키·표 (`server › tls`) | 읽기·고치기 | **제안만** — 도구가 읽어 실행하는 설정 |
+| AsciiDoc · reStructuredText · Org | 원문 | 제목 | 읽기·고치기 | 고치기·제안 |
+| 글 · CSV/TSV · JSON Lines · Mermaid · PlantUML · Graphviz | 글 / **표** / 원문 | 문서 전체 | 읽기·고치기 | 고치기·제안 |
+| 코드 · HTML · XML · SVG · SQL · diff | 색 입힌 원문 / 정제한 읽기 화면 / 그림 | 문서 전체 | 읽기·고치기 | **제안만** |
+| 로그 | 수준(ERROR·WARN)에 색 | 문서 전체 | 읽기 | 읽고 답만 |
+| Word · PowerPoint · Excel · 한글(HWPX) · Jupyter | **뽑은 글**(제목·목록·표·슬라이드·시트) + 원본 내려받기 | 뽑은 글의 제목 | 읽기·피드백 | 읽고 답만 |
+| PDF · 그림(PNG·JPEG·GIF·WebP …) | 그림 / 내려받기 카드 | 문서 전체 | 읽기·피드백 | 읽고 답만 (Claude 가 파일을 직접 읽는다) |
+
+- 모양은 글·마크다운이어도 도구·에이전트가 읽는 파일 — 의존성 목록(`requirements*.txt`)·`CODEOWNERS`·MDX·AI 지시 파일(`CLAUDE.md`·`AGENTS.md`·`SKILL.md` …) — 은 Claude 가 제안만 한다. 비밀로 보이는 파일(`.env`·`credentials.json`·`secrets.yaml`·키 …)은 문서가 되지 않는다(개요가 이름으로만 짚는다).
+- 기본으로 **코드는 문서 목록에서 빠진다**(코드 저장소에서 문서가 코드에 묻히지 않게). 코드까지 다루려면 기록 폴더 `config.json` 에 `"include": ["**/*"]` — 그래도 Claude 는 제안만. 마크다운만 보려면 `"include": ["**/*.md"]`.
+- 문서 안 상대 경로 그림(`![](img/a.png)`)은 작업 공간 파일로 보이고(단일 HTML 도), 상대 링크는 작업대 안에서 열린다(`#제목` 은 그 섹션으로).
+- 문서 맨 앞 앞머리(`---` 로 감싼 `status: review` · `owner: 김철수` · `tags: [api]` · `review: 2026-12-01`)는 문서 머리의 칩과 개요의 메타데이터가 된다. 검토 기한이 지나면 개요의 "살펴볼 것"에 뜬다.
+- 이 작업 공간의 목적·폴더 역할은 README 로 충분하다(맨 위 README 의 첫 문단 · 폴더 README 의 첫 문단). 설정으로 적으려면 `config.json` 에 `"purpose": "…"`, `"folders": { "data": { "role": "원천 데이터 — 고치지 않는다" } }`.
+
 ## CLI
 
 ```
@@ -89,7 +112,8 @@ docbench init [폴더] [--data 기록폴더 | --inside] [--claude]
 docbench link <폴더> [--data 기록폴더] [--owner 계정] [--force]
 docbench status [--json]
 docbench fb list|show|add|reply|propose …
-docbench doc list|sections|show|write …
+docbench doc list|sections|show|write|new …
+docbench overview [--json]        # 작업 공간 개요 — 목적·구성·폴더 역할·메타데이터·점검
 docbench log <문서> -m 요약 [--fb id]
 docbench inbox [--clear]
 docbench runner [폴더] …          # 0.3–0.4 의 폴더별 실행기 (예전 연결용 — 새로는 app)
@@ -104,8 +128,9 @@ CLI 는 두 가지로 받는다: 저장소(`npm install` 후 `node bin/docbench.
 
 ```
 src/core/          DOM 없는 핵심 — 섹션 키·범위, 문구 앵커, 피드백 모델, 차이, AI 프롬프트, Claude 작업 규약(runs.ts),
+                   형식(formats.ts — 허용 목록·Claude 규칙)·구조 글(outline.ts)·오피스 글 뽑기(derive.ts)·작업 공간 개요(overview.ts),
                    기록 폴더 규칙·탐색기 항목(workspace.ts), 기록 합치기(records.ts) — 서버·CLI 와 공유
-src/ui/            화면 — 탐색기(explorer.ts), Claude 작업 창(runs.ts) 등. 컨테이너 쿼리 기반이라 어떤 패널 폭에도 맞는다
+src/ui/            화면 — 개요(overview.ts), 탐색기(explorer.ts), 형식마다 그리기(viewers.ts·highlight.ts), Claude 작업 창(runs.ts) 등. 컨테이너 쿼리 기반이라 어떤 패널 폭에도 맞는다
 src/adapters/      memory · rest · claude-artifact · folder(로컬 폴더를 브라우저가 직접)
 src/element.ts     <doc-bench> 웹 컴포넌트
 src/standalone.ts  단일 HTML — 계정·시작하기·폴더 열기·기록 자리·기록 합치기
@@ -147,7 +172,8 @@ marked·DOMPurify·jsdiff 는 번들에 들어 있어 사내망·엄격한 CSP �
 
 ## 알려진 한계
 
-- 섹션은 마크다운 **제목** 단위다. 제목이 없는 긴 문서는 문서 전체 편집만 된다. 문서에 HTML 로 쓴 `<h2>` 나 `<details>` 안의 제목은 섹션이 아니다(화면과 원문이 같은 규칙).
+- 섹션은 마크다운 **제목** 단위다(구조 글은 키·표·제목). 제목이 없는 긴 문서와 글·코드·표는 문서 전체 편집만 된다. 문서에 HTML 로 쓴 `<h2>` 나 `<details>` 안의 제목은 섹션이 아니다(화면과 원문이 같은 규칙).
+- 오피스(Word·PowerPoint·Excel·HWPX)·Jupyter 는 **뽑은 글로 읽기만** 한다 — 원본 서식은 고치지 않는다. 옛 한글(`.hwp`)·ODF 의 글, PDF 의 글·쪽 미리보기, Mermaid·PlantUML 그리기는 아직 없다(씨앗 S24–S26). 5 MB 넘는 글은 앞 512 KB 만 보이고 고치지 않는다.
 - AI 제안·Claude 작업의 고치기는 6만 자 이하 섹션만 — 더 크면 하위 섹션에 피드백을 달라고 안내한다(잘라 보내 나머지를 지우는 일을 막는다).
 - 동시 편집은 낙관적 잠금(판 비교) + 같은 문서 쓰기 줄 세우기(프로세스 안·서버와 CLI 사이 잠금 파일)다. 실시간 공동 타이핑(CRDT)은 하지 않는다.
 - 단일 HTML 은 엣지·크롬(File System Access API)에서만 쓰기가 되고, 다른 브라우저·`http://사내호스트` 에서는 읽기만 된다. 감시 대신 2.5초 간격(창으로 돌아오면 바로)으로 확인하고, git 기준본은 없다. Claude 작업은 이 PC 의 앱으로, 또는 앱 없이 Claude Code 터미널 한 줄로 한다(위 "설치 없이 터미널 한 줄"). 문서 속 바깥 주소 그림은 보이지 않고(새는 길 차단), 파일로 열면 고른 폴더·보관함을 기억하지 않는다(창마다 처음 저장할 때 한 번 묻는다).

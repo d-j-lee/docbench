@@ -4,7 +4,7 @@
 
 ```
 ┌ src/ui ─────────────────────────────────────────────┐
-│ App ─ Explorer(펼친 폴더만) ─ DocView(접기·앵커·개요·바뀐 글·읽기 정리) ─ Editor ─ Composer(그 자리에서 적기) ─ Panel(초안·볼 것·보냄·끝남) ─ RunDock ─ Hover ─ Dialogs │  화면. 어댑터 인터페이스만 안다
+│ App ─ Overview(작업 공간 개요) ─ Explorer(펼친 폴더만) ─ DocView(접기·앵커·목차·바뀐 글·읽기 정리) ─ viewers(형식마다 그리기)·highlight ─ Editor ─ Composer(그 자리에서 적기) ─ Panel(초안·볼 것·보냄·끝남) ─ RunDock ─ Hover ─ Dialogs │  화면. 어댑터 인터페이스만 안다
 └───────────────▲─────────────────────────────────────┘
                 │ DocBenchAdapters (src/types.ts)
 ┌ src/adapters ─┴─────────────────────────────────────┐
@@ -13,6 +13,7 @@
                 │
 ┌ src/core ─────┴──── DOM 없음 · 서버/CLI 와 공유(dist/core.mjs) ┐
 │ source(섹션 키·범위) selectors(문구 앵커) feedback diff prompt │
+│ formats(형식 허용 목록·Claude 규칙) outline(구조 글의 제목) derive(오피스·HWPX·Jupyter → 마크다운) overview(작업 공간 개요·점검) │
 │ textcodec(바이트↔글) workspace(작업 폴더 규약: 설정·glob·매니페스트·이력·나무·큰 폴더) │
 │ records(기록 합치기) runs(Claude 작업 규약: 요청·상태·로그 모양, 프롬프트, 결과 검사, 실행기 고르기) │
 │ apply(결과 반영 한 벌 — 엔진·화면·흉내, D75) room(Claude 자리: 기록 폴더의 지시·권한·터미널 한 줄, D76) │
@@ -45,7 +46,7 @@ DocBench 앱 화면 ─ app-shell.ts ─ rest 어댑터 ─ HTTP(127.0.0.1·열�
 
 | 어댑터 | 하는 일 | 필수 |
 |---|---|---|
-| `docs: DocSource` | 매니페스트, 문서 읽기·저장(판 비교), 특정 판·기준본, 이력, 폴더 지도, 변경 알림, 폴더 나무(`tree` — 펼친 폴더만) | ✔ (`save` 없으면 읽기 전용, `tree` 없으면 매니페스트의 폴더 나무로) |
+| `docs: DocSource` | 매니페스트, 문서 읽기·저장(판 비교), 특정 판·기준본, 이력, 폴더 지도, 변경 알림, 폴더 나무(`tree` — 펼친 폴더만), 파일 바이트(`loadBytes` — 그림·원본 내려받기), 작업 공간 개요(`overview`), 새 문서(`create`) | ✔ (`save` 없으면 읽기 전용, `tree` 없으면 매니페스트의 폴더 나무로, `overview` 없으면 개요 화면 없음) |
 | `feedback: FeedbackStore` | 구독·생성·수정(판 비교)·삭제 | ✔ |
 | `viewState` | 접기·깊이·마지막으로 본 판·고정·최근·펼친 폴더 (사람별) | 없으면 브라우저에만 |
 | `identity` | 나(계정 `id`·표시 이름 `name`), 권한(`doc.edit` `feedback.*` `assistant.*`), 표시 이름 바꾸기(`setName`), 계정이 어디서 왔나(`source`: browser·pc·host) | 없으면 전부 허용 |
@@ -69,10 +70,51 @@ DocBench 앱 화면 ─ app-shell.ts ─ rest 어댑터 ─ HTTP(127.0.0.1·열�
 - 열린 HTML 상자(`<details>`·`<div>` …) 안의 마크다운 제목은 브라우저가 상자 안에 넣으므로, 원문 쪽도 세지 않는다.
 - 문서 맨 앞 YAML 앞머리(`---` … `---`/`...`, 안쪽이 `키: 값` 모양)는 섹션이 아니라 첫 제목 앞 머리말이다. 두 쪽 모두 `frontMatterLength` 하나로 떼고(원문은 그 뒤부터 lexer, 오프셋은 원문 기준), 화면은 YAML 상자로 그린다(D86).
 - `test/unit/parity.test.ts` 가 예제·까다로운 고정 문서(+ `DOCBENCH_PARITY_DIR`)로 둘이 같은지 확인한다.
+- 마크다운이 아닌 형식(D87)은 마지막 인자로 문서 id 를 받아 그 형식의 제목 규칙으로 센다(`headsOf`). 구조 글(YAML·JSON …)의 화면은 원문 제목(`headsOf`)에서 `data-md` 제목을 **만들어** 그리므로 키가 같은 것이 만듦새로 보장되고, `test/unit/viewers.test.ts` 가 `test/fixtures/formats/*` 로 확인한다. 글·코드·표는 섹션이 없다(두 쪽 모두).
 
 섹션 하나를 바꾸면(`replaceSection`) 그 범위 밖 글자는 바이트 그대로이고, 끝의 빈 줄 모양도 유지된다.
 
 **GFM 물결표**: `9/29~10/2 … 10/5~10/9` 처럼 한 문단에 홑물결이 둘이면 GFM 은 사이를 취소선으로 읽는다. `protectTildes` 가 코드 밖 홑물결만 이스케이프한다(`~~취소선~~` 은 그대로).
+
+## 여러 형식 (`core/formats` · `core/outline` · `core/derive` · `ui/viewers`, D87)
+
+문서가 될 수 있는 파일은 **등록된 형식(허용 목록)** 뿐이다 — 확장자·이름으로만 정해 서버·단일 HTML·CLI·Claude 작업이 같은 파일을 같게 다룬다. 함께 쓰는 `config.json` 의 include 를 넓혀도 목록 밖(실행 파일·숨김·`.env`·키 파일)은 문서가 되지 못한다(바닥 규칙 `docFloor`, D71 을 이었다).
+
+| 갈래 | 형식 | 섹션 | 사람의 편집 | Claude 결과 |
+|---|---|---|---|---|
+| markdown | `.md` `.markdown` `.mdx` … | 마크다운 제목 | ✔ | 고치기·제안 |
+| outline (구조 글) | YAML · JSON · TOML · INI(`.cfg` `.conf` `.properties`) | 키·표(맨 위 키 = 2단계, 그 아래 블록 키 = 3단계) | ✔ | **제안만** (도구가 읽어 실행하는 설정) |
+| | AsciiDoc · reStructuredText · Org | 그 형식의 제목 | ✔ | 고치기·제안 |
+| text (문서 전체 하나) | 글 · CSV/TSV(표로) · JSON Lines · Mermaid · PlantUML · Graphviz | 없음 | ✔ | 고치기·제안 |
+| | HTML(정제한 읽기 화면) · XML · SVG(그림) · SQL · diff · 코드 | 없음 | ✔ | **제안만** |
+| | 로그 | 없음 | ✔ | 읽고 답만 (증거) |
+| derived (뽑은 글) | Word · PowerPoint · Excel · 한글(HWPX) · Jupyter | 뽑은 마크다운의 제목 | ✘ (원본) | 읽고 답만 |
+| binary (미리보기) | PDF · 그림(PNG·JPEG·GIF·WebP …) | 없음 | ✘ | 읽고 답만 (Claude 는 Read 로 파일을 직접) |
+
+- **기본 include** 는 등록 형식에서 코드(프로그램 소스·Dockerfile·Makefile·CMakeLists)만 뺀 것(`defaultIncludePatterns`, 확장자 대소문자 둘 다). 코드까지 문서로 다루려면 `"include": ["**/*"]` — 그래도 Claude 는 제안만.
+- **이름이 정하는 것**: 의존성 목록(`requirements*.txt`·`constraints*`)·`CODEOWNERS`·MDX·AI 지시 파일(`CLAUDE.md`·`AGENTS.md`·`GEMINI.md`·`SKILL.md`)은 모양은 글·마크다운이어도 Claude 는 제안만. 비밀로 보이는 이름(`looksSecret` — `.env*`·`credentials.json`·`secrets.yaml`·키·인증서)은 형식이 맞아도 문서가 아니다.
+- **판**: 통째로 읽는 파일은 바이트 해시, 통째로 읽지 않는 큰 파일(앞부분만 보이는 글, 40 MB 넘는 원본)은 크기·고친 시각(`bigVersion`) — 서버와 단일 HTML 이 같은 규칙(판은 기록 폴더로 함께 쓴다). 뽑은 글은 판이 그대로면 다시 뽑지 않는다(열 때 맞춰 보기도).
+- **구조 글**(`core/outline`): 줄 단위로 읽는 작은 규칙(줄 앞 2000자만 — 긴 한 줄 데이터에서 멈추지 않게) — YAML 은 블록 글(`|` `>`)·앵커·태그를 건너뛰고 바로 위 주석을 그 키에 붙이며 아래 키의 섹션은 그 블록까지(`Head.end` — 뒤따르는 같은 단계 값은 위 섹션, 화면은 `data-sec-end` 로 위 섹션에 돌려놓는다), TOML 은 `[표]`·`[[배열 표]]`(여러 줄 글 안은 무시), INI 는 `[절]`, JSON 은 줄 맨 앞의 키만(한 줄 JSON 은 섹션 없음)이고 값이 끝나는 줄까지가 범위(`Head.end`). 섹션 바꿔 끼우기는 마크다운과 같은 `replaceSection` — 범위 밖 바이트는 그대로. 섹션 글 검사(`checkSectionEdit`)는 형식마다: 키 줄 유지·단계·하위 섹션·YAML 탭 들여쓰기·JSON 이 여전히 읽히는지(주석·끝 쉼표 허용).
+- **뽑은 글**(`core/derive`): ZIP(중앙 디렉터리)과 XML 토큰을 직접 읽는다 — 의존성 0, 압축 풀기만 주입(서버 비동기 `zlib`, 브라우저 `DecompressionStream`). 푸는 동안 한도를 잰다(항목 64 MB·파일 하나 합계 160 MB, 같은 항목은 한 번만, 슬라이드·시트 1000개, 뽑은 글 200만 자에서 멈춤). Word 는 스타일·개요 수준으로 제목, 목록·표·지운 글 제외, PowerPoint 는 슬라이드 순서(관계 파일)·노트·표, Excel 은 공유 문자열·시트마다 표(200행·30열까지), HWPX 는 "개요 n" 스타일·개요 수준 문단으로 제목, Jupyter 는 마크다운 칸 그대로·코드 칸·글 출력. 같은 판(바이트 해시)은 뽑은 글을 기억한다. 깨졌거나 암호가 걸렸거나 너무 크면(40 MB) 글 없이 까닭(`deriveError`)만.
+- **크기**: 글은 5 MB 까지 통째로, 넘으면 앞 512 KB(줄 경계)만 읽기 전용(`truncated`, `too-large`). 판은 늘 파일 전체 바이트의 해시. 바이트를 내주는 것(그림·원본 내려받기)은 40 MB 까지.
+- **화면**(`ui/viewers`): 마크다운·뽑은 글은 마크다운으로, 구조 글은 원문을 색 입혀(`ui/highlight` — 글자는 그대로, 태그만) 원문 제목마다 섹션으로, 글·코드·로그는 줄 번호(CSS 카운터 — 본문 글자가 아님)와 함께, CSV·TSV 는 표(2000행·60열, 원문 보기 단추), HTML 은 DOMPurify 로 스크립트·스타일·폼·끼운 창·class·id·data-* 를 걷어 낸 읽기 화면, SVG·그림은 `<img>`(Blob), PDF·오피스 원본은 내려받기 카드. 문서 안 상대 경로 그림·링크는 작업 공간 파일로 잇는다(D89).
+- 문서 머리에 형식과 **Claude 가 할 수 있는 일**(제안만·읽기만)을 칩으로, 앞머리 메타데이터(상태·담당·꼬리표·기한 — 개요와 같은 `docMetaOf`)를 칩으로 보인다.
+
+## 작업 공간 개요 (`core/overview` · `ui/overview`, D88)
+
+처음 여는 작업 공간의 첫 화면(지난번 문서·주소·호스트가 준 문서가 있으면 그것). 내용은 열지 않고 이름·크기·날짜와 README·앞머리·링크(작은 작업 공간만)만 본다.
+
+```
+DocSource.overview()  ─  서버 Workspace.overview · folder 어댑터 · memory 어댑터
+    │  폴더 지도 항목(inventory) + 매니페스트(앞머리 meta) + README 앞부분(pickReadmes) + 상대 링크(relativeLinks, 문서 400·8 MB 까지)
+    ▼
+core.computeOverview  →  WorkspaceOverview { purpose, scope, totals, groups, folders(역할), recent, large, meta, ai, git?, links?, checks }
+```
+
+- **목적**: 설정 `purpose` → 맨 위 README 의 첫 문단(앞머리 `description`·배지·표·코드 블록은 건너뜀). **폴더 역할**: 설정 `folders.<맨 위 폴더>.role` → 그 폴더 README 의 첫 문단.
+- **점검**(`checks` — 문구는 화면 사전 `overview.check.<code>`): 주의 `secrets`(비밀로 보이는 이름 — 내용은 열지 않는다) · 할 일 `huge-files`(50 MB 이상 — git 저장소면 할 일, 아니면 참고) `no-readme` `review-due`(앞머리 날짜가 지남) `broken-links`(다 훑었을 때만) · 정리 `version-copies`(_v2·최종·(1)·복사본) `temp-files`(~$·.DS_Store …) `empty-folders` `folder-no-readme`(파일 8개 이상) `same-name` `long-paths`(160자) · 참고 `stale-docs`(1년) `orphan-docs`(링크가 쓰이는 곳에서만) `git-uncommitted`.
+- **바로 할 일**: README 만들기(빈칸 표시 `[작업 후 기입]`/`TODO` 를 넣은 틀 — `DocSource.create`, 만들고 편집기로), Claude 에게 맡길 초안(깨진 링크·검토 기한·오래된 문서는 문서마다 문서 전체 피드백, 고아 문서는 README 에 하나 — Claude 가 고치거나 제안할 수 있는 형식만). 지우기·옮기기는 하지 않는다(사람이 고른다).
+- 큰 폴더(D64)는 훑은 데까지(`scope.complete: false`)라고 밝히고, 빈 폴더·깨진 링크처럼 다 봐야 아는 점검은 하지 않는다. 화면은 30초 동안 결과를 기억하고 목록이 바뀌면 다시 계산한다.
 
 ## 피드백 모델
 

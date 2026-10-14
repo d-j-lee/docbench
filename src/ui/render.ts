@@ -49,10 +49,30 @@ function classify(txt: string, c: Compiled): { todo: true } | { tone: Tone } | n
   return hit ? { tone: hit.tone } : null;
 }
 
+/**
+ * 문서 안 상대 경로 그림(`![](img/a.png)`)은 주소를 data-db-src 로 옮겨 둔다 — 그대로 두면 화면 주소 기준으로 읽으려다
+ * 막히거나(단일 HTML CSP) 엉뚱한 곳을 부른다. 문서 화면이 작업 공간 파일로 이어 Blob 으로 보인다(viewers.resolveImages).
+ * 바이트를 내주는 저장소(loadBytes)가 있을 때만 — 없으면 예전처럼(호스트가 같은 상대 주소로 그림을 내줄 수 있다)
+ */
+let localImages = false;
+DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+  if (!localImages || node.nodeName !== 'IMG') return;
+  const el = node as Element;
+  const src = (el.getAttribute('src') || '').trim();
+  el.removeAttribute('srcset');
+  if (src && !/^(data:|blob:|https?:|\/\/)/i.test(src)) { el.setAttribute('data-db-src', src); el.removeAttribute('src'); }
+});
+
+/** 정제 — localImages 면 상대 경로 그림을 data-db-src 로 (위) */
+export function sanitize(html: string, cfg: Record<string, unknown>, o: { localImages?: boolean } = {}): string {
+  localImages = !!o.localImages;
+  try { return DOMPurify.sanitize(html, cfg) as unknown as string; } finally { localImages = false; }
+}
+
 /** 마크다운을 정제된 DOM 조각으로 */
-export function renderMarkdown(md: string): HTMLDivElement {
+export function renderMarkdown(md: string, o: { localImages?: boolean } = {}): HTMLDivElement {
   const div = document.createElement('div');
-  div.innerHTML = DOMPurify.sanitize(toHTML(md), { ADD_ATTR: ['target'] });
+  div.innerHTML = sanitize(toHTML(md), { ADD_ATTR: ['target'] }, o);
   return div;
 }
 
@@ -142,6 +162,14 @@ export function sectionize(root: HTMLElement): Section[] {
   const seen = new Map<string, number>();
   const secs: Section[] = [];
   for (const n of nodes) {
+    // 섹션 끝 표시(구조 글 — 원문이 섹션 끝을 정할 때, D87): 그 단계 이상의 섹션을 닫고 나머지는 위 섹션 본문으로.
+    // 키를 바꾸지 않는다(제목만 키를 만든다). 문서 HTML 에서는 data-* 를 지우므로 화면 그리기(viewers)만 만든다
+    if (n.nodeType === 1 && (n as Element).hasAttribute('data-sec-end')) {
+      const lv = Number((n as Element).getAttribute('data-sec-end')) || 1;
+      while (stack.length > 1 && stack[stack.length - 1].level >= lv) stack.pop();
+      stack[stack.length - 1].body.append(n);
+      continue;
+    }
     // 마크다운 제목(data-md)만 섹션을 연다 — 문서에 직접 쓴 HTML 제목은 본문으로 둔다
     const m = n.nodeType === 1 && (n as Element).hasAttribute('data-md') ? /^H([1-6])$/.exec((n as Element).tagName) : null;
     if (!m) { stack[stack.length - 1].body.append(n); continue; }

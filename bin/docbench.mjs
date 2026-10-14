@@ -20,10 +20,12 @@
  *   docbench fb add --doc ID [--section KEY] -m 글 [--severity high|medium|low] [--category 종류] [--quote 문구] [--to assistant|owner]
  *   docbench fb reply <id> -m 글 [--resolve | --ask | --decline] [--category 종류]
  *   docbench fb propose <id> --file 제안.md [-m 이유]
- *   docbench doc list [--json]
- *   docbench doc sections <docId> [--json]
+ *   docbench doc list [--json]                 문서와 형식
+ *   docbench doc sections <docId> [--json]     섹션 (형식마다: 마크다운 제목·YAML 키·TOML/INI 표·JSON 키 …)
  *   docbench doc show <docId> [--section KEY] [--json]
  *   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
+ *   docbench doc new <docId> [--file F | --stdin] [-m 요약]
+ *   docbench overview [--json]                 작업 공간 개요·점검
  *   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
  *   docbench inbox [--clear] [--json]          요청함(보낸 묶음 알림) 보기·비우기
  *   docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
@@ -79,10 +81,14 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
                                              닫는 것은 사람). 사람이 쓰면 --resolve·--decline 이 닫는다.
                                              --category 는 종류가 없는 피드백에만 붙는다(사람이 고른 종류는 바꾸지 않는다)
   docbench fb propose <id> --file 제안.md [-m 이유]
-  docbench doc list [--json]
-  docbench doc sections <docId> [--json]
+  docbench doc list [--json]                 문서와 형식 (마크다운·YAML·JSON·코드·CSV·Word·PDF … — 등록된 형식만)
+  docbench doc sections <docId> [--json]     섹션: 마크다운 제목 · YAML 키 · TOML/INI 표 · JSON 키 · AsciiDoc/rST/Org 제목
   docbench doc show <docId> [--section KEY] [--json]
+                                             Word·PowerPoint·Excel·한글(HWPX)·Jupyter 는 DocBench 가 뽑은 글(원본은 고치지 않는다)
   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
+  docbench doc new <docId> [--file F | --stdin] [-m 요약]
+                                             새 문서 (UTF-8, 이력에 남김). 이미 있으면 3, 폴더는 있어야 한다
+  docbench overview [--json]                 작업 공간 개요 — 목적·구성·폴더 역할·문서 메타데이터·AI 협업 파일·점검(비밀·사본·임시 파일·깨진 링크 …)
   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
   docbench inbox [--clear] [--json]          요청함(보낸 묶음 알림) 보기·비우기
   docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
@@ -245,10 +251,50 @@ async function readInput(a) {
  * (Claude 작업 실행기도 같은 규칙으로 검사한다)
  * @param {string} cur 지금 섹션 글 @param {string} next 새 섹션 글 @param {any} a
  */
-function guardSection(cur, next, a) {
-  const bad = core.checkSectionText(cur, next, { rename: !!a.rename, allowDrop: !!a.force });
-  if (bad) die(bad + (/제목이 바뀝니다/.test(bad) ? ' 의도했다면 --rename.' : /하위 섹션/.test(bad) ? ' 지우려는 것이면 --force.' : ''));
+/** 개요 → 사람이 읽는 글 (화면 사전과 같은 뜻, 한국어) @param {any} o */
+function overviewText(o) {
+  const kb = (n) => (n >= 1 << 30 ? (n / (1 << 30)).toFixed(1) + ' GB' : n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B');
+  const G = { doc: '문서', data: '데이터·설정', code: '코드', office: '오피스', image: '그림', pdf: 'PDF', media: '소리·영상', archive: '압축', other: '그 밖' };
+  const LV = { risk: '주의', action: '할 일', tidy: '정리', info: '참고' };
+  const C = {
+    secrets: '비밀(키·인증 정보)로 보이는 파일 — 공유·커밋 전에 확인하세요. Claude 작업도 작업 공간 안은 읽습니다',
+    'huge-files': '50 MB 넘는 파일', 'no-readme': '맨 위에 README 가 없습니다 — 이 작업 공간의 목적을 적어 두세요', 'review-due': '검토 기한(앞머리)이 지난 문서',
+    'broken-links': '없는 파일을 가리키는 링크가 있는 문서', 'version-copies': '판 이름이 붙은 사본(_v2·최종·(1) …)', 'temp-files': '임시·잠금 파일',
+    'empty-folders': '빈 폴더', 'folder-no-readme': 'README 없는 큰 폴더', 'same-name': '다른 폴더의 같은 이름 문서', 'long-paths': '너무 긴 경로(160자 넘음)',
+    'stale-docs': '1년 넘게 손대지 않은 문서', 'orphan-docs': '어느 문서에서도 링크하지 않는 문서', 'git-uncommitted': '커밋하지 않은 변경',
+  };
+  const L = [`작업 공간: ${o.root}${o.scope.complete ? '' : ' (일부만 훑음)'}`];
+  if (o.purpose) L.push(`목적: ${o.purpose.text}${o.purpose.docId ? ` (${o.purpose.docId})` : ' (설정)'}`);
+  L.push(`파일 ${o.totals.files} · 폴더 ${o.totals.dirs} · ${kb(o.totals.bytes)} · 문서 ${o.totals.docs} · 최근 7일 바뀜 ${o.totals.recent7}`);
+  L.push('구성: ' + o.groups.map((g) => `${G[g.group] || g.group} ${g.files}`).join(' · '));
+  L.push('', '폴더:');
+  for (const f of o.folders) L.push(`  ${(f.path || '(맨 위)').padEnd(24)} 파일 ${String(f.files).padStart(4)} · 문서 ${String(f.docs).padStart(4)} · ${kb(f.bytes).padStart(8)}${f.role ? '  — ' + f.role : ''}`);
+  if (o.meta.docs) {
+    const top = (m) => Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, v]) => `${k} ${v}`).join(' · ');
+    L.push('', `문서 메타데이터 (앞머리가 있는 문서 ${o.meta.docs}):`);
+    if (Object.keys(o.meta.status).length) L.push('  상태: ' + top(o.meta.status));
+    if (Object.keys(o.meta.owners).length) L.push('  담당: ' + top(o.meta.owners));
+    if (Object.keys(o.meta.tags).length) L.push('  꼬리표: ' + top(o.meta.tags));
+  }
+  if (o.ai.length) L.push('', 'AI 협업 파일: ' + o.ai.map((x) => x.path).join(', '));
+  L.push('', o.checks.length ? '점검:' : '점검: 걸린 것 없음');
+  for (const c of o.checks) L.push(`  [${LV[c.level]}] ${C[c.code] || c.code}${c.n > 1 || c.paths.length ? ` — ${c.n}` : ''}${c.paths.length ? '\n      ' + c.paths.slice(0, 8).join('\n      ') + (c.n > 8 ? `\n      … 외 ${c.n - 8}` : '') : ''}`);
+  return L.join('\n');
 }
+
+/** 섹션 교체 안전장치 — 형식마다(core.checkSectionEdit: 마크다운 제목 줄·하위 섹션, 구조 글은 키·들여쓰기·JSON 읽힘) */
+function guardSection(doc, key, next, id, a) {
+  const bad = core.checkSectionEdit(doc, key, next, id, { rename: !!a.rename, allowDrop: !!a.force });
+  if (bad) die(bad + (/제목이 바뀝니다|제목\(키\) 줄/.test(bad) ? ' 의도했다면 --rename.' : /하위 섹션/.test(bad) ? ' 지우려는 것이면 --force.' : ''));
+}
+
+/** 문서 한 줄 설명 — 인코딩·줄바꿈은 글 문서만, 뽑은 글·미리보기는 형식 이름 */
+const docLabel = (/** @type {any} */ d) => {
+  const f = core.formatFor(d.id);
+  const ro = d.readOnly ? ', 읽기 전용: ' + d.readOnlyReason : '';
+  if (d.binary) return `${f.label}${f.kind === 'derived' ? ' — DocBench 가 뽑은 글, 원본은 고치지 않음' : ' — 글 없음, 파일을 직접 읽는다'}, 판 ${d.version}${d.deriveError ? ', 글을 뽑지 못함: ' + d.deriveError : ''}`;
+  return `${f.kind !== 'markdown' ? f.label + ', ' : ''}${encLabel(d.encoding)}${d.bom ? '+BOM' : ''}, ${String(d.eol || 'lf').toUpperCase()}, 판 ${d.version}${d.truncated ? `, 앞 ${d.truncated.bytes}/${d.truncated.total} 바이트만` : ''}${ro}`;
+};
 
 async function main() {
   const a = parse(process.argv.slice(2));
@@ -398,7 +444,7 @@ async function main() {
       if (f.docId) {
         doc = await ws.readDoc(f.docId);
         if (f.target.kind === 'section') {
-          const s = core.findSection(doc.md, core.sectionKeyOf(f));
+          const s = core.findSection(doc.md, core.sectionKeyOf(f), doc.id);
           if (s) {
             section = doc.md.slice(s.start, s.end);
             const line = doc.md.slice(0, s.start).split('\n').length;
@@ -406,7 +452,7 @@ async function main() {
           }
         }
       }
-      const data = { feedback: f, doc: doc && { id: doc.id, path: path.join(root, doc.id), version: doc.version, encoding: doc.encoding, eol: doc.eol, bom: doc.bom, readOnly: doc.readOnly, readOnlyReason: doc.readOnlyReason }, section: located, sectionText: section };
+      const data = { feedback: f, doc: doc && { id: doc.id, path: path.join(root, doc.id), format: core.formatFor(doc.id).id, version: doc.version, encoding: doc.encoding, eol: doc.eol, bom: doc.bom, readOnly: doc.readOnly, readOnlyReason: doc.readOnlyReason }, section: located, sectionText: section };
       out(a, data, () => [
         `${f.id} [${turn(f)}] ${f.docId} › ${where(f)}`,
         f.title ? '제목: ' + f.title : '', '내용: ' + f.body,
@@ -417,8 +463,10 @@ async function main() {
         f.suggestion != null ? `이렇게 바꿔${f.selector?.exact ? '(인용 문구를)' : '(본문을)'}:\n----\n${f.suggestion.replace(/\n*$/, '')}\n----` : '',
         ...f.thread.map((m) => `  - ${m.author.kind === 'assistant' ? (m.author.name || 'AI') : (m.author.name || '사람')}: ${m.text}`),
         f.result?.kind === 'edit' && f.result.reverted ? '사람이 지난 고침을 되돌리고 다시 보냈다 — 같은 고침을 되풀이하지 말고 지금 요청대로(모호하면 되묻기)' : '',
-        doc ? `문서: ${path.join(root, doc.id)} (${encLabel(doc.encoding)}${doc.bom ? '+BOM' : ''}, ${doc.eol.toUpperCase()}, 판 ${doc.version}${doc.readOnly ? ', 읽기 전용: ' + doc.readOnlyReason : ''})` : '',
-        located ? `섹션: ${located.key} (줄 ${located.startLine}-${located.endLine})\n고칠 때: docbench doc write ${doc.id} --section "${located.key}" --base ${doc.version} --file <새 섹션.md> --fb ${f.id}\n----\n${section}----` : f.target.kind === 'section' ? '섹션을 찾지 못했습니다 (제목이 바뀌었을 수 있음 — docbench doc sections 로 확인)' : '',
+        doc ? `문서: ${path.join(root, doc.id)} (${docLabel(doc)})` : '',
+        doc && core.claudeChanges(core.formatFor(doc.id)).length === 1 ? '이 형식(코드·설정·HTML)은 바로 고치지 말고 제안으로: docbench fb propose — 사람이 차이를 보고 적용한다' : '',
+        doc && !core.claudeChanges(core.formatFor(doc.id)).length ? '이 형식은 고치지 않는다 — 답·질문·보류로(fb reply)' : '',
+        located ? `섹션: ${located.key} (줄 ${located.startLine}-${located.endLine})\n고칠 때: docbench doc write ${doc.id} --section "${located.key}" --base ${doc.version} --file <새 섹션> --fb ${f.id}\n----\n${section}----` : f.target.kind === 'section' ? '섹션을 찾지 못했습니다 (제목이 바뀌었을 수 있음 — docbench doc sections 로 확인)' : '',
       ].filter(Boolean).join('\n'));
       return;
     }
@@ -429,7 +477,7 @@ async function main() {
       const target = a.section ? { kind: 'section', heading: core.keyToPath(String(a.section)).pop(), ...core.parseKey(String(a.section)) } : { kind: 'doc' };
       if (a.section) {
         const d = await ws.readDoc(docId);
-        if (!core.findSection(d.md, String(a.section))) die('그 섹션이 없습니다: ' + a.section + ' (docbench doc sections ' + docId + ')');
+        if (!core.findSection(d.md, String(a.section), d.id)) die('그 섹션이 없습니다: ' + a.section + ' (docbench doc sections ' + docId + ')');
       }
       // Claude 가 먼저 올리는 제안·질문은 "볼 것"(사람이 확인) — 결과 표시(result)로 화면이 회차에 묶는다. 사람이 쓰면 보낸 것(또는 --draft 초안)
       const ai = ws.actor.kind === 'assistant';
@@ -468,18 +516,23 @@ async function main() {
     if (sub === 'propose') {
       const f = await ws.getFeedback(rest[0] || die('id 가 필요합니다'));
       const t = f.target;
-      if (t.kind !== 'section') die('섹션 피드백에만 제안할 수 있습니다');
+      // 섹션 피드백은 그 섹션을, 문서 전체 피드백은 문서 전체를(섹션이 없는 형식 — 코드·HTML·SQL·글) 제안한다
+      if (t.kind !== 'section' && t.kind !== 'doc') die('문서·섹션 피드백에만 제안할 수 있습니다');
       const after = await readInput(a);
       const doc = await ws.readDoc(f.docId);
-      const key = core.sectionKeyOf(f);
-      const before = core.getSectionText(doc.md, key);
+      const fmt = core.formatFor(doc.id);
+      if (!core.claudeChanges(fmt).length) die(`${fmt.label} 파일은 고칠 수 없는 형식입니다(읽고 답만) — fb reply 로 답하세요`, 4);
+      if (doc.truncated) die('글이 커서 앞부분만 읽히는 문서는 제안할 수 없습니다 — fb reply 로 답하세요', 4);
+      const key = t.kind === 'section' ? core.sectionKeyOf(f) : '';
+      const before = key ? core.getSectionText(doc.md, key, doc.id) : doc.md;
       if (before == null) die('섹션을 찾지 못했습니다');
-      guardSection(before, after, a);
+      if (key) guardSection(doc.md, key, after, doc.id, a);
+      else { const bad = core.checkDocText(doc.md, after, doc.id); if (bad) die(bad); }
       if (f.status === 'draft') die('초안은 아직 보내지 않은 사람의 메모입니다 — 사람이 보낸 뒤에 제안하세요.');
       const now = new Date().toISOString();
       const g = await ws.updateFeedback(f.id, {
         status: f.status === 'open' ? 'open' : f.status, waitingOn: 'owner', result: { kind: 'propose', at: now, run: 'cli' },
-        proposal: { path: key.split(core.KEY_SEP), before, after, rationale: a.m, author: ws.actor, at: now, state: 'pending' },
+        proposal: { path: key ? key.split(core.KEY_SEP) : [], before, after, rationale: a.m, author: ws.actor, at: now, state: 'pending' },
         thread: [...f.thread, { author: ws.actor, text: a.m || '수정 제안을 올렸습니다', at: now }],
       }, f.version).catch(conflict);
       out(a, g, `제안 올림: ${g.id} → 사람 차례 (화면에서 차이를 보고 적용)`);
@@ -491,20 +544,21 @@ async function main() {
   if (cmd === 'doc') {
     if (sub === 'list') {
       const m = await ws.manifest();
-      out(a, Object.entries(m.docs).map(([id, d]) => ({ id, title: d.title, size: d.source?.size })), (r) => r.map((d) => `${d.id}  ${d.title}`).join('\n'));
+      out(a, Object.entries(m.docs).map(([id, d]) => ({ id, title: d.title, format: core.formatFor(id).id, size: d.source?.size, ...(d.meta ? { meta: d.meta } : {}) })), (r) => r.map((d) => `${d.id}  ${d.title}${d.format !== 'markdown' ? `  [${core.formatFor(d.id).label}]` : ''}`).join('\n'));
       return;
     }
     if (sub === 'sections') {
       const d = await ws.readDoc(rest[0] || die('문서 id 가 필요합니다'));
-      const secs = core.sectionSources(d.md).map((s) => ({ key: s.key, level: s.level, line: d.md.slice(0, s.start).split('\n').length }));
-      out(a, secs, (r) => r.map((s) => `${String(s.line).padStart(5)}  ${'  '.repeat(s.level - 1)}${s.key.split(core.KEY_SEP).pop()}   ⟨${s.key}⟩`).join('\n'));
+      const secs = core.sectionSources(d.md, d.id).map((s) => ({ key: s.key, level: s.level, line: d.md.slice(0, s.start).split('\n').length }));
+      out(a, secs, (r) => r.length ? r.map((s) => `${String(s.line).padStart(5)}  ${'  '.repeat(s.level - 1)}${s.key.split(core.KEY_SEP).pop()}   ⟨${s.key}⟩`).join('\n') : `섹션 없음 (${core.formatFor(d.id).label} — 문서 전체로 고친다)`);
       return;
     }
     if (sub === 'show') {
       const d = await ws.readDoc(rest[0] || die('문서 id 가 필요합니다'));
-      const text = a.section ? core.getSectionText(d.md, String(a.section)) : d.md;
+      const text = a.section ? core.getSectionText(d.md, String(a.section), d.id) : d.md;
       if (text == null) die('섹션을 찾지 못했습니다: ' + a.section);
-      out(a, { id: d.id, version: d.version, encoding: d.encoding, eol: d.eol, section: a.section || null, text }, () => text);
+      if (d.binary && !text) die(`${core.formatFor(d.id).label} 파일은 글이 없습니다 — ${path.join(root, d.id)} 를 직접 여세요${d.deriveError ? ` (글을 뽑지 못함: ${d.deriveError})` : ''}`);
+      out(a, { id: d.id, format: core.formatFor(d.id).id, version: d.version, encoding: d.encoding, eol: d.eol, readOnly: d.readOnly, readOnlyReason: d.readOnlyReason, truncated: d.truncated, section: a.section || null, text }, () => text);
       return;
     }
     if (sub === 'write') {
@@ -515,12 +569,19 @@ async function main() {
       if (a.section) {
         // 섹션 쓰기는 판을 꼭 받는다 — 읽은 뒤 사람이 그 섹션을 고쳤으면 덮지 않게
         if (!a.base && !a.force) die('--section 쓰기에는 --base <판> 이 필요합니다 (fb show / doc show --json 의 version)');
-        const cur = core.getSectionText(d.md, String(a.section));
+        const cur = core.getSectionText(d.md, String(a.section), d.id);
         if (cur == null) die('섹션을 찾지 못했습니다: ' + a.section);
-        guardSection(cur, input, a);
-        next = /** @type {string} */ (core.replaceSection(d.md, String(a.section), input));
+        guardSection(d.md, String(a.section), input, d.id, a);
+        next = /** @type {string} */ (core.replaceSection(d.md, String(a.section), input, d.id));
       }
       const fbIds = a.fb ? String(a.fb).split(',').filter(Boolean) : undefined;
+      // Claude 는 실행되거나 도구가 읽는 형식(설정·코드·HTML)을 바로 고치지 않는다 — 제안만(D87, 앱의 Claude 작업과 같은 규칙)
+      if (ws.actor?.kind === 'assistant' && !core.claudeChanges(core.formatFor(d.id)).includes('edit')) {
+        const f = core.formatFor(d.id);
+        die(core.claudeChanges(f).length
+          ? `${f.label} 파일은 ${ws.actor.name || 'Claude'} 가 바로 고치지 않습니다 — docbench fb propose <피드백> --file <새 글> 로 제안하면 사람이 차이를 보고 적용합니다`
+          : `${f.label} 파일은 ${ws.actor.name || 'Claude'} 가 고치지 않습니다(읽고 답만) — fb reply 로 답하세요`, 4);
+      }
       try {
         const r = await ws.writeDoc(d.id, next, { baseVersion: a.base ? String(a.base) : d.version, summary: a.m, feedbackIds: fbIds, convertTo: a['convert-utf8'] ? 'utf-8' : undefined, by: ws.actor });
         // Claude 가 보낸 피드백을 고쳤으면 그 결과(전·후 판)를 붙여 "볼 것"으로 — 화면이 차이·되돌리기를 보인다(D73)
@@ -538,12 +599,32 @@ async function main() {
       } catch (e) {
         if (e.code === 'CONFLICT') die(`그 사이 문서가 바뀌었습니다 (지금 판 ${e.current.version}). 다시 읽고 고치세요.`, 3);
         if (e.code === 'BUSY') die(e.message, 3);
-        if (e.code === 'READ_ONLY') die(e.message + (e.reason === 'config' ? '' : ' (사람 확인 후 --convert-utf8 로 UTF-8 변환 저장 가능)'), 4);
+        if (e.code === 'READ_ONLY') die(e.message + (['config', 'format', 'too-large'].includes(e.reason) ? '' : ' (사람 확인 후 --convert-utf8 로 UTF-8 변환 저장 가능)'), 4);
+        throw e;
+      }
+      return;
+    }
+    if (sub === 'new') {
+      const id = rest[0] || die('문서 id 가 필요합니다 (작업 폴더 기준 경로, 예: docs/새-문서.md)');
+      const input = a.file || a.stdin ? await readInput(a) : '';
+      try {
+        const r = await ws.createDoc(id, input, { summary: a.m, by: ws.actor });
+        out(a, r, `만듦: ${r.id} 판 ${r.version}`);
+      } catch (e) {
+        if (e.code === 'CONFLICT') die(`이미 있는 문서입니다: ${id} (판 ${e.current.version}) — 고치려면 doc write`, 3);
+        if (e.code === 'READ_ONLY') die(e.message, 4);
+        if (e.code === 'BAD_REQUEST') die(e.message);
         throw e;
       }
       return;
     }
     die('알 수 없는 doc 명령: ' + sub);
+  }
+
+  if (cmd === 'overview') {
+    const o = await ws.overview();
+    out(a, o, () => overviewText(o));
+    return;
   }
 
   if (cmd === 'log') {

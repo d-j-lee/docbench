@@ -300,6 +300,7 @@ node bin\docbench.mjs serve D:\work\docs --allow-origin http://localhost:3000
 
 `docs/openapi.yaml` 의 엔드포인트를 구현하면 `createRestAdapters({ base })` 가 그대로 붙는다. 꼭 지킬 것:
 판 비교(`baseVersion` 다르면 409 + `current`), 피드백 `version` 비교, 피드백 고치기에서 `null` 은 그 값을 지움(빠진 키는 그대로 — `FeedbackPatch`), 줄바꿈은 LF 로 주고받기, 변경 알림(SSE 또는 폴링).
+여러 형식(D87)·개요(D88)는 선택이다 — `GET /raw`(그림·원본 내려받기, 내려받기 헤더로만), `GET /overview`(`core.computeOverview` 로 계산하면 같은 점검), `POST /doc`(새 문서) 를 구현하고 `session.features` 에 `raw`·`overview`·`create` 를 켠다. 없으면 화면이 그 기능만 숨긴다(그림 미리보기·개요 화면·README 만들기). 마크다운이 아닌 문서는 `DocContent.format` 과 형식 규칙(`core/formats`)을 따른다 — 뽑은 글·그림은 `readOnly`·`readOnlyReason: format`, 섹션 계산은 `sectionSources(md, id)` 처럼 문서 id 를 넘긴다.
 화면만 쓰고 어댑터를 직접 짜도 된다 — `src/types.ts` 의 `DocBenchAdapters` 를 채워 `createDocBench(el, { adapters })`.
 
 ## 4. 웹 컴포넌트로 엮기 (B·C)
@@ -394,7 +395,8 @@ el.setAttribute('theme', 'dark');                  // 대시보드 테마 따라
 | 앱 탭 | 대시보드 탭에 문서가 뜨고, 패널보다 긴 문서가 탭 안에서 스크롤된다. 대시보드 테마를 바꾸면 따라 바뀐다(`setTheme`). 초안을 적으면·결과가 오면 탭 배지(`onTodo`)가 바뀐다 |
 | 탭 보내기 | 초안 둘을 적어도 대시보드는 부르지 않는다 → 보내기(어디로 = 대시보드 터미널) → `onHandoff` 가 한 번, 두 id 와 `command`·`prompt` 로 → 작업대에 `message`. `handled: false` 면 작업대가 스스로 |
 | 탭 보안 | 허용하지 않은 출처에서 끼우면 iframe 이 막힌다(브라우저 콘솔에 `frame-ancestors`). 열쇠 없이 `curl <앱>/api/app/info` → 401. 대시보드 페이지에 다른 Host 로 요청하면 거부, 응답에 `Cache-Control: no-store`. 이벤트(`onEvent`)에 피드백 본문이 없다 |
-| 서버·화면 | `http://127.0.0.1:4317/` 에서 문서가 열리고 접기 상태가 새로고침 뒤에도 남는다 |
+| 서버·화면 | `http://127.0.0.1:4317/` 에서 개요가 뜨고(목적·구성·살펴볼 것), 문서가 열리고 접기 상태가 새로고침 뒤에도 남는다 |
+| 여러 형식 | YAML 은 키마다 섹션(그 키에 적기·고치기, Claude 는 제안만), CSV 는 표, Word·HWPX 는 뽑은 글(읽기만·원본 내려받기), 그림·PDF 미리보기·내려받기, 마크다운 안 상대 경로 그림이 보인다 |
 | 인코딩 | 실제 업무 문서(CP949 의 똠·햏 같은 확장 음절, UTF-8 BOM, UTF-16, CRLF)를 한 섹션 고쳐 저장 → 다른 편집기에서 글자·줄바꿈이 그대로. 메모장에서 고친 문서도 한 번 |
 | 외부 편집 | 편집기로 문서를 고치면 화면에 바뀐 글이 표시된다(앱·서버는 바로, 단일 HTML 은 몇 초·창으로 돌아오면 바로) |
 | CLI 왕복 | 초안은 `fb list` 에 안 보임 → 보내면 `docbench fb list --waiting assistant` 에 보임 → `fb reply --resolve` → 화면 "볼 것"에 회신 → 확인하면 끝남 |

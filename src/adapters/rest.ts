@@ -5,6 +5,8 @@
  */
 import { DocConflictError, DocReadOnlyError, FeedbackConflictError, type DocBenchAdapters, type DocEvent, type Feedback, type Person, type ProposeRequest, type RunLogLine, type RunsAvailability, type RunStatus, type TerminalHandoff, type TreeEntry, type ViewState } from '../types';
 import { normalizeFeedback } from '../core/feedback';
+import { formatFor } from '../core/formats';
+import type { WorkspaceOverview } from '../types';
 
 export interface RestOptions {
   /** API 기준 경로. 기본 '/api' */
@@ -25,7 +27,7 @@ interface Session {
   permissions: string[];
   assistant?: { name: string } | null;
   notify?: { label?: string } | null;
-  features?: { base?: boolean; versions?: boolean; inventory?: boolean; changes?: boolean; runs?: boolean; tree?: boolean; terminal?: boolean; instructions?: boolean };
+  features?: { base?: boolean; versions?: boolean; inventory?: boolean; changes?: boolean; runs?: boolean; tree?: boolean; terminal?: boolean; instructions?: boolean; raw?: boolean; overview?: boolean; create?: boolean };
   /** 사람이 어디서 왔나 — 'pc' 면 화면의 "나"에서 표시 이름을 바꿀 수 있다(PUT /me) */
   identity?: 'pc' | 'host';
 }
@@ -135,6 +137,16 @@ export function createRestAdapters(o: RestOptions = {}): DocBenchAdapters & { re
       // 서버는 파일을 바로 감시한다 — "확인 n초 전" 대신 실시간
       refresh: async (id) => { await call('GET', '/doc', undefined, { id }); return false; },
       tree: async (dir) => { try { return (await call<{ items: TreeEntry[] }>('GET', '/tree', undefined, { dir })).items; } catch (e) { if (e instanceof HttpError && e.status === 404) return null; throw e; } },
+      // 바이트 그대로(그림·PDF·원본) — 서버는 내려받기로만 내준다(형식은 화면이 문서 id 로 붙인다)
+      loadBytes: async (id) => {
+        const headers: Record<string, string> = { ...auth(), ...(o.headers ? await o.headers() : {}) };
+        const r = await f(base + '/raw' + qs({ id }), { headers, credentials: o.credentials || 'same-origin' });
+        if (r.status === 404 || r.status === 413) return null;
+        if (!r.ok) throw new HttpError(r.status, await r.json().catch(() => null));
+        return new Blob([await r.arrayBuffer()], { type: formatFor(id).mime || 'application/octet-stream' });
+      },
+      overview: async () => { try { return await call<WorkspaceOverview>('GET', '/overview'); } catch (e) { if (e instanceof HttpError && e.status === 404) return null; throw e; } },
+      create: (id, md, opts) => call<{ version: string; updatedAt?: string }>('POST', '/doc', { md, ...(opts?.summary ? { summary: opts.summary } : {}) }, { id }).catch(mapDocErr),
     },
     instructions: {
       load: () => call<{ text: string }>('GET', '/instructions').then((r) => r.text || ''),
@@ -216,6 +228,10 @@ export async function trimBySession(ad: DocBenchAdapters & { ready: Promise<Sess
   if (s.features && s.features.base === false) out.docs = { ...out.docs, loadBase: undefined };
   // 나무(펼친 폴더만 읽기)를 모르는 예전 서버·다른 백엔드면 빼고 예전 목록으로
   if (!s.features?.tree) out.docs = { ...out.docs, tree: undefined };
+  // 0.9 의 바이트·개요·새 문서(D87·D88)를 모르는 서버면 뺀다 — 화면이 그 단추·화면을 숨긴다
+  if (!s.features?.raw) out.docs = { ...out.docs, loadBytes: undefined };
+  if (!s.features?.overview) out.docs = { ...out.docs, overview: undefined };
+  if (!s.features?.create) out.docs = { ...out.docs, create: undefined };
   // 사람을 호스트가 정하는 백엔드(대시보드 로그인)는 이름을 바꾸지 않는다
   if (s.identity === 'pc') out.identity = { ...ad.identity!, source: 'pc' };
   else out.identity = { me: ad.identity!.me, can: ad.identity!.can, source: 'host' };

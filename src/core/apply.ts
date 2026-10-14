@@ -12,12 +12,28 @@
 import type { Feedback, FeedbackResult, Person, ReadingPlan, RunLogLine, RunStartInput, RunSummary } from '../types';
 import { findSection, getSectionText, keyToPath, replaceSection, sectionSources } from './source';
 import { MAX_SECTION_CHARS } from './prompt';
+import { claudeChanges, formatFor } from './formats';
 import {
   MAX_DOC_CHARS, emptySummary, locateSectionKey, noteText, planReview, planRun,
   type PlannedAction, type ReviewContext, type RunAction, type RunContext, type RunItem,
 } from './runs';
 
 export interface HostDoc { id: string; md: string; version: string; readOnly?: boolean; readOnlyReason?: string }
+
+/** 읽기 전용 까닭 중 사람이 동의하면 풀리는 것(인코딩) — 그때는 제안만 */
+const CONVERTIBLE = ['encoding', 'invalid-utf8', 'unrepresentable'];
+
+/**
+ * 이 문서에 Claude 결과가 할 수 있는 처리(D87): 형식이 허용하는 것(글·표는 고치기까지, 코드·설정은 제안만, 뽑은 글·그림은 없음) 중에서,
+ * 읽기 전용이면 — 설정·형식·크기로 막힌 것은 없음, 인코딩 때문이면 제안만(사람이 UTF-8 변환에 동의하고 적용)
+ */
+export function changesFor(doc: Pick<HostDoc, 'id' | 'readOnly' | 'readOnlyReason'>): ('edit' | 'propose')[] {
+  const byFormat = claudeChanges(formatFor(doc.id));
+  if (!doc.readOnly) return byFormat;
+  if (doc.readOnlyReason && CONVERTIBLE.includes(doc.readOnlyReason)) return byFormat.filter((a) => a === 'propose');
+  if (!doc.readOnlyReason || doc.readOnlyReason === 'folder') return byFormat.filter((a) => a === 'propose');
+  return [];
+}
 
 /** 저장소(서버 Workspace · 브라우저 FolderWorkspace · 메모리)가 주는 것. 실패는 code 'CONFLICT' | 'BUSY' | 'READ_ONLY' | 'NOT_FOUND' 로 */
 export interface ApplyHost {
@@ -77,24 +93,27 @@ export async function buildRunContext(host: ApplyHost, req: Req, o: { root: stri
       it.docTitle = titles.get(f.docId);
       it.docPath = host.docPath?.(doc.id);
       it.docVersion = doc.version;
-      // 설정으로 막은 문서는 고치지도 제안하지도 않는다. 인코딩 때문에 읽기 전용이면 제안만(사람이 UTF-8 변환에 동의하고 적용)
-      const canChange: RunAction[] = !doc.readOnly ? ['edit', 'propose'] : doc.readOnlyReason === 'config' ? [] : ['propose'];
-      const key = locateSectionKey(doc.md, f);
+      // 설정·형식으로 막은 문서는 고치지도 제안하지도 않는다. 인코딩 때문에 읽기 전용이면 제안만(사람이 UTF-8 변환에 동의하고 적용).
+      // 코드·설정 파일은 제안만, 뽑은 글·그림·로그는 답·질문·보류만(D87)
+      const canChange: RunAction[] = changesFor(doc);
+      const key = locateSectionKey(doc.md, f, doc.id);
       if (key) {
-        const text = getSectionText(doc.md, key);
-        const s = findSection(doc.md, key);
+        const text = getSectionText(doc.md, key, doc.id);
+        const s = findSection(doc.md, key, doc.id);
         it.sectionKey = key;
         it.sectionLine = s ? doc.md.slice(0, s.start).split('\n').length : undefined;
         if (text != null && text.length > MAX_SECTION_CHARS) it.tooLarge = true;
         else { it.sectionText = text ?? undefined; it.allowed = [...canChange, ...it.allowed]; }
       } else if (f.target.kind === 'doc') {
-        it.sectionKeys = sectionSources(doc.md).map((s) => s.key);
+        it.sectionKeys = sectionSources(doc.md, doc.id).map((s) => s.key);
         if (doc.md.length <= MAX_DOC_CHARS && canChange.length) { it.wholeDoc = true; it.docText = doc.md; }
-        if (it.sectionKeys.length || it.wholeDoc) it.allowed = [...canChange, ...it.allowed];
+        if ((it.sectionKeys.length && canChange.length) || it.wholeDoc) it.allowed = [...canChange, ...it.allowed];
       }
       if (req.kind === 'propose') it.allowed = it.allowed.filter((a) => a !== 'edit');
-      // 파일을 읽을 수 없는 Claude(터미널, 경로를 모름)에게는 섹션 글이 곧 전부다 — 문서 전체 피드백이면 문서 글도
-      if (o.inline && f.target.kind === 'doc' && !it.docText && doc.md.length <= MAX_DOC_CHARS) it.docText = doc.md;
+      // 파일을 읽을 수 없는 Claude(터미널, 경로를 모름)에게는 섹션 글이 곧 전부다 — 문서 전체 피드백이면 문서 글도.
+      // 뽑은 글(Word·한글 …)은 Claude 의 Read 가 읽지 못하는 원본이라 늘 넣는다
+      const derived = formatFor(doc.id).kind === 'derived';
+      if ((o.inline || derived) && f.target.kind === 'doc' && !it.docText && doc.md && doc.md.length <= MAX_DOC_CHARS) it.docText = doc.md;
     }
     if (ctx.mode === 'propose') it.allowed = it.allowed.filter((a) => a !== 'edit');
     ctx.items.push(it);
@@ -111,7 +130,9 @@ export async function buildReviewContext(host: ApplyHost, req: Req, o: { root: s
     let doc: HostDoc;
     try { doc = await host.readDoc(id); } catch { skipped.push({ id, reason: 'no-doc' }); continue; }
     const title = (await host.titleOf?.(id).catch(() => id)) || id;
-    ctx.docs.push({ id: doc.id, title, md: doc.md, version: doc.version, path: host.docPath?.(doc.id), readOnly: !!doc.readOnly && doc.readOnlyReason === 'config' });
+    // 질문만: 설정으로 막혔거나 Claude 가 읽기만 하는 형식(로그·뽑은 글·그림 — D87). 코드·설정 파일의 제안은 사람이 보고 적용하므로 그대로
+    const questionsOnly = (!!doc.readOnly && doc.readOnlyReason === 'config') || !claudeChanges(formatFor(doc.id)).length;
+    ctx.docs.push({ id: doc.id, title, md: doc.md, version: doc.version, path: host.docPath?.(doc.id), readOnly: questionsOnly, ...(formatFor(doc.id).kind === 'binary' ? { binary: true } : {}) });
   }
   return { ctx, skipped };
 }
@@ -173,9 +194,9 @@ async function applyOne(host: ApplyHost, req: Req, a: PlannedAction, actor: Pers
     // 사람이 그 사이 같은 곳을 고쳤으면 덮지 않고 제안으로. 다른 곳만 바뀌었으면 지금 판에 그대로 끼운다
     for (let i = 0; i < 3 && action === 'edit'; i++) {
       const doc = await host.readDoc(a.docId);
-      const cur = whole ? doc.md : getSectionText(doc.md, a.sectionKey);
+      const cur = whole ? doc.md : getSectionText(doc.md, a.sectionKey, a.docId);
       if (cur == null || !sameText(cur, a.before || '')) { action = 'propose'; note = 'changed-meanwhile'; break; }
-      const next = whole ? a.text : replaceSection(doc.md, a.sectionKey, a.text);
+      const next = whole ? a.text : replaceSection(doc.md, a.sectionKey, a.text, a.docId);
       if (next == null) { action = 'propose'; break; }
       // 피드백이 아직 보낸 상태인지 먼저 본다 — 닫힌 피드백 때문에 문서를 고치지 않게
       const f = await host.getFeedback(a.feedbackId).catch(() => null);
@@ -267,7 +288,7 @@ export async function applyReviewOutput(host: ApplyHost, req: Req, ctx: ReviewCo
       let before = c.before;
       if (kind === 'suggest') {
         const doc = await host.readDoc(c.docId);
-        const cur = c.sectionKey === '*' ? doc.md : getSectionText(doc.md, c.sectionKey);
+        const cur = c.sectionKey === '*' ? doc.md : getSectionText(doc.md, c.sectionKey, c.docId);
         if (cur == null || !sameText(cur, before || '')) { kind = 'question'; before = undefined; }
       }
       const whole = c.sectionKey === '*';
@@ -299,13 +320,13 @@ export async function applyReviewOutput(host: ApplyHost, req: Req, ctx: ReviewCo
  * Claude 가 바로 고친 것을 되돌린 문서. 그 뒤 그 자리가 또 바뀌었으면(지금 글 ≠ Claude 가 쓴 글) 저절로 되돌리지 않는다.
  * fromMd·toMd: 고치기 전·후 판의 문서 글. section 이 없으면 문서 전체
  */
-export function planRevert(curMd: string, fromMd: string, toMd: string, section?: string): { md: string } | { problem: 'changed-after' | 'no-section' } {
+export function planRevert(curMd: string, fromMd: string, toMd: string, section?: string, id?: string): { md: string } | { problem: 'changed-after' | 'no-section' } {
   if (!section) return sameText(curMd, toMd) ? { md: fromMd } : { problem: 'changed-after' };
-  const cur = getSectionText(curMd, section);
-  const was = getSectionText(fromMd, section);
-  const wrote = getSectionText(toMd, section);
+  const cur = getSectionText(curMd, section, id);
+  const was = getSectionText(fromMd, section, id);
+  const wrote = getSectionText(toMd, section, id);
   if (cur == null || was == null || wrote == null) return { problem: 'no-section' };
   if (!sameText(cur, wrote)) return { problem: 'changed-after' };
-  const md = replaceSection(curMd, section, was);
+  const md = replaceSection(curMd, section, was, id);
   return md == null ? { problem: 'no-section' } : { md };
 }

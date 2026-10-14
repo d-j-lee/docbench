@@ -8,7 +8,8 @@ Documents stay in folders on this PC, and DocBench never sends them anywhere (on
 Click **Getting started** (the name of this workspace) at the top left and choose **Open folder…**.
 
 - Even a whole drive opens instantly — like an explorer, only **expanded folders** are read.
-- Click a Markdown (`.md`) document to open it; other files are dimmed.
+- Opening a folder starts at the **Overview** — what this workspace is for (the first paragraph of the top README), what is in it, and what is worth a look (files that look like secrets, version copies, broken links, review dates …). **Workbench › Overview** on the left brings you back any time.
+- Click a document to open it — Markdown, config files such as YAML and JSON (each key is a section), CSV tables, text and logs, Word, PowerPoint, Excel, HWPX and Jupyter (text extracted, read only), PDFs and images. Files DocBench does not open are dimmed (code is left out by default).
 - **Pin** folders and documents you use often; they stay under "Working on" at the top.
 - Phone and tablet browsers cannot write to folders, so they are for **looking around and practice** only. Open your own documents and run Claude jobs in Edge or Chrome on a PC.
 

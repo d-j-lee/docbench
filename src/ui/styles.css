@@ -864,3 +864,117 @@
 .docbench .db-bub-prop { font-size: 12px; font-weight: 600; color: var(--db-chg); }
 .docbench .db-bub-sugg { font-size: 12.5px; color: var(--db-ink-2); white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 @media print { .docbench .db-bubs { display: none; } }
+
+/* ---------- 여러 형식 (D87) ---------- */
+/* 원문: 줄 번호는 CSS 카운터(글자가 아니다 — 고르기·찾기·인용에 섞이지 않는다) */
+.docbench .db-md pre.db-src { padding: 10px 12px 10px 0; font-size: 12.5px; line-height: 1.6; tab-size: 4; white-space: pre; }
+.docbench .db-md pre.db-src .ln { counter-increment: ln; }
+.docbench .db-md pre.db-src .ln::before { content: counter(ln); display: inline-block; width: 3.6em; margin-right: 12px; padding-right: 8px; text-align: right; color: var(--db-ink-3); opacity: .7; border-right: 1px solid var(--db-line); user-select: none; -webkit-user-select: none; font-variant-numeric: tabular-nums; }
+.docbench .db-md pre.db-src.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.docbench .db-md pre.db-src.wrap .ln::before { display: none; }
+.docbench .db-md pre.db-src.wrap, .docbench .db-md pre.db-src.plain { padding-left: 14px; }
+.docbench .db-md pre.db-src.plain { font: 13.5px/1.7 var(--db-font-body); background: transparent; border: 1px solid var(--db-line); }
+.docbench .db-md .db-okey { font-family: var(--db-font-mono); font-size: 14px; font-weight: 600; letter-spacing: 0; margin: 1.1em 0 .35em; }
+.docbench .db-md h3.db-okey { font-size: 13px; color: var(--db-ink-2); }
+/* 색 — 주석·글·수·낱말·기호·태그·키·변수·머리·지움·더함 */
+.docbench .tk-c { color: var(--db-ink-3); font-style: italic; }
+.docbench .tk-s { color: var(--db-go); }
+.docbench .tk-n { color: var(--db-cat-duplicate); }
+.docbench .tk-k { color: var(--db-info); font-weight: 600; }
+.docbench .tk-p { color: var(--db-ink-3); }
+.docbench .tk-t { color: var(--db-cat-structure); }
+.docbench .tk-a { color: var(--db-cat-gap); }
+.docbench .tk-v { color: var(--db-cat-risk); }
+.docbench .tk-h { color: var(--db-wait); font-weight: 600; }
+.docbench .tk-d { color: var(--db-bad); }
+.docbench .tk-i { color: var(--db-go); }
+/* 표(CSV·TSV) */
+.docbench .db-md table.db-csv { width: auto; min-width: 100%; font-size: 12.5px; }
+.docbench .db-md table.db-csv thead th { position: sticky; top: 0; z-index: 1; }
+.docbench .db-md table.db-csv td { white-space: pre-wrap; max-width: 40ch; }
+.docbench .db-md table.db-csv .rn { color: var(--db-ink-3); text-align: right; min-width: 2.5em; user-select: none; -webkit-user-select: none; font-variant-numeric: tabular-nums; }
+.docbench .db-md table.db-csv td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.docbench .db-md table.db-csv tbody tr:hover td { background: var(--db-sunk); }
+.docbench .db-md .db-view-note { font-size: 12px; color: var(--db-ink-3); margin: 0 0 6px; }
+/* HTML 읽기 화면 */
+.docbench .db-md.db-html { border-left: 3px solid var(--db-line); padding-left: 14px; }
+/* 그림 · 원본 카드 */
+.docbench .db-md .db-figure { margin: 0 0 1em; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.docbench .db-md .db-img { max-width: 100%; max-height: 78vh; border: 1px solid var(--db-line); border-radius: 6px; background: repeating-conic-gradient(var(--db-sunk) 0% 25%, var(--db-surface) 0% 50%) 50% / 16px 16px; }
+.docbench .db-md img.db-img-miss { min-width: 2em; min-height: 1.4em; outline: 1px dashed var(--db-line-2); }
+.docbench .db-filecard { display: flex; align-items: center; gap: 12px; border: 1px solid var(--db-line); border-radius: 10px; background: var(--db-surface); padding: 14px 16px; max-width: 520px; }
+.docbench .db-filecard > .ic svg { width: 28px; height: 28px; color: var(--db-ink-2); }
+.docbench .db-filecard .t { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.docbench .db-filecard .t b { overflow-wrap: anywhere; }
+.docbench .db-filecard .t small { color: var(--db-ink-3); font-size: 12px; }
+.docbench .db-notice.db-row { justify-content: space-between; }
+.docbench .db-notice.db-row > span { flex: 1; min-width: 14em; }
+/* 머리: 형식·Claude 가 할 수 있는 일·앞머리 */
+.docbench .db-fmt { font-size: 11px; font-weight: 600; border-radius: 4px; padding: 0 6px; background: var(--db-sunk); color: var(--db-ink-2); }
+.docbench .db-fmt.claude { background: var(--db-chg-soft); color: var(--db-chg); cursor: help; }
+.docbench .db-fm { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-top: 8px; }
+.docbench .db-fm-c { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; border-radius: 999px; padding: 0 9px; background: var(--db-sunk); color: var(--db-ink-2); line-height: 1.75; }
+.docbench .db-fm-c svg { width: 12px; height: 12px; }
+.docbench .db-fm-c b { font: 500 11px var(--db-font-mono); color: var(--db-ink-3); }
+.docbench .db-fm-c.status { background: var(--db-info-soft); color: var(--db-info); font-weight: 600; }
+.docbench .db-fm-c.tag { background: transparent; border: 1px solid var(--db-line); }
+.docbench .db-fm-c.date.past { background: var(--db-wait-soft); color: var(--db-wait); }
+/* 왼쪽 목록: 형식 그림 */
+.docbench .db-nav[data-group="data"] > .ic { color: var(--db-cat-gap); }
+.docbench .db-nav[data-group="code"] > .ic { color: var(--db-cat-structure); }
+.docbench .db-nav[data-group="office"] > .ic, .docbench .db-nav[data-group="pdf"] > .ic { color: var(--db-info); }
+.docbench .db-nav[data-group="image"] > .ic { color: var(--db-cat-risk); }
+
+/* ---------- 작업 공간 개요 (D88) ---------- */
+.docbench .db-ov { max-width: 92ch; margin: 0 auto; }
+.docbench .db-ov-purpose { margin: 6px 0 0; font-size: 15.5px; line-height: 1.65; color: var(--db-ink); }
+.docbench .db-ov-purpose .db-linkbtn { font-size: 12.5px; }
+.docbench .db-ov-h { margin: 22px 0 8px; font: 650 15px/1.4 var(--db-font-display); }
+.docbench .db-stat .k.sub { font-size: 11.5px; opacity: .85; }
+.docbench .db-linkbtn { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; color: var(--db-info); cursor: pointer; font: inherit; text-align: left; }
+.docbench .db-linkbtn:hover { text-decoration: underline; }
+.docbench .db-linkbtn.soft { color: var(--db-ink-3); font-size: 12.5px; }
+.docbench .db-linkbtn .ic svg { width: 13px; height: 13px; }
+.docbench .db-ov-bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; background: var(--db-sunk); }
+.docbench .db-ov-bar > span { flex-basis: 0; min-width: 3px; }
+.docbench .db-ov-bar > span + span { border-left: 2px solid var(--db-surface); }
+.docbench .db-ov-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px; font-size: 12.5px; color: var(--db-ink-2); }
+.docbench .db-ov-legend .lg { display: inline-flex; align-items: center; gap: 5px; }
+.docbench .db-ov-legend i { width: 9px; height: 9px; border-radius: 2px; }
+.docbench .db-ov-legend .ic svg { width: 13px; height: 13px; }
+.docbench .db-ov-legend small { color: var(--db-ink-3); font-size: 11.5px; }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-doc { background: var(--db-go); }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-data { background: var(--db-cat-gap); }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-code { background: var(--db-cat-structure); }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-office { background: var(--db-info); }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-pdf { background: var(--db-bad); }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-image { background: var(--db-cat-risk); }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-media { background: var(--db-chg); }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-archive { background: var(--db-ink-2); }
+.docbench :is(.db-ov-bar > span, .db-ov-legend i).g-other { background: var(--db-line-2); }
+.docbench .db-ov-check .nt b { font-weight: 600; }
+.docbench .db-ov-check > .db-btn { flex: none; align-self: center; }
+.docbench .db-ov-paths { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.docbench .db-ov-paths .db-chip { font: 11.5px/1.7 var(--db-font-mono); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.docbench .db-ov-paths .db-hint { font-size: 11.5px; align-self: center; }
+.docbench table.db-ov-folders { border-collapse: collapse; width: 100%; font-size: 13px; }
+.docbench .db-ov-folders th, .docbench .db-ov-folders td { padding: 6px 10px; border-bottom: 1px solid var(--db-line); text-align: left; vertical-align: top; }
+.docbench .db-ov-folders th { background: var(--db-sunk); font-size: 12px; color: var(--db-ink-2); font-weight: 600; white-space: nowrap; }
+.docbench .db-ov-folders .n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.docbench .db-ov-folders td.role { color: var(--db-ink-2); min-width: 14em; }
+.docbench .db-ov-folders tr:last-child td { border-bottom: 0; }
+.docbench .db-ov-meta { display: flex; flex-direction: column; gap: 6px; }
+.docbench .db-ov-meta .db-hint { margin: 0; font-size: 12.5px; }
+.docbench .db-ov-meta .row { display: flex; gap: 10px; align-items: baseline; }
+.docbench .db-ov-meta .row .k { flex: none; width: 4.5em; font-size: 12px; color: var(--db-ink-3); }
+.docbench .db-ov-meta .db-fm { margin: 0; }
+.docbench .db-ov-files { display: flex; flex-direction: column; border: 1px solid var(--db-line); border-radius: 9px; background: var(--db-surface); overflow: hidden; }
+.docbench .db-ov-file { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border: 0; border-bottom: 1px solid var(--db-line); background: none; color: var(--db-ink); font: 12.5px/1.5 var(--db-font-mono); text-align: left; cursor: pointer; }
+.docbench .db-ov-file:last-child { border-bottom: 0; }
+.docbench .db-ov-file:hover { background: var(--db-sunk); }
+.docbench .db-ov-file.nodoc { color: var(--db-ink-2); }
+.docbench .db-ov-file .ic svg { width: 14px; height: 14px; color: var(--db-ink-3); }
+.docbench .db-ov-file .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docbench .db-ov-file small { flex: none; font: 11.5px var(--db-font-body); color: var(--db-ink-3); }
+.docbench .db-ov-two { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0 18px; }
+.docbench .db-ov-foot { margin: 18px 0 8px; font-size: 12px; }

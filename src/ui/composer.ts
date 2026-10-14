@@ -9,6 +9,7 @@
 import type { Feedback, FeedbackCategory, TextSelector } from '../types';
 import { FEEDBACK_CATEGORIES, isCategory } from '../core/feedback';
 import { KEY_SEP, parseKey, getSectionText } from '../core/source';
+import { claudeChanges, formatFor } from '../core/formats';
 import { h, icon } from './dom';
 import type { App } from './app';
 import type { Section } from './render';
@@ -103,11 +104,12 @@ export class Composer {
         : sec.path.slice(-2).join(KEY_SEP);
     let mode: 'ask' | 'rewrite' = existing?.suggestion != null ? 'rewrite' : 'ask';
     let urgent = existing?.severity === 'high';
-    const canRewrite = !target.item && !!sec;
+    // 고쳐 쓰기 제안은 Claude 가 고치거나 제안할 수 있는 형식에서만(뽑은 글·로그·그림은 읽고 답만, D87)
+    const canRewrite = !target.item && !!sec && !!target.docId && claudeChanges(formatFor(target.docId)).length > 0;
     const ta = h('textarea', { class: 'db-cmp-ta', rows: 3, placeholder: t('compose.placeholder'), 'aria-label': t('compose.placeholder') }) as HTMLTextAreaElement;
     ta.value = existing?.body || '';
     // 바꿀 글: 문구면 그 문구, 섹션이면 섹션 본문(제목 줄 빼고)
-    const original = target.selector?.exact ?? (sec && target.docId && app.doc?.id === target.docId ? (getSectionText(app.doc.content.md, sec.key) || '').split('\n').slice(1).join('\n').replace(/^\n+|\n+$/g, '') : '');
+    const original = target.selector?.exact ?? (sec && target.docId && app.doc?.id === target.docId ? (getSectionText(app.doc.content.md, sec.key, target.docId) || '').split('\n').slice(1).join('\n').replace(/^\n+|\n+$/g, '') : '');
     const rw = h('textarea', { class: 'db-cmp-ta rw', rows: 4, 'aria-label': t('compose.rewrite') }) as HTMLTextAreaElement;
     rw.value = existing?.suggestion ?? original;
     const why = h('input', { class: 'db-cmp-why', type: 'text', placeholder: t('compose.rewrite.why') }) as HTMLInputElement;

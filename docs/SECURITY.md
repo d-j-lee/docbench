@@ -9,9 +9,13 @@
 | 같은 네트워크의 다른 PC 가 접속 | `127.0.0.1` 에만 묶는다. 다른 주소로 열려면 `--host` 를 명시해야 한다(DocBench 앱은 그 옵션도 없다) |
 | 악성 웹페이지가 로컬 서버에 요청 (CSRF) | 쓰기 요청은 `X-DocBench: 1` 헤더 필수 — 단순 폼·이미지 요청으로는 못 단다. CORS 는 `--allow-origin` 에 적은 출처만 |
 | DNS rebinding (악성 도메인이 127.0.0.1 로 풀림) | `Host` 헤더가 `localhost`·`127.0.0.1`·`::1`·`--allow-host` 가 아니면 403 |
-| 작업 폴더 밖 파일 읽기·쓰기 | 문서 id 를 정규화해 작업 폴더 안 + `include` 패턴 + `exclude` 아님만 허용. 설정과 상관없이 **마크다운(`.md`·`.markdown`)이고 숨김(`.git`·`.docbench`·`.vscode` …)·`node_modules` 안이 아닌 것만** 문서가 된다(`core.docFloor`, D71) — 함께 쓰는 `config.json` 의 `include` 를 `**/*` 로 넓히고 꾸민 피드백으로 Claude 작업이 `.git/hooks/…`·스크립트를 고치게 하는 길을 막는다(시험으로 확인). `..`·절대 경로·드라이브 문자·NUL 거부. 심볼릭 링크는 훑지 않는다. 폴더 나무(`/tree`)는 심볼릭 링크·정션을 빼고, 실제 경로가 작업 폴더 밖이면 없는 폴더로 답한다 |
+| 작업 폴더 밖 파일 읽기·쓰기 | 문서 id 를 정규화해 작업 폴더 안 + `include` 패턴 + `exclude` 아님만 허용. 설정과 상관없이 **작업대가 아는 형식(`core/formats` 의 허용 목록 — 확장자·이름)이고 숨김(`.git`·`.docbench`·`.vscode` …)·`node_modules` 안이 아닌 것만** 문서가 된다(`core.docFloor`, D71·D87) — 함께 쓰는 `config.json` 의 `include` 를 `**/*` 로 넓혀도 `.git/hooks/…`·`.env`·키 파일·실행 파일은 문서가 되지 못한다(시험으로 확인). 문서가 되는 코드·설정 파일도 Claude 는 고치지 못하고 제안만 한다(아래 "형식마다 Claude 가 할 수 있는 일"). `..`·절대 경로·드라이브 문자·NUL 거부. 심볼릭 링크는 훑지 않는다. 폴더 나무(`/tree`)는 심볼릭 링크·정션을 빼고, 실제 경로가 작업 폴더 밖이면 없는 폴더로 답한다 |
 | 피드백 id 로 경로 탈출 | `^[\w.-]{1,120}$` 만 허용 |
-| 문서 속 스크립트 (XSS) | 마크다운 HTML 은 DOMPurify 로 정제. 단독 화면은 CSP `script-src 'self'` |
+| 문서 속 스크립트 (XSS) | 마크다운 HTML 은 DOMPurify 로 정제. HTML 문서는 읽기 화면으로만 — 스크립트·스타일·폼·끼운 창·`class`·`id`·`data-*`·이벤트 속성을 지우고 그린다(화면 규칙과 겹치는 표시로 섹션을 꾸미지 못하게). SVG 는 정제(스크립트·이벤트 속성·`javascript:`·foreignObject 제거)한 뒤 `<img>`(Blob)로만 그린다 — 사람이 "새 탭에서 그림 열기"를 해도 이 화면의 출처에서 스크립트가 돌지 않게. 원문 색 입히기는 글자를 모두 이스케이프하고 태그만 씌운다. 단독 화면은 CSP `script-src 'self'` |
+| 파일 바이트를 내주는 길로 스크립트 실행 (`/raw`) | 서버는 문서(위 바닥 규칙을 지난 것)만, 40 MB 까지, **내려받기로만** 내준다 — `Content-Type: application/octet-stream`·`Content-Disposition: attachment`·`X-Content-Type-Options: nosniff`·`Content-Security-Policy: sandbox`. 화면이 형식에 맞춰 Blob 으로 만들어 `<img>`·내려받기에만 쓴다(같은 출처에서 HTML·SVG 가 페이지로 열리지 않는다). 열쇠·토큰 규칙은 다른 API 와 같다 |
+| 오피스·압축 파일로 서버 멈추기 (압축 폭탄·부풀린 목록) | 뽑기는 40 MB 넘는 원본을 열지 않는다. ZIP 항목은 중앙 디렉터리로 찾고, 적힌 크기를 믿지 않고 **푸는 동안** 한도를 잰다(항목 64 MB, 파일 하나 합계 160 MB — 서버 zlib `maxOutputLength`, 브라우저는 조각마다 세어 멈춘다). 같은 슬라이드·시트를 수백 번 가리키는 목록은 한 번만(1000개까지), 뽑은 글이 200만 자를 넘으면 더 읽지 않는다. 서버는 비동기로 풀어(스레드 풀) 그동안에도 다른 요청을 받는다. 깨졌거나 암호가 걸린 파일은 글 없이 까닭만(`deriveError`) — 시험으로 확인(독립 검토에서 재현한 4.7 KB → 2.5 GB 를 막음) |
+| 아주 긴 줄로 화면·서버 멈추기 | 제목 찾기는 줄 앞 2000자만 보고, 정규식은 되짚기가 제곱으로 늘지 않게 썼다(긴 빈칸 줄 실측). 색 입히기는 2000자 넘는 줄을 칠하지 않는다 |
+| 개요·Claude 가 비밀을 퍼뜨림 | 비밀로 보이는 이름(`.env*`·`credentials.json`·`secrets.yaml`·`service-account*.json`·키·인증서 …)은 형식이 맞아도 **문서가 되지 않는다**(`formatOf` → 없음) — 화면이 읽지 않고, 기록 폴더에 판 글로 남지 않고, Claude 검토 맥락에 들어가지 않는다. 개요(D88)는 이름·크기·날짜와 README·앞머리·링크만 읽고 그런 파일은 **이름으로만** 짚는다(시험으로 확인) |
 | 화면을 남의 페이지에 몰래 담기 | `frame-ancestors 'self'` + `--allow-origin` 출처만 |
 | 큰 요청으로 메모리 고갈 | 본문 8 MB 상한 — 넘으면 더 모으지 않고 413 |
 | 동시 저장으로 남의 수정 덮어쓰기 | 같은 문서 쓰기를 줄 세우고(프로세스 안 + 서버·CLI 사이 잠금 파일) 판을 비교(409). CLI 도 종료 코드 3 으로 멈춘다 |
@@ -91,6 +95,18 @@ DocBench 앱은 `127.0.0.1` 에만 여는 이 PC 사람 한 명의 도구라 작
 | 단추 하나로 열기(deep link, D80) | `claude-cli://open` 은 **입력만** 해 두고 보내지 않는다(Claude Code 가 "Prompt from an external link" 경고를 띄우고 사람이 읽고 Enter). 여는 폴더(`cwd`)는 기록 폴더의 절대 경로일 때만 — 앱·서버는 자기가 아는 경로로, 단일 HTML 은 사람이 알려 준 경로를 **끝 폴더 이름이 기록 폴더와 같을 때만** 받는다(문서 폴더에서 켜는 실수로 그 폴더의 지시·훅이 섞이지 않게). 네트워크 경로·`..`·방향 제어 문자는 받지 않는다(`isRoomPath`, Claude Code 도 거부). 경로는 이 브라우저(localStorage)에만 남고 함께 쓰는 기록 파일에는 적지 않는다. 기다리는 요청의 안내는 목록에 붙이되 어댑터가 아는 것으로만 만든다(`RunStatus.terminal` — 파일에서 읽지 않는다) |
 | 멈춘 요청·쓰다 만 결과 | 멈춤 요청이 있으면 결과가 와도 반영하지 않는다. 결과가 아직 JSON 이 아니면 1분까지 기다린다(쓰는 중·Windows 공유 위반). 반영 중에 3분 넘게 멈추면 실패로 닫는다. 화면과 앱이 같은 규칙(`terminalStep`)으로, 잠금 안에서 한 번만 |
 
+### 형식마다 Claude 가 할 수 있는 일 (D87)
+
+무인 실행의 결과가 실행되는 파일을 바꾸면 그다음 도구가 그대로 실행한다(`package.json` 의 scripts, CI 설정, `docker-compose.override.yml` 처럼 저절로 읽히는 새 파일). 그래서 형식이 Claude 결과의 한도를 정하고, 세 길이 같은 규칙을 쓴다.
+
+| 형식 | Claude 결과 | 지키는 곳 |
+|---|---|---|
+| 마크다운·글·CSV/TSV·도식 원문·AsciiDoc·rST·Org | 고치기·제안 | — |
+| 코드·HTML·XML·SVG·SQL·diff·설정(YAML·JSON·TOML·INI), 이름으로 정한 것(의존성 목록 `requirements*.txt`·`constraints*`, `CODEOWNERS`, `CMakeLists.txt`, MDX, AI 지시 파일 `CLAUDE.md`·`AGENTS.md`·`GEMINI.md`·`SKILL.md` — 다음 세션의 지시가 된다) | **제안만** — 사람이 화면에서 차이를 보고 적용 | 앱 엔진 `changesFor` → `planRun`(고치기는 제안으로 바뀐다), CLI `doc write`(Claude 로 쓰면 종료 4 — `fb propose` 로), `doc new`(Claude 는 이 형식을 새로 만들지 못한다) |
+| 로그·뽑은 글(오피스·HWPX·Jupyter)·그림·PDF | 읽고 답만 | 같은 곳 + 서버 `writeDoc` 이 형식으로 거부(`READ_ONLY`·`format`) |
+
+터미널의 Claude 자리(D76)는 문서 폴더의 문서 확장자를 모두 `Edit` 금지로 둔다 — 기록 폴더 안 결과 파일(`runs/<id>.result.json`)만 쓴다(기록이 문서 폴더 안이면 `.json` 은 빼서 결과 파일을 막지 않는다).
+
 ### 그 밖의 AI 호출
 
 - **AI 제안**(`POST /assistant/propose`, 예전 길): 섹션 원문과 피드백만 넘기고 도구를 모두 끈다(`--tools ""`, `--strict-mcp-config`), 위와 같이 문서 폴더 밖에서 `--restricted --safe-mode`. 세션도 남기지 않는다(`--no-session-persistence`).
@@ -146,7 +162,7 @@ DocBench 앱은 `127.0.0.1` 에만 여는 이 PC 사람 한 명의 도구라 작
 ## 단일 HTML (`release/docbench.html`)
 
 - 서버가 없다. 브라우저가 사용자가 고른 폴더(문서 폴더와 기록 보관함)만 읽고 쓴다(File System Access API — 고를 때 브라우저가 권한을 묻고, 사이트 설정에서 언제든 뺄 수 있다). 고른 폴더 밖은 경로 정규화로 거부한다.
-- DocBench 는 문서를 어디로도 보내지 않는다. 그 위에 파일 안의 CSP 가 `connect-src 'none'`·`form-action 'none'`·`img-src data: blob:` 이고 referrer 를 보내지 않아, 페이지 안에서 요청·그림·폼으로 새는 길도 막는다(처음 판은 `img-src *` 라 그림 주소로 새는 길이 열려 있었다 — 독립 검토에서 재현, 고침). 그래서 문서 속 바깥 주소 그림은 보이지 않는다. 새 창을 여는 이동(`window.open`)까지는 CSP 로 막을 수 없다 — 문서 속 스크립트는 DOMPurify 가 지우므로 주입된 코드가 있을 때만 의미가 있다.
+- DocBench 는 문서를 어디로도 보내지 않는다. 그 위에 파일 안의 CSP 가 `connect-src 'none'`·`form-action 'none'`·`img-src data: blob:` 이고 referrer 를 보내지 않아, 페이지 안에서 요청·그림·폼으로 새는 길도 막는다(처음 판은 `img-src *` 라 그림 주소로 새는 길이 열려 있었다 — 독립 검토에서 재현, 고침). 그래서 문서 속 바깥 주소 그림은 보이지 않는다. 문서 옆 상대 경로 그림은 고른 폴더에서 읽어 `blob:` 으로 보인다(D89 — CSP 를 풀지 않는다). 새 창을 여는 이동(`window.open`)까지는 CSP 로 막을 수 없다 — 문서 속 스크립트는 DOMPurify 가 지우므로 주입된 코드가 있을 때만 의미가 있다.
 - 마크다운 HTML 은 서버 방식과 같이 DOMPurify 로 정제한다.
 - 고른 폴더 핸들(문서 폴더·기록 보관함)은 대시보드 등 주소로 내줄 때만 그 출처의 IndexedDB 에 기억한다. **`file://` 로 열면 기억하지 않는다** — 모든 로컬 HTML 파일이 한 출처를 나눠 써서, 같은 브라우저로 연 다른 HTML 파일(메일 첨부 등)이 핸들을 꺼내 폴더를 읽고 쓸 수 있었다(독립 검토에서 재현, 고침). 대시보드에 둘 때는 신뢰하는 페이지만 있는 출처에서 내준다.
 - **기록은 브라우저 안에 두지 않는다**: 기록 폴더는 처음 저장할 때 사람이 고르고, 보기만 할 때는 아무것도 만들지 않는다(D65). 브라우저 안 저장소는 `file://` 에서 안전한 자리가 없다 — OPFS 는 막히고(SecurityError) IndexedDB 는 모든 로컬 HTML 파일이 나눠 쓴다(실측).

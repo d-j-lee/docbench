@@ -112,6 +112,10 @@ test('앱 화면: 열쇠 없이는 여는 방법 → 처음 연 주소의 열쇠
   assert.equal(added.status, 200, JSON.stringify(added.data));
   await page.goto(base + '/?lang=ko');
   await page.locator('.db-ws', { hasText: path.basename(dir) }).waitFor();
+  // 처음 여는 작업 공간은 개요부터(D88) — 목적(README 첫 문단)·구성·점검
+  await page.locator('.db-ov .db-ov-purpose').waitFor();
+  await page.locator('.db-tool[data-tool="overview"][aria-pressed="true"]').waitFor();
+  await page.evaluate(() => { location.hash = 'README.md'; });
   await page.waitForSelector('.db-sec');
   // 밖(터미널의 Claude·동료)에서 생긴 피드백이 실시간으로 — 사람이 API 로 단 것은 보낸 것(보냄 탭)
   const docId = await page.evaluate(() => decodeURIComponent(location.hash.slice(1)));
@@ -134,7 +138,7 @@ test('대시보드 탭: host.js 로 끼우면 어두운 테마·할 일 수·이
   const f = (await call('POST', `/api/w/${id}/feedback`, { docId: 'README.md', target: { kind: 'doc' }, body: '요약을 더해 줘', waitingOn: 'assistant' })).data;
   await page.goto(`${hostOrigin}/?root=${encodeURIComponent(dir)}`);
   const frame = page.frameLocator('iframe[title="DocBench"]');
-  await frame.locator('.db-sec').first().waitFor();
+  await frame.locator('.db-sec, .db-ov').first().waitFor();
   assert.equal(await frame.locator('#app').getAttribute('data-theme'), 'dark');
   const todo = await until(() => page.evaluate(() => window.__todo), 8000);
   assert.ok(todo.assistant >= 1, '할 일 수(보낸 것)를 탭 배지로');

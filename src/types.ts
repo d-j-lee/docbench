@@ -39,6 +39,8 @@ export interface Manifest {
    * complete = 전부 찾음, reason: big-root = 드라이브·홈처럼 커서 맨 위만, many = 찾다가 한도(시간·개수)에 닿음
    */
   index?: { complete: boolean; docs: number; reason?: 'big-root' | 'many' };
+  /** 이 작업 공간이 무엇을 위한 곳인가 — 함께 쓰는 설정 config.json 의 purpose (없으면 개요가 맨 위 README 에서 읽는다, D88) */
+  purpose?: string;
 }
 
 /** 폴더 나무의 한 항목 (DocSource.tree) — 탐색기처럼 펼친 폴더만 읽는다 */
@@ -47,7 +49,7 @@ export interface TreeEntry {
   /** 작업 폴더 기준 '/' 경로 */
   path: string;
   kind: 'dir' | 'file';
-  /** 작업대가 여는 문서(.md)인가 */
+  /** 작업대가 여는 문서인가 (등록된 형식 — core/formats) */
   doc?: boolean;
   size?: number;
   modified?: string;
@@ -65,6 +67,10 @@ export interface DocGroup {
 
 export interface DocMeta {
   title: string;
+  /** 형식 이름 (core/formats — markdown · yaml · csv · code · docx · image …). 없으면 마크다운 */
+  format?: string;
+  /** 문서 앞머리 YAML 의 값(상태·담당·꼬리표·검토일 …) — 앞부분을 읽은 문서만 (D88) */
+  meta?: Record<string, string | string[]>;
   role?: string;
   audience?: string;
   trust?: string;
@@ -104,9 +110,20 @@ export interface DocContent {
   updatedAt?: string;
   updatedBy?: Person;
   readOnly?: boolean;
-  /** 읽기 전용인 이유 (예: 'encoding') */
+  /**
+   * 읽기 전용인 이유 — 'encoding'·'invalid-utf8'(사람이 동의하면 UTF-8 로) · 'config'(설정) · 'folder'(폴더에 쓸 수 없음) ·
+   * 'format'(뽑은 글·미리보기 — 원본 형식은 고치지 않는다) · 'too-large'(글이 커서 앞부분만 보임)
+   */
   readOnlyReason?: string;
   encoding?: string;
+  /** 형식 이름 (core/formats) — 없으면 문서 id 의 확장자로, 그것도 없으면 마크다운 */
+  format?: string;
+  /** 글이 한도보다 커서 앞부분만 실었다 (bytes = 실은 바이트, total = 파일 크기) */
+  truncated?: { bytes: number; total: number };
+  /** 미리보기 형식(그림·PDF)이나 글을 뽑은 형식의 원본 — 바이트는 DocSource.loadBytes 로 */
+  binary?: { mime?: string; size: number };
+  /** 글을 뽑지 못했다(깨졌거나 암호가 걸린 파일 등) — 사람이 읽을 까닭 */
+  deriveError?: string;
 }
 
 export interface SaveOptions {
@@ -179,6 +196,66 @@ export interface DocSource {
    * 드라이브 전체를 열어도 바로 뜬다. 문서 목록(manifest.docs)에 없던 문서도 여기서 찾아 열 수 있다.
    */
   tree?(dir: string): Promise<TreeEntry[] | null>;
+  /**
+   * 문서 파일의 바이트 (그림·PDF 미리보기, 원본 내려받기 — D87). 한도(BYTES_MAX)를 넘거나 없으면 null.
+   * 글은 load 로 — 이것은 원본 그대로다
+   */
+  loadBytes?(id: string): Promise<Blob | null>;
+  /** 작업 공간 개요 — 구성·폴더 역할·메타데이터·점검 (D88). 없으면 개요 화면이 문서 목록만으로 간단히 그린다 */
+  overview?(): Promise<WorkspaceOverview | null>;
+  /**
+   * 새 문서를 만든다 — 이미 있으면 DocConflictError(지금 글). 폴더는 있어야 한다(없는 폴더를 만들지 않는다). 이력에 남긴다
+   */
+  create?(id: string, md: string, opts?: { summary?: string }): Promise<SaveResult>;
+}
+
+// ---------------------------------------------------------------- 작업 공간 개요 (D88)
+
+/** 개요의 묶음 — 문서 · 데이터와 설정 · 코드 · 오피스 · 그림 · PDF · 소리와 영상 · 압축 · 그 밖 */
+export type FileGroup = 'doc' | 'data' | 'code' | 'office' | 'image' | 'pdf' | 'media' | 'archive' | 'other';
+
+export type OverviewCheckCode =
+  | 'secrets' | 'huge-files' | 'no-readme' | 'review-due' | 'broken-links'
+  | 'version-copies' | 'temp-files' | 'empty-folders' | 'folder-no-readme' | 'same-name' | 'long-paths'
+  | 'stale-docs' | 'orphan-docs' | 'git-uncommitted';
+
+/** 점검 하나 — risk 주의 · action 할 일 · tidy 정리 · info 참고. 문구는 화면 사전(overview.check.<code>)이 정한다 */
+export interface OverviewCheck { code: OverviewCheckCode; level: 'risk' | 'action' | 'tidy' | 'info'; n: number; paths: string[] }
+
+export interface OverviewFolder {
+  /** 맨 위 폴더 이름 ('' = 작업 공간 맨 위의 파일들) */
+  path: string;
+  files: number;
+  docs: number;
+  bytes: number;
+  modified?: string;
+  /** 이 폴더가 하는 일 — 설정(config.json folders) 또는 그 폴더 README */
+  role?: string;
+  roleFrom?: 'config' | 'readme';
+  /** 그 폴더의 README 문서 id */
+  readme?: string;
+}
+
+export type AiFileKind = 'claude' | 'agents' | 'gemini' | 'cursor' | 'copilot' | 'mcp' | 'skill' | 'prompt';
+
+export interface WorkspaceOverview {
+  asof: string;
+  root: string;
+  purpose?: { text: string; from: 'config' | 'readme'; docId?: string };
+  /** 얼마나 훑었나 — complete false 면 일부(드라이브 같은 큰 폴더·항목 한도) */
+  scope: { complete: boolean; items: number; reason?: 'big-root' | 'many' };
+  totals: { files: number; dirs: number; bytes: number; docs: number; recent7: number; newest?: string };
+  groups: { group: FileGroup; files: number; bytes: number }[];
+  folders: OverviewFolder[];
+  recent: { path: string; modified: string; size?: number; doc?: boolean }[];
+  large: { path: string; size: number; doc?: boolean }[];
+  /** 문서 앞머리 메타데이터 모음 (앞부분을 읽은 문서 수 기준) */
+  meta: { docs: number; status: Record<string, number>; owners: Record<string, number>; tags: Record<string, number>; due: { docId: string; field: string; date: string }[] };
+  ai: { path: string; kind: AiFileKind }[];
+  git?: { modified: number; untracked: number; added: number };
+  /** 링크를 훑었나 (문서가 많거나 큰 폴더면 건너뛴다) */
+  links?: { docs: number; links: number };
+  checks: OverviewCheck[];
 }
 
 // ---------------------------------------------------------------- 피드백
@@ -624,7 +701,8 @@ export interface DocBenchOptions {
   initialDoc?: string;
   /** 단축키 범위. scoped = 작업대 안에 포커스가 있을 때만 */
   shortcuts?: 'scoped' | 'global' | false;
-  features?: Partial<{ milestones: boolean; map: boolean; changes: boolean; edit: boolean; outline: boolean }>;
+  /** 끌 기능 — overview = 작업 공간 개요(D88, 저장소가 overview 를 줄 때 첫 화면) */
+  features?: Partial<{ milestones: boolean; map: boolean; changes: boolean; edit: boolean; outline: boolean; overview: boolean }>;
   /** 스타일을 자동으로 넣을지. CSP 가 인라인 스타일을 막으면 false 로 두고 docbench.css 를 직접 링크한다 */
   injectStyles?: boolean;
   styleNonce?: string;

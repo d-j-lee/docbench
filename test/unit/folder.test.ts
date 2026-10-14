@@ -32,11 +32,13 @@ const DOC = '# 런북\r\n\r\n## 배포\r\n\r\n확인한다\r\n\r\n## 장애\r\n\
 
 describe('메모리 폴더', () => {
   it('처음 열면 .docbench/ 를 만들고 문서를 찾는다', async () => {
-    const fs = fsFromMemory({ 'docs/런북.md': DOC, 'node_modules/x/README.md': '# 아님', '.hidden/a.md': '# 아님', 'a.txt': 'x' }, '문서');
+    const fs = fsFromMemory({ 'docs/런북.md': DOC, 'node_modules/x/README.md': '# 아님', '.hidden/a.md': '# 아님', 'a.bin': 'x', '.env': 'K=1', 'a.txt': 'x' }, '문서');
     const a = await open(fs);
     expect(fs.text('.docbench/.gitignore')).toContain('locks/');
     const m = await a.docs.manifest();
-    expect(Object.keys(m.docs)).toEqual(['docs/런북.md']);
+    // 여러 형식(D87): 글(.txt)도 문서, 모르는 형식·숨김은 아니다
+    expect(Object.keys(m.docs).sort()).toEqual(['a.txt', 'docs/런북.md']);
+    expect(m.docs['a.txt'].title).toBe('a.txt');
     expect(m.docs['docs/런북.md'].title).toBe('런북');
     expect(m.project.name).toBe('문서');
   });
@@ -107,10 +109,11 @@ describe('메모리 폴더', () => {
   });
 
   it('작업 폴더 밖·대상 아닌 경로는 거부', async () => {
-    const a = await open(fsFromMemory({ 'r.md': DOC, 'x.txt': 'x' }));
+    const a = await open(fsFromMemory({ 'r.md': DOC, 'x.bin': 'x', '.env': 'K=1' }));
     await expect(a.docs.load('../r.md')).rejects.toThrow(/밖/);
     await expect(a.docs.load('C:/r.md')).rejects.toThrow(/밖/);
-    await expect(a.docs.load('x.txt')).rejects.toThrow(/대상 문서가 아님/);
+    await expect(a.docs.load('x.bin')).rejects.toThrow(/대상 문서가 아님/);
+    await expect(a.docs.load('.env')).rejects.toThrow(/대상 문서가 아님/);
   });
 
   it('이력 덧붙이기는 한 줄로 선다 — 동시에 41번 저장해도 41줄 (독립 검토 재현)', async () => {

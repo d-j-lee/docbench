@@ -7,6 +7,9 @@
  */
 import type { TreeEntry } from '../types';
 import { h, icon } from './dom';
+import { formatOf, fileGroupOf } from '../core/formats';
+import { isReadme } from '../core/workspace';
+import { groupIcon } from './viewers';
 import type { App } from './app';
 
 /** 한 폴더에서 처음 보일 "문서가 아닌 파일" 수 — 더 있으면 "나머지 n개"로 접는다 */
@@ -87,7 +90,7 @@ export class Explorer {
       const dirs = got.items.filter((x) => x.kind === 'dir');
       const files = got.items.filter((x) => x.kind === 'file' && !x.doc);
       // README 먼저, 그다음 이름순 (항목은 이미 이름순)
-      docs.sort((a, b) => Number(!/^readme\.(md|markdown)$/i.test(a.name)) - Number(!/^readme\.(md|markdown)$/i.test(b.name)));
+      docs.sort((a, b) => Number(!isReadme(a.name)) - Number(!isReadme(b.name)));
       // 탐색기 순서: 폴더 → 문서 → 다른 파일
       for (const d of dirs) {
         const open = this.isOpen(d.path);
@@ -109,8 +112,9 @@ export class Explorer {
       if (files.length) {
         const all = this.allFiles.has(dir) || files.length <= FILES_SHOWN + 5;
         for (const f of all ? files : files.slice(0, FILES_SHOWN)) {
-          box.append(h('div', { class: 'db-file', style: `--d:${depth}`, title: this.t('tree.notDoc', { name: f.name }) },
-            h('span', { class: 'ic', html: icon('file') }), h('span', { class: 't', text: f.name })));
+          // 아는 형식인데 문서가 아니면 설정(include·exclude)에서 빠진 것 — 코드가 기본으로 그렇다(D87)
+          box.append(h('div', { class: 'db-file', style: `--d:${depth}`, title: this.t(formatOf(f.name) ? 'tree.notDoc.excluded' : 'tree.notDoc', { name: f.name }) },
+            h('span', { class: 'ic', html: icon(groupIcon(fileGroupOf(f.name))) }), h('span', { class: 't', text: f.name })));
         }
         if (!all) box.append(h('button', { class: 'db-tree-more', type: 'button', style: `--d:${depth}`, onclick: () => { this.allFiles.add(dir); this.app.renderRail(); } }, this.t('tree.moreFiles', { n: files.length - FILES_SHOWN })));
       }
