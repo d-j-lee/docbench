@@ -10,8 +10,10 @@
  *              README 없는 큰 폴더, 같은 이름 문서, 너무 긴 경로, 오래된 문서, 깨진 링크·어디서도 가리키지 않는 문서, 커밋 안 한 변경
  * 내용은 메타데이터와 앞부분(README·앞머리·링크)만 본다. 점검 문구는 화면 사전이 정한다(code + n) — 서버가 문장을 박지 않는다(D30).
  */
-import type { AiFileKind, FileGroup, InventoryItem, OverviewCheck, OverviewCheckCode, OverviewFolder, WorkspaceOverview } from '../types';
+import type { AiFileKind, BuiltinCheckCode, FileGroup, InventoryItem, OverviewCheck, OverviewFolder, RuleProblem, WorkspaceOverview, WorkspaceRules } from '../types';
 import { fileGroupOf, formatOf, looksSecret } from './formats';
+import { evaluateRules, matchPath, rulesProblemCheck } from './rules';
+import { walkable } from './workspace';
 
 export { looksSecret };
 import { frontMatterData, frontMatterLength, toLF } from './markdown';
@@ -32,6 +34,17 @@ export interface OverviewInput {
   /** 문서 사이 링크 (훑었을 때만) — 상대 경로를 작업 공간 기준으로 푼 대상 */
   links?: { from: string; to: string[] }[];
   git?: boolean;
+  /**
+   * 팀 규칙 파일(D90 — 문서 폴더 맨 위 docbench.json). spec 이 null 이면 읽지 못한 것(problems 에 까닭).
+   * 목적·폴더 역할은 이것이 config 보다 먼저(함께 쓰는 정본), 그다음 README
+   */
+  rules?: { file: string; spec: WorkspaceRules | null; problems: RuleProblem[] };
+  /** 바뀌지 않은 파일의 마지막 커밋 시각(ms) — git 저장소를 막 받은 폴더는 파일 시각이 받은 때라 오래됨·검토 주기가 틀린다 */
+  changed?: Record<string, number>;
+  /** 점검마다 담을 경로 수 (기본 40 — CI 는 전부) */
+  pathsMax?: number;
+  /** 경로 대소문자 무시 (Windows) */
+  ci?: boolean;
   now?: number;
 }
 
@@ -193,7 +206,16 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
   const dirs = input.items.filter((i) => i.folder);
   const pathOf = (i: InventoryItem) => i.id.replace(/\/$/, '');
   const mtime = (i: InventoryItem) => (i.modified ? Date.parse(i.modified) : NaN);
+  /** 마지막 변경 — 커밋 뒤 손대지 않은 파일은 커밋 시각, 아니면 파일 시각 */
+  const changedAt = (i: InventoryItem) => {
+    const c = input.changed?.[i.id];
+    return c != null && !(i.flags || []).some((x) => x === 'modified' || x === 'untracked' || x === 'added') ? c : mtime(i);
+  };
   const isDoc = (p: string) => { try { return input.isDoc(p); } catch { return false; } };
+  const spec = input.rules?.spec || null;
+  const ci = !!input.ci;
+  const pathsMax = input.pathsMax ?? PATHS_MAX;
+  const ignored = (p: string) => !!spec?.ignore.length && matchPath(p, spec.ignore, ci);
 
   // 묶음
   const groups = new Map<FileGroup, { files: number; bytes: number }>();
@@ -223,7 +245,7 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
     if (f.modified && (!fo.modified || f.modified > fo.modified)) fo.modified = f.modified;
   }
   for (const fo of folderMap.values()) {
-    const cfg = input.config?.folders?.[fo.path]?.role;
+    const cfg = spec?.folders?.[fo.path]?.role || input.config?.folders?.[fo.path]?.role;
     const rd = readmes[fo.path];
     if (rd) fo.readme = rd.id;
     if (cfg && cfg.trim()) { fo.role = cfg.trim().slice(0, 200); fo.roleFrom = 'config'; }
@@ -231,9 +253,10 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
   }
   const folders = [...folderMap.values()].sort((a, b) => (a.path === '' ? 1 : b.path === '' ? -1 : a.path.localeCompare(b.path, 'ko')));
 
-  // 목적
+  // 목적 — 팀 규칙 파일 → 기록 폴더 설정 → 맨 위 README
   let purpose: WorkspaceOverview['purpose'];
-  if (input.config?.purpose?.trim()) purpose = { text: input.config.purpose.trim().slice(0, 400), from: 'config' };
+  if (spec?.purpose) purpose = { text: spec.purpose, from: 'config', docId: input.rules!.file };
+  else if (input.config?.purpose?.trim()) purpose = { text: input.config.purpose.trim().slice(0, 400), from: 'config' };
   else if (readmes['']) { const s = readmeSummary(readmes[''].text); if (s) purpose = { text: s, from: 'readme', docId: readmes[''].id }; }
 
   // 최근·큰 파일
@@ -277,13 +300,21 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
 
   // ---- 점검
   const checks: OverviewCheck[] = [];
-  const push = (code: OverviewCheckCode, level: OverviewCheck['level'], paths: string[], n = paths.length) => { if (n > 0) checks.push({ code, level, n, paths: paths.slice(0, PATHS_MAX) }); };
+  /** 늘 하는 점검 하나 — 팀 규칙의 ignore 경로는 빼고, checks 가 정한 수준(또는 끔)으로. n 은 뺀 뒤의 수 */
+  const push = (code: BuiltinCheckCode, level: OverviewCheck['level'], paths: string[], n?: number) => {
+    const lv = spec?.checks[code] ?? level;
+    if (lv === 'off') return;
+    const kept = spec?.ignore.length ? paths.filter((p) => !ignored(p)) : paths;
+    const count = n == null || kept.length !== paths.length ? kept.length : n;
+    if (count > 0) checks.push({ code, level: lv, n: count, paths: kept.slice(0, pathsMax) });
+  };
 
   push('secrets', 'risk', files.filter((f) => looksSecret(baseOf(f.id), f.size)).map((f) => f.id));
   const huge = files.filter((f) => (f.size || 0) >= 50 * 1024 * 1024);
   push('huge-files', input.git ? 'action' : 'info', huge.map((f) => f.id));
   const rootReadme = files.some((f) => !f.id.includes('/') && isReadmeName(baseOf(f.id)));
-  if (!rootReadme && files.length) checks.push({ code: 'no-readme', level: 'action', n: 1, paths: [] });
+  const noReadme = spec?.checks['no-readme'] ?? 'action';
+  if (!rootReadme && files.length && noReadme !== 'off') checks.push({ code: 'no-readme', level: noReadme, n: 1, paths: [] });
   push('review-due', 'action', meta.due.map((d) => d.docId));
 
   // 링크
@@ -299,11 +330,13 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
         count++;
         const t = to.replace(/\/$/, '').toLowerCase();
         if (fileSet.has(t)) linked.add(t);
-        else if (!dirSet.has(t) && input.complete) broken.push(l.from);
+        // 폴더 지도가 들어가지 않는 폴더(.docbench·node_modules·dist …) 안은 있는지 알 수 없다 — 깨졌다고 하지 않는다
+        else if (!dirSet.has(t) && input.complete && to.split('/').slice(0, -1).every((seg) => walkable(seg))) broken.push(l.from);
       }
     }
     linksInfo = { docs: input.links.length, links: count };
-    push('broken-links', 'action', [...new Set(broken)], broken.length);
+    // n = 깨진 링크가 있는 문서 수 (문구가 문서를 센다)
+    push('broken-links', 'action', [...new Set(broken)]);
     // 어디서도 가리키지 않는 문서 — 문서끼리 링크로 잇는 작업 공간에서만(링크가 거의 없으면 뜻이 없다)
     if (count >= Math.max(5, input.links.length / 2)) {
       const orphans = input.links.map((l) => l.from).filter((id) => !isIndexName(baseOf(id)) && id.includes('/') && !linked.has(id.toLowerCase()) && !COMMON_NAME.test(baseOf(id)));
@@ -344,8 +377,25 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
   push('same-name', 'tidy', [...byName.values()].filter((a) => new Set(a.map(parentOf)).size > 1).flat());
   // 너무 긴 경로 — Windows(260자)·동기화 도구가 다루지 못할 수 있다. 작업 공간 위 경로가 더해지므로 넉넉히 160자
   push('long-paths', 'tidy', input.items.filter((i) => i.id.length > 160).map((i) => i.id));
-  push('stale-docs', 'info', files.filter((f) => isDoc(f.id) && Number.isFinite(mtime(f)) && now - mtime(f) > 365 * DAY).map((f) => f.id));
+  push('stale-docs', 'info', files.filter((f) => isDoc(f.id) && Number.isFinite(changedAt(f)) && now - changedAt(f) > 365 * DAY).map((f) => f.id));
   if (git && git.modified + git.untracked + git.added) push('git-uncommitted', 'info', files.filter((f) => (f.flags || []).some((x) => x === 'modified' || x === 'untracked' || x === 'added')).map((f) => f.id));
+
+  // 팀 규칙 (D90)
+  let rulesInfo: WorkspaceOverview['rules'];
+  if (input.rules) {
+    const bad = rulesProblemCheck(input.rules.file, input.rules.problems);
+    if (bad) checks.push(bad);
+    let unchecked = 0;
+    if (spec) {
+      const r = evaluateRules({
+        spec, files, dirs, complete: input.complete, isDoc, meta: input.meta || {}, changedAt, dateMs, isIndexName,
+        marked: (n) => versionFamily(n).marked || COPY_ALONE.test(n), ci, now, pathsMax, ignored,
+      });
+      checks.push(...r.checks);
+      unchecked = r.unchecked;
+    }
+    rulesInfo = { file: input.rules.file, count: spec?.rules.length || 0, problems: input.rules.problems.length, unchecked };
+  }
 
   const order = { risk: 0, action: 1, tidy: 2, info: 3 };
   checks.sort((a, b) => order[a.level] - order[b.level]);
@@ -364,6 +414,7 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
     ai,
     ...(git ? { git } : {}),
     ...(linksInfo ? { links: linksInfo } : {}),
+    ...(rulesInfo ? { rules: rulesInfo } : {}),
     checks,
   };
 }

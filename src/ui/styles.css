@@ -957,6 +957,12 @@
 .docbench .db-ov-paths { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .docbench .db-ov-paths .db-chip { font: 11.5px/1.7 var(--db-font-mono); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .docbench .db-ov-paths .db-hint { font-size: 11.5px; align-self: center; }
+.docbench .db-ov-paths .db-chip .nt { margin-left: 6px; font: 11px/1.7 var(--db-font-body); color: var(--db-ink-3); }
+.docbench .db-ov-check .scope { margin: 2px 0 0; font: 11.5px/1.5 var(--db-font-mono); }
+.docbench .db-ov-problems { margin: 4px 0 0; padding-left: 18px; font: 12px/1.6 var(--db-font-mono); color: var(--db-ink-2); }
+.docbench .db-ov-rules { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 10px; font-size: 13px; }
+.docbench .db-ov-rules.on { color: var(--db-ink-2); }
+.docbench .db-ov-rules .db-hint { margin: 0; }
 .docbench table.db-ov-folders { border-collapse: collapse; width: 100%; font-size: 13px; }
 .docbench .db-ov-folders th, .docbench .db-ov-folders td { padding: 6px 10px; border-bottom: 1px solid var(--db-line); text-align: left; vertical-align: top; }
 .docbench .db-ov-folders th { background: var(--db-sunk); font-size: 12px; color: var(--db-ink-2); font-weight: 600; white-space: nowrap; }

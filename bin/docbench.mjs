@@ -26,6 +26,8 @@
  *   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
  *   docbench doc new <docId> [--file F | --stdin] [-m 요약]
  *   docbench overview [--json]                 작업 공간 개요·점검
+ *   docbench check [폴더] [--rules 파일] [--fail-on risk|action|tidy|info|never] [--format text|json|github] [--lang ko|en]
+ *                                              팀 규칙(docbench.json)과 늘 하는 점검 — CI·pre-commit 용(기록 폴더 없어도 됨, 걸리면 5)
  *   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
  *   docbench inbox [--clear] [--json]          요청함(보낸 묶음 알림) 보기·비우기
  *   docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
@@ -35,7 +37,7 @@
  * 작업 폴더 찾기: --root 폴더 → 환경 변수 DOCBENCH_ROOT → 현재 폴더에서 위로(.docbench 가 있거나 기록 짝이 있는 문서 폴더, 또는 지금 자리가 기록 폴더).
  * 기록 폴더 찾기: --data · DOCBENCH_DATA → 문서 폴더 안 .docbench → 이 PC 의 설정 workspaces[폴더].data → 기록 보관함(dataHome, 기본 <PC 설정 폴더>/data)/<폴더 이름>(같은 이름의 다른 폴더면 '<이름> (2)' …).
  * 작성자: --as human:이름 | assistant:이름 (기본 assistant:Claude, 또는 DOCBENCH_ACTOR)
- * 종료 코드: 0 성공 · 1 잘못된 입력 · 2 작업 폴더 없음 · 3 그 사이 바뀜(다시 읽고 고칠 것) · 4 읽기 전용
+ * 종료 코드: 0 성공 · 1 잘못된 입력 · 2 작업 폴더 없음 · 3 그 사이 바뀜(다시 읽고 고칠 것) · 4 읽기 전용 · 5 점검에 걸림(check)
  * 설정: 기록 폴더 config.json(함께 씀) + 이 PC 의 설정(문서 폴더 밖 — 실행 명령 assistant·notify.command 와 이름 user 는
  *       여기에만, 폴더별은 "workspaces": { "<폴더 경로>": {…} }). 위치: Windows %LOCALAPPDATA%\docbench\config.json,
  *       macOS ~/Library/Application Support/docbench, Linux ~/.config/docbench. DOCBENCH_HOME 으로 옮김. status 가 위치를 보여 준다
@@ -89,6 +91,10 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
   docbench doc new <docId> [--file F | --stdin] [-m 요약]
                                              새 문서 (UTF-8, 이력에 남김). 이미 있으면 3, 폴더는 있어야 한다
   docbench overview [--json]                 작업 공간 개요 — 목적·구성·폴더 역할·문서 메타데이터·AI 협업 파일·점검(비밀·사본·임시 파일·깨진 링크 …)
+  docbench check [폴더] [--rules 파일] [--fail-on risk|action|tidy|info|never] [--format text|json|github] [--lang ko|en]
+                                             팀 규칙(문서 폴더 맨 위 docbench.json — 앞머리 키·폴더 README·이름·검토 주기·두지 않을 파일·크기·
+                                             있어야 할 파일)과 늘 하는 점검. CI·pre-commit 용 — 기록 폴더가 없어도 되고 아무것도 쓰지 않는다.
+                                             --fail-on 수준 이상이 있으면 종료 5(기본 action: 주의·할 일). --format github = PR 주석·작업 요약
   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
   docbench inbox [--clear] [--json]          요청함(보낸 묶음 알림) 보기·비우기
   docbench runner [폴더] [--data 기록폴더] [--detach | --status | --stop] [--startup on|off]
@@ -98,7 +104,7 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
 작업 폴더 찾기: --root 폴더 → 환경 변수 DOCBENCH_ROOT → 현재 폴더에서 위로(.docbench 가 있거나 기록 짝이 있는 문서 폴더, 또는 지금 자리가 기록 폴더).
 기록 폴더 찾기: --data · DOCBENCH_DATA → 문서 폴더 안 .docbench → 이 PC 의 설정 workspaces[폴더].data → 기록 보관함(dataHome, 기본 <PC 설정 폴더>/data)/<폴더 이름>(같은 이름의 다른 폴더면 '<이름> (2)' …).
 작성자: --as human:이름 | assistant:이름 (기본 assistant:Claude, 또는 DOCBENCH_ACTOR)
-종료 코드: 0 성공 · 1 잘못된 입력 · 2 작업 폴더 없음 · 3 그 사이 바뀜(다시 읽고 고칠 것) · 4 읽기 전용
+종료 코드: 0 성공 · 1 잘못된 입력 · 2 작업 폴더 없음 · 3 그 사이 바뀜(다시 읽고 고칠 것) · 4 읽기 전용 · 5 점검에 걸림(check)
 설정: 기록 폴더 config.json(함께 씀) + 이 PC 의 설정(문서 폴더 밖 — 실행 명령 assistant·notify.command 와 이름 user 는
       여기에만, 폴더별은 "workspaces": { "<폴더 경로>": {…} }). 위치: Windows %LOCALAPPDATA%\\docbench\\config.json,
       macOS ~/Library/Application Support/docbench, Linux ~/.config/docbench. DOCBENCH_HOME 으로 옮김. status 가 위치를 보여 준다
@@ -251,18 +257,36 @@ async function readInput(a) {
  * (Claude 작업 실행기도 같은 규칙으로 검사한다)
  * @param {string} cur 지금 섹션 글 @param {string} next 새 섹션 글 @param {any} a
  */
-/** 개요 → 사람이 읽는 글 (화면 사전과 같은 뜻, 한국어) @param {any} o */
+/** 점검 한 줄 제목 — 사전(core/checktext, 화면과 한 벌). 팀 규칙은 이름이 있으면 이름으로 @param {any} c @param {string} lang */
+const checkTitle = (c, lang) => {
+  const base = core.checkText(lang, 'overview.check.' + c.code, { n: c.n, want: c.rule?.want ?? '' });
+  return c.rule?.name ? `${c.rule.name} — ${base}` : base;
+};
+/** 점검의 까닭·고치는 법 — 팀 규칙의 hint 가 먼저 @param {any} c @param {string} lang */
+const checkHint = (c, lang) => c.rule?.hint || core.checkText(lang, 'overview.check.' + c.code + '.hint');
+/** 규칙 파일의 문제 한 줄 @param {any} p @param {string} lang */
+const problemText = (p, lang) => core.checkText(lang, 'overview.rules.problem.' + p.code, { at: p.at, value: p.value ?? '' });
+
+/**
+ * 점검 목록 → 사람이 읽는 줄 @param {any[]} checks @param {string} lang @param {number} max 점검마다 보일 경로 수
+ * @returns {string[]}
+ */
+function checkLines(checks, lang, max) {
+  const L = [];
+  for (const c of checks) {
+    L.push(`  [${core.checkText(lang, 'overview.level.' + c.level)}] ${checkTitle(c, lang)}`);
+    for (const p of c.problems || []) L.push('      ' + problemText(p, lang));
+    if (!c.problems) for (const p of c.paths.slice(0, max)) L.push('      ' + p + (c.notes?.[p] ? '  — ' + c.notes[p] : ''));
+    if (!c.problems && c.n > Math.min(max, c.paths.length)) L.push('      ' + core.checkText(lang, 'check.more', { n: c.n - Math.min(max, c.paths.length) }));
+    L.push('      · ' + checkHint(c, lang));
+  }
+  return L;
+}
+
+/** 개요 → 사람이 읽는 글 (점검 문구는 화면과 한 벌, 한국어) @param {any} o */
 function overviewText(o) {
   const kb = (n) => (n >= 1 << 30 ? (n / (1 << 30)).toFixed(1) + ' GB' : n >= 1 << 20 ? (n / (1 << 20)).toFixed(1) + ' MB' : n >= 1024 ? Math.round(n / 1024) + ' KB' : n + ' B');
   const G = { doc: '문서', data: '데이터·설정', code: '코드', office: '오피스', image: '그림', pdf: 'PDF', media: '소리·영상', archive: '압축', other: '그 밖' };
-  const LV = { risk: '주의', action: '할 일', tidy: '정리', info: '참고' };
-  const C = {
-    secrets: '비밀(키·인증 정보)로 보이는 파일 — 공유·커밋 전에 확인하세요. Claude 작업도 작업 공간 안은 읽습니다',
-    'huge-files': '50 MB 넘는 파일', 'no-readme': '맨 위에 README 가 없습니다 — 이 작업 공간의 목적을 적어 두세요', 'review-due': '검토 기한(앞머리)이 지난 문서',
-    'broken-links': '없는 파일을 가리키는 링크가 있는 문서', 'version-copies': '판 이름이 붙은 사본(_v2·최종·(1) …)', 'temp-files': '임시·잠금 파일',
-    'empty-folders': '빈 폴더', 'folder-no-readme': 'README 없는 큰 폴더', 'same-name': '다른 폴더의 같은 이름 문서', 'long-paths': '너무 긴 경로(160자 넘음)',
-    'stale-docs': '1년 넘게 손대지 않은 문서', 'orphan-docs': '어느 문서에서도 링크하지 않는 문서', 'git-uncommitted': '커밋하지 않은 변경',
-  };
   const L = [`작업 공간: ${o.root}${o.scope.complete ? '' : ' (일부만 훑음)'}`];
   if (o.purpose) L.push(`목적: ${o.purpose.text}${o.purpose.docId ? ` (${o.purpose.docId})` : ' (설정)'}`);
   L.push(`파일 ${o.totals.files} · 폴더 ${o.totals.dirs} · ${kb(o.totals.bytes)} · 문서 ${o.totals.docs} · 최근 7일 바뀜 ${o.totals.recent7}`);
@@ -277,9 +301,77 @@ function overviewText(o) {
     if (Object.keys(o.meta.tags).length) L.push('  꼬리표: ' + top(o.meta.tags));
   }
   if (o.ai.length) L.push('', 'AI 협업 파일: ' + o.ai.map((x) => x.path).join(', '));
-  L.push('', o.checks.length ? '점검:' : '점검: 걸린 것 없음');
-  for (const c of o.checks) L.push(`  [${LV[c.level]}] ${C[c.code] || c.code}${c.n > 1 || c.paths.length ? ` — ${c.n}` : ''}${c.paths.length ? '\n      ' + c.paths.slice(0, 8).join('\n      ') + (c.n > 8 ? `\n      … 외 ${c.n - 8}` : '') : ''}`);
+  L.push('', o.rules ? core.checkText('ko', 'check.rules', { file: o.rules.file, n: o.rules.count }) : core.checkText('ko', 'check.rules.none'));
+  L.push(o.checks.length ? '점검:' : '점검: ' + core.checkText('ko', 'check.none'));
+  L.push(...checkLines(o.checks, 'ko', 8));
   return L.join('\n');
+}
+
+/** GitHub Actions 명령의 값 (%·줄바꿈, 속성은 :· , 도) @param {string} v @param {boolean} [prop] */
+const ghEsc = (v, prop) => {
+  const s = String(v).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
+  return prop ? s.replace(/:/g, '%3A').replace(/,/g, '%2C') : s;
+};
+
+/**
+ * docbench check — 작업 공간을 팀 규칙(docbench.json)과 늘 하는 점검으로 본다. CI·pre-commit 용: 기록 폴더가 없어도 되고(읽기만),
+ * --fail-on 수준 이상이 있으면 종료 코드 5. --format github 은 PR 화면에 주석(::error/::warning)과 작업 요약을 남긴다
+ * @param {any} a @param {string | undefined} sub
+ */
+async function checkCmd(a, sub) {
+  const root = path.resolve(sub || a.root || process.env.DOCBENCH_ROOT || '.');
+  if (!existsSync(root)) die('문서 폴더가 없습니다: ' + root, 2);
+  const lang = String(a.lang || process.env.DOCBENCH_LANG || 'ko') === 'en' ? 'en' : 'ko';
+  const failOn = a['fail-on'] == null ? 'action' : String(a['fail-on']);
+  if (!['risk', 'action', 'tidy', 'info', 'never'].includes(failOn)) die('--fail-on 은 risk · action · tidy · info · never 중 하나입니다: ' + failOn);
+  const format = a.json ? 'json' : a.format == null ? 'text' : String(a.format);
+  if (!['text', 'json', 'github'].includes(format)) die('--format 은 text · json · github 중 하나입니다: ' + format);
+  if (a.rules === true) die('--rules 에 규칙 파일 경로를 주세요');
+  const rulesFile = a.rules ? path.resolve(String(a.rules)) : undefined;
+  if (rulesFile && !existsSync(rulesFile)) die('규칙 파일이 없습니다: ' + rulesFile, 2);
+  let ws;
+  try { ws = await new Workspace(root, { create: false, records: 'optional', dataDir: dataOpt(a), rulesFile }).init(); } catch (e) { die(e.message, 2); }
+  const ov = await ws.overview({ full: true });
+  const summary = { risk: 0, action: 0, tidy: 0, info: 0 };
+  for (const c of ov.checks) summary[c.level]++;
+  const failing = failOn === 'never' ? [] : core.failsAt(ov.checks, /** @type {any} */ (failOn));
+  const notes = [];
+  if (!ov.scope.complete) notes.push(core.checkText(lang, 'check.partial', { n: ov.scope.items }));
+  if (ov.rules?.unchecked) notes.push(core.checkText(lang, 'check.unchecked', { n: ov.rules.unchecked }));
+  if (ws.gitTimesCache?.shallow) notes.push(core.checkText(lang, 'check.shallow'));
+  const levelName = failOn === 'never' ? '' : core.checkText(lang, 'overview.level.' + failOn);
+  const verdict = failOn === 'never' ? core.checkText(lang, 'check.never') : failing.length ? core.checkText(lang, 'check.fail', { level: levelName, n: failing.length }) : core.checkText(lang, 'check.pass', { level: levelName });
+  if (format === 'json') {
+    const checks = ov.checks.map((c) => ({ ...c, title: checkTitle(c, lang), hint: checkHint(c, lang), ...(c.problems ? { problems: c.problems.map((p) => ({ ...p, text: problemText(p, lang) })) } : {}) }));
+    process.stdout.write(JSON.stringify({ root, rules: ov.rules ?? null, scope: ov.scope, failOn, failed: failing.length > 0, summary, notes, checks }, null, 2) + '\n');
+  } else {
+    const L = [core.checkText(lang, 'check.head', { root }), ov.rules ? core.checkText(lang, 'check.rules', { file: ov.rules.file, n: ov.rules.count }) : core.checkText(lang, 'check.rules.none')];
+    for (const n of notes) L.push('! ' + n);
+    L.push('');
+    if (!ov.checks.length) L.push(core.checkText(lang, 'check.none'));
+    L.push(...checkLines(ov.checks, lang, format === 'github' ? 20 : 200));
+    L.push('', core.checkText(lang, 'check.summary', summary), verdict);
+    if (format === 'github') {
+      // PR 의 파일 화면에 주석 — 실패 기준 이상은 error, 나머지 주의·할 일은 warning, 정리·참고는 notice. 점검마다 50개까지
+      const ws0 = process.env.GITHUB_WORKSPACE ? path.resolve(process.env.GITHUB_WORKSPACE) : null;
+      const prefix = ws0 && (root + path.sep).startsWith(ws0 + path.sep) ? path.relative(ws0, root).split(path.sep).join('/') : '';
+      const fail = new Set(failing);
+      for (const c of ov.checks) {
+        const cmd = fail.has(c) ? 'error' : c.level === 'risk' || c.level === 'action' ? 'warning' : 'notice';
+        const title = ghEsc(checkTitle(c, lang), true);
+        const msg = (p) => ghEsc(c.problems ? c.problems.map((x) => problemText(x, lang)).join('\n') : (c.code === 'rule-require' ? p + ' — ' : c.notes?.[p] ? c.notes[p] + ' — ' : '') + checkHint(c, lang));
+        const files = c.paths.length && !c.problems ? c.paths.slice(0, 50) : [c.problems ? c.paths[0] : ''];
+        for (const p of files) L.push(`::${cmd} ${p && c.code !== 'rule-require' && !/[*?{]/.test(p) ? `file=${ghEsc((prefix ? prefix + '/' : '') + p.replace(/\/$/, ''), true)},` : ''}title=${title}::${msg(p)}`);
+      }
+      if (process.env.GITHUB_STEP_SUMMARY) {
+        const md = [`### ${core.checkText(lang, 'check.head', { root: prefix || path.basename(root) })}`, '', verdict, '', ...notes.map((n) => `> ${n}`), notes.length ? '' : null,
+          '| | | |', '|---|---|---:|', ...ov.checks.map((c) => `| ${core.checkText(lang, 'overview.level.' + c.level)} | ${checkTitle(c, lang).replace(/\|/g, '\\|')} | ${c.n} |`), ''].filter((x) => x != null).join('\n');
+        await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, md + '\n').catch(() => undefined);
+      }
+    }
+    process.stdout.write(L.join('\n') + '\n');
+  }
+  if (failing.length) process.exit(5);
 }
 
 /** 섹션 교체 안전장치 — 형식마다(core.checkSectionEdit: 마크다운 제목 줄·하위 섹션, 구조 글은 키·들여쓰기·JSON 읽힘) */
@@ -369,6 +461,8 @@ async function main() {
   }
 
   if (cmd === 'app') return appCmd(a);
+
+  if (cmd === 'check') return checkCmd(a, sub);
 
   if (cmd === 'runner') return runnerCmd(a, sub);
 

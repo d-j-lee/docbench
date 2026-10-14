@@ -71,3 +71,4 @@ description: DocBench 작업 폴더에서 사람이 보낸 문서 피드백을 �
 - 섹션 키는 `docbench doc sections <docId>` 로 확인한다. 같은 이름 제목이 여럿이면 키 끝에 ` #2` 가 붙는다.
 - 기록 폴더의 `feedback/*.json` 을 손으로 고치지 않는다(판 번호). 회신·제안은 `fb reply`·`fb propose` 로.
 - 볼 것에 "못 함"(`result.kind: failed`)으로 올라온 것은 사람이 다시 보낼 때까지 손대지 않는다(`fb list --waiting assistant` 에 나오지 않는다).
+- **팀 규칙**: 문서 폴더 맨 위에 `docbench.json` 이 있으면 새 문서(`doc new`)·앞머리·파일 이름은 그 규칙(앞머리 키와 값 목록·이름 규칙·폴더 README)을 따르고, 끝나면 `docbench check` 로 확인한다(걸리면 종료 5 — 네가 만든 것이 걸렸으면 고친다). "앞머리를 채워 달라"는 피드백이면 규칙의 `values` 목록 안에서 고르고, 내용으로 알 수 없는 값(담당 등)은 지어내지 않고 되묻는다. 규칙 파일 자체는 사람이 정한다 — 바꿀 점은 `fb add` 로 제안만.

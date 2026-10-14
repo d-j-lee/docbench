@@ -31,6 +31,7 @@ import { formatFor, formatOf, editableFormat, claudeChanges, titledFormat, isMar
 import { deriveText } from '../core/derive';
 import { frontMatterData } from '../core/markdown';
 import { computeOverview, pickReadmes, relativeLinks, OVERVIEW_LINK_LIMITS } from '../core/overview';
+import { parseRulesText, RULES_FILE, RULES_MAX_BYTES, bytesLabel } from '../core/rules';
 import { sectionSources } from '../core/source';
 import type { WorkspaceOverview } from '../types';
 import { cleanRunEntry, completeJsonLines, liveRunners, outdatedRunners, runnerIsMine, makeRunRequest, pickRunner, runnerAlive, runFiles, validRunId, normalizeRunInput, buildRunPrompt, buildReviewPrompt, TERMINAL_RUNNER, isTerminalRunner, validDocId, RUN_MAX_DOCS, emptySummary, safeAccountId } from '../core/runs';
@@ -900,11 +901,22 @@ export class FolderWorkspace {
       }
     }
     const meta: Record<string, Record<string, string | string[]>> = {};
-    for (const [id, d] of this.docs) if (d.meta) meta[id] = d.meta;
+    // 앞부분을 읽은 마크다운 문서는 앞머리가 없어도 {} — 팀 규칙이 "아직 못 읽음"과 "앞머리 없음"을 가른다
+    for (const [id, d] of this.docs) if (d.meta) meta[id] = d.meta; else if (isMarkdownPath(id) && d.title && d.titleMtime === d.mtimeMs) meta[id] = {};
+    const rules = await this.loadRules();
     return computeOverview({
       root: this.fs.name, items: inv.items, complete: this.index.complete && !capped, reason: capped ? 'many' : this.index.reason,
       isDoc: (p) => isDocPath(p, this.config, this.ci), meta, config: { purpose: this.config.purpose, folders: this.config.folders }, readmes, links,
+      ...(rules ? { rules } : {}), ci: this.ci,
     });
+  }
+
+  /** 팀 규칙 파일(D90, 문서 폴더 맨 위 docbench.json) — 없으면 undefined. 읽기만 */
+  private async loadRules(): Promise<Parameters<typeof computeOverview>[0]['rules']> {
+    const f = await this.fs.read(RULES_FILE, RULES_MAX_BYTES + 1).catch(() => null);
+    if (!f) return undefined;
+    if (f.bytes.length > RULES_MAX_BYTES) return { file: RULES_FILE, spec: null, problems: [{ at: RULES_FILE, code: 'too-big', value: bytesLabel(RULES_MAX_BYTES) }] };
+    return { file: RULES_FILE, ...parseRulesText(decodeBytes(f.bytes, this.legacy).text) };
   }
 
   // ------------------------------------------------------------ 바뀜 확인 (감시 대신)

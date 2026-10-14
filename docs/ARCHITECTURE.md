@@ -13,7 +13,7 @@
                 │
 ┌ src/core ─────┴──── DOM 없음 · 서버/CLI 와 공유(dist/core.mjs) ┐
 │ source(섹션 키·범위) selectors(문구 앵커) feedback diff prompt │
-│ formats(형식 허용 목록·Claude 규칙) outline(구조 글의 제목) derive(오피스·HWPX·Jupyter → 마크다운) overview(작업 공간 개요·점검) │
+│ formats(형식 허용 목록·Claude 규칙) outline(구조 글의 제목) derive(오피스·HWPX·Jupyter → 마크다운) overview(작업 공간 개요·점검) rules(팀 규칙) checktext(점검 문구) │
 │ textcodec(바이트↔글) workspace(작업 폴더 규약: 설정·glob·매니페스트·이력·나무·큰 폴더) │
 │ records(기록 합치기) runs(Claude 작업 규약: 요청·상태·로그 모양, 프롬프트, 결과 검사, 실행기 고르기) │
 │ apply(결과 반영 한 벌 — 엔진·화면·흉내, D75) room(Claude 자리: 기록 폴더의 지시·권한·터미널 한 줄, D76) │
@@ -106,15 +106,37 @@ DocBench 앱 화면 ─ app-shell.ts ─ rest 어댑터 ─ HTTP(127.0.0.1·열�
 
 ```
 DocSource.overview()  ─  서버 Workspace.overview · folder 어댑터 · memory 어댑터
-    │  폴더 지도 항목(inventory) + 매니페스트(앞머리 meta) + README 앞부분(pickReadmes) + 상대 링크(relativeLinks, 문서 400·8 MB 까지)
+    │  폴더 지도 항목(inventory) + 매니페스트(앞머리 meta — 읽었는데 앞머리가 없으면 {}) + README 앞부분(pickReadmes)
+    │  + 상대 링크(relativeLinks, 문서 400·8 MB 까지) + 팀 규칙(docbench.json → parseRulesText) + 마지막 커밋 시각(git, D92)
     ▼
-core.computeOverview  →  WorkspaceOverview { purpose, scope, totals, groups, folders(역할), recent, large, meta, ai, git?, links?, checks }
+core.computeOverview  →  WorkspaceOverview { purpose, scope, totals, groups, folders(역할), recent, large, meta, ai, git?, links?, rules?, checks }
+    │  늘 하는 점검(ignore·checks 수준 적용) + core.evaluateRules(규칙마다 점검 하나) + 규칙 파일의 문제(rules-invalid)
+    ▼
+화면 ui/overview  ·  CLI docbench overview / check(--fail-on → 종료 5, --format github → PR 주석)  — 문구는 core/checktext 한 벌
 ```
 
-- **목적**: 설정 `purpose` → 맨 위 README 의 첫 문단(앞머리 `description`·배지·표·코드 블록은 건너뜀). **폴더 역할**: 설정 `folders.<맨 위 폴더>.role` → 그 폴더 README 의 첫 문단.
-- **점검**(`checks` — 문구는 화면 사전 `overview.check.<code>`): 주의 `secrets`(비밀로 보이는 이름 — 내용은 열지 않는다) · 할 일 `huge-files`(50 MB 이상 — git 저장소면 할 일, 아니면 참고) `no-readme` `review-due`(앞머리 날짜가 지남) `broken-links`(다 훑었을 때만) · 정리 `version-copies`(_v2·최종·(1)·복사본) `temp-files`(~$·.DS_Store …) `empty-folders` `folder-no-readme`(파일 8개 이상) `same-name` `long-paths`(160자) · 참고 `stale-docs`(1년) `orphan-docs`(링크가 쓰이는 곳에서만) `git-uncommitted`.
+- **목적**: 팀 규칙 `purpose` → 기록 폴더 설정 `purpose` → 맨 위 README 의 첫 문단(앞머리 `description`·배지·표·코드 블록은 건너뜀). **폴더 역할**: 팀 규칙·설정 `folders.<맨 위 폴더>.role` → 그 폴더 README 의 첫 문단.
+- **점검**(`checks` — 문구는 `core/checktext` 의 `overview.check.<code>`, 화면 사전이 펼쳐 넣고 CLI 도 같은 글): 주의 `secrets`(비밀로 보이는 이름 — 내용은 열지 않는다) · 할 일 `huge-files`(50 MB 이상 — git 저장소면 할 일, 아니면 참고) `no-readme` `review-due`(앞머리 날짜가 지남) `broken-links`(다 훑었을 때만) · 정리 `version-copies`(_v2·최종·(1)·복사본) `temp-files`(~$·.DS_Store …) `empty-folders` `folder-no-readme`(파일 8개 이상) `same-name` `long-paths`(160자) · 참고 `stale-docs`(1년) `orphan-docs`(링크가 쓰이는 곳에서만) `git-uncommitted`.
 - **바로 할 일**: README 만들기(빈칸 표시 `[작업 후 기입]`/`TODO` 를 넣은 틀 — `DocSource.create`, 만들고 편집기로), Claude 에게 맡길 초안(깨진 링크·검토 기한·오래된 문서는 문서마다 문서 전체 피드백, 고아 문서는 README 에 하나 — Claude 가 고치거나 제안할 수 있는 형식만). 지우기·옮기기는 하지 않는다(사람이 고른다).
-- 큰 폴더(D64)는 훑은 데까지(`scope.complete: false`)라고 밝히고, 빈 폴더·깨진 링크처럼 다 봐야 아는 점검은 하지 않는다. 화면은 30초 동안 결과를 기억하고 목록이 바뀌면 다시 계산한다.
+- 큰 폴더(D64)는 훑은 데까지(`scope.complete: false`)라고 밝히고, 빈 폴더·깨진 링크처럼 다 봐야 아는 점검은 하지 않는다. 화면은 30초 동안 결과를 기억하고 목록·문서가 바뀌면 다시 계산한다. 깨진 링크는 폴더 지도가 들어가지 않는 폴더(`.docbench`·`node_modules`·`dist` …) 안을 가리키면 세지 않는다(있는지 알 수 없다).
+
+### 팀 규칙 (`core/rules`, D90–D92)
+
+```
+<문서 폴더>/docbench.json   ── 사람이 쓰는 문서(git). DocBench 는 읽기만 — 정해 둔 키만: purpose·folders·ignore·checks·rules
+        │  parseRulesText: 틀린 값은 그 규칙을 빼고 문제(at·code·value)로 — 조용히 넓게 읽지 않는다. 256 KB·규칙 100·패턴 50·300자
+        ▼
+evaluateRules(규칙마다)  front-matter(마크다운 앞머리 키·값 목록 — 아직 못 읽은 문서는 unchecked) · readme(폴더 glob, minFiles)
+                         naming(정해 둔 이름 규칙 8가지, 관례 이름·숨김 파일 빼고) · review(앞머리 검토일 ∨ 마지막 변경 > days)
+                         forbid(폴더가 걸리면 폴더 하나로) · max-size · require(패턴마다 하나는 — 다 훑었을 때만)
+        ▼
+OverviewCheck { code: rule-<kind> | rules-invalid, level(규칙의 level, 기본 action), n, paths, rule{index·want·scope·name·hint}, notes{경로: 까닭}, problems? }
+```
+
+- 경로는 `core.globMatch`(D91 — 정규식 없이, 조각마다 동적 계획)와 `core.matchPath`(폴더 id 끝 `/`). include·exclude·그룹도 같은 glob.
+- 마지막 변경(D92): git 저장소면 `git log --name-only -z` 한 번으로 파일마다 마지막 커밋 시각(HEAD 가 같으면 다시 재지 않음), 고친 중·새 파일은 파일 시각. 화면은 작은 폴더에서만, `check` 는 늘. 얕게 받은 저장소면 `check` 가 알린다.
+- `docbench check [폴더]`: `Workspace(records: 'optional')` — 기록을 찾기만 하고(없거나 짝이 맞지 않으면 기록 없이) 아무것도 쓰지 않는다. `overview({ full: true })` 는 마크다운 앞부분을 한도 없이 읽고(매니페스트는 300개씩), 링크 한도 없이, 점검마다 경로를 모두 담는다. 저장소 맨 위 `action.yml` 은 묶은 CLI(`release/docbench.mjs`)를 `--format github` 으로 돌리는 합성 Action — 주석(`::error`·`::warning`·`::notice`)과 `GITHUB_STEP_SUMMARY`.
+- 화면: 점검 위에 규칙 한 줄(있으면 "규칙 보기", 없으면 "규칙 파일 만들기" — 스키마 주소와 README 규칙 하나인 틀을 `DocSource.create`), 규칙 점검은 이름·까닭(hint)·적용 경로·경로마다 까닭, 앞머리·검토 주기는 Claude 에게 맡길 초안, 규칙 파일의 문제는 목록과 "규칙 보기". 스키마 `docs/docbench.schema.json` 의 목록은 단위 시험이 코드와 견준다.
 
 ## 피드백 모델
 

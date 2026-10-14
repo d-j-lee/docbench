@@ -1,0 +1,36 @@
+name: DocBench check
+description: Check a docs workspace against its team rules (docbench.json) and built-in hygiene checks — annotations on the PR and a job summary.
+author: d-j-lee
+branding:
+  icon: book-open
+  color: blue
+
+inputs:
+  path:
+    description: Docs folder to check (relative to the repository).
+    default: .
+  rules:
+    description: Team rules file. Default — docbench.json at the top of the docs folder.
+    default: ''
+  fail-on:
+    description: Fail at this level or heavier — risk · action · tidy · info · never.
+    default: action
+  lang:
+    description: Message language — en · ko.
+    default: en
+
+runs:
+  using: composite
+  steps:
+    - name: docbench check
+      shell: bash
+      # 입력은 환경 변수로만 넘긴다(스크립트에 그대로 펼치지 않는다 — 워크플로 주입 방지)
+      env:
+        DOCBENCH_PATH: ${{ inputs.path }}
+        DOCBENCH_RULES: ${{ inputs.rules }}
+        DOCBENCH_FAIL_ON: ${{ inputs.fail-on }}
+        DOCBENCH_LANG: ${{ inputs.lang }}
+      run: |
+        args=(check "$DOCBENCH_PATH" --format github --fail-on "$DOCBENCH_FAIL_ON" --lang "$DOCBENCH_LANG")
+        if [ -n "$DOCBENCH_RULES" ]; then args+=(--rules "$DOCBENCH_RULES"); fi
+        node "$GITHUB_ACTION_PATH/release/docbench.mjs" "${args[@]}"

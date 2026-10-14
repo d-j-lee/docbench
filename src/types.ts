@@ -214,13 +214,88 @@ export interface DocSource {
 /** 개요의 묶음 — 문서 · 데이터와 설정 · 코드 · 오피스 · 그림 · PDF · 소리와 영상 · 압축 · 그 밖 */
 export type FileGroup = 'doc' | 'data' | 'code' | 'office' | 'image' | 'pdf' | 'media' | 'archive' | 'other';
 
-export type OverviewCheckCode =
+/** 늘 하는 점검 (D88) — 팀 규칙 파일의 checks 로 수준을 바꾸거나 끈다 */
+export type BuiltinCheckCode =
   | 'secrets' | 'huge-files' | 'no-readme' | 'review-due' | 'broken-links'
   | 'version-copies' | 'temp-files' | 'empty-folders' | 'folder-no-readme' | 'same-name' | 'long-paths'
   | 'stale-docs' | 'orphan-docs' | 'git-uncommitted';
+/** 팀 규칙(docbench.json — D90)에서 온 점검 · 규칙 파일 자체의 문제 */
+export type RuleCheckCode = `rule-${RuleKind}` | 'rules-invalid';
+export type OverviewCheckCode = BuiltinCheckCode | RuleCheckCode;
 
-/** 점검 하나 — risk 주의 · action 할 일 · tidy 정리 · info 참고. 문구는 화면 사전(overview.check.<code>)이 정한다 */
-export interface OverviewCheck { code: OverviewCheckCode; level: 'risk' | 'action' | 'tidy' | 'info'; n: number; paths: string[] }
+/** 점검의 수준 — risk 주의 · action 할 일 · tidy 정리 · info 참고 (CI 의 `docbench check --fail-on` 이 이 순서로 자른다) */
+export type CheckLevel = 'risk' | 'action' | 'tidy' | 'info';
+
+/**
+ * 점검 하나. 문구는 사전(core/checktext — 화면·CLI 가 함께)이 code 로 정한다.
+ * 팀 규칙에서 온 점검은 rule(몇 번째 규칙·무엇을 요구하나)이, 규칙 파일의 문제는 problems 가 붙는다
+ */
+export interface OverviewCheck {
+  code: OverviewCheckCode;
+  level: CheckLevel;
+  n: number;
+  paths: string[];
+  /** index = 규칙 파일 rules 의 몇 번째(0부터) */
+  rule?: { index: number; kind: RuleKind; name?: string; hint?: string; want: string; scope: string[] };
+  /** 경로마다 짧은 까닭 — 빠진 앞머리 키(owner · status=wip), 맞지 않는 이름 규칙, 마지막 검토일, 크기 */
+  notes?: Record<string, string>;
+  problems?: RuleProblem[];
+}
+
+// ---------------------------------------------------------------- 팀 규칙 (docbench.json — D90)
+
+/** 규칙 종류 */
+export type RuleKind = 'front-matter' | 'readme' | 'naming' | 'review' | 'forbid' | 'max-size' | 'require';
+/** 이름 규칙 — 정규식 대신 정해 둔 것만(함께 쓰는 설정의 정규식이 화면을 멈추지 않게) */
+export type NameStyle = 'kebab-case' | 'snake_case' | 'lowercase' | 'no-spaces' | 'ascii' | 'date-prefix' | 'number-prefix' | 'no-version-marks';
+
+interface RuleBase {
+  /** 이 규칙이 보는 경로(glob — 폴더는 끝에 '/'). 종류마다 기본값이 있다 */
+  paths: string[];
+  /** 그 가운데 뺄 경로(glob) */
+  except?: string[];
+  /** 점검에 보일 이름 */
+  name?: string;
+  /** 왜·어떻게 고치나 — 점검에 그대로 보인다 */
+  hint?: string;
+  /** 기본 action(할 일) */
+  level?: CheckLevel;
+  /** 규칙 파일 rules 의 몇 번째인가 — 읽을 때 붙인다(쓰는 값이 아니다) */
+  at?: number;
+}
+export type RuleSpec =
+  /** 마크다운 문서의 앞머리에 이 키들이 있어야 한다. values = 키마다 받는 값 */
+  | (RuleBase & { kind: 'front-matter'; keys: string[]; values?: Record<string, string[]> })
+  /** 이 폴더들(paths = 폴더 glob)에 README(index)가 있어야 한다 — 파일이 minFiles 개 이상인 폴더만 */
+  | (RuleBase & { kind: 'readme'; minFiles?: number })
+  /** 파일·폴더 이름(확장자 앞)이 이 규칙들을 모두 따른다. README·LICENSE 같은 관례 이름과 숨김 파일은 뺀다 */
+  | (RuleBase & { kind: 'naming'; style: NameStyle[] })
+  /** 문서를 days 일 안에 다시 본다 — 앞머리 검토일(reviewed·updated …) 과 마지막 변경(git 커밋·파일 시각) 중 늦은 것 */
+  | (RuleBase & { kind: 'review'; days: number; field?: string })
+  /** 이 경로의 파일·폴더를 두지 않는다 */
+  | (RuleBase & { kind: 'forbid' })
+  /** 이 크기(바이트)를 넘는 파일을 두지 않는다 */
+  | (RuleBase & { kind: 'max-size'; max: number })
+  /** paths 의 패턴마다 맞는 파일·폴더가 하나는 있어야 한다 */
+  | (RuleBase & { kind: 'require' });
+
+/** 팀 규칙 파일(docbench.json)을 읽은 것 — 이 키들 말고는 읽지 않는다(실행 명령·사람 같은 PC 설정은 여기서 읽지 않는다) */
+export interface WorkspaceRules {
+  purpose?: string;
+  folders?: Record<string, { role?: string }>;
+  /** 모든 점검에서 뺄 경로(glob) — 보관함·외부 코드 */
+  ignore: string[];
+  /** 늘 하는 점검의 수준을 바꾸거나('risk'…) 끈다('off') */
+  checks: Partial<Record<BuiltinCheckCode, CheckLevel | 'off'>>;
+  rules: RuleSpec[];
+}
+
+/** 규칙 파일의 문제 — at = 어디(rules[2].style), value = 받은 값 */
+export interface RuleProblem {
+  at: string;
+  code: 'json' | 'not-object' | 'too-big' | 'unknown-key' | 'unknown-kind' | 'missing' | 'bad-value' | 'pattern' | 'too-many';
+  value?: string;
+}
 
 export interface OverviewFolder {
   /** 맨 위 폴더 이름 ('' = 작업 공간 맨 위의 파일들) */
@@ -255,6 +330,11 @@ export interface WorkspaceOverview {
   git?: { modified: number; untracked: number; added: number };
   /** 링크를 훑었나 (문서가 많거나 큰 폴더면 건너뛴다) */
   links?: { docs: number; links: number };
+  /**
+   * 팀 규칙 파일(D90) — 있을 때만. count = 읽은 규칙 수, problems = 파일의 문제 수,
+   * unchecked = 앞머리를 아직 읽지 않아 앞머리 규칙에서 빠진 문서 수(큰 폴더 — 다시 확인하면 이어 읽는다)
+   */
+  rules?: { file: string; count: number; problems: number; unchecked: number };
   checks: OverviewCheck[];
 }
 

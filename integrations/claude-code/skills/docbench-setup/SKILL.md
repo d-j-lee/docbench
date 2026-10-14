@@ -5,7 +5,7 @@ description: DocBench(사람과 AI 가 같은 문서 — 마크다운·설정·�
 
 # DocBench 붙이기
 
-DocBench 는 문서 폴더의 문서를 제목(설정 파일은 키) 깊이별로 접어 보고, 섹션·문구에 피드백을 달고, 섹션 단위로 고치는 작업대다. 마크다운에 더해 YAML·JSON·TOML·INI·CSV·글·로그·HTML·그림·PDF·Word·PowerPoint·Excel·한글(HWPX)·Jupyter 를 연다(오피스는 뽑은 글로 읽기만, 설정·코드는 Claude 가 제안만 — 받은 판 `docs/ARCHITECTURE.md` "여러 형식"). 처음 열면 작업 공간 **개요**(목적·폴더 역할·구성·메타데이터·살펴볼 것)가 뜬다.
+DocBench 는 문서 폴더의 문서를 제목(설정 파일은 키) 깊이별로 접어 보고, 섹션·문구에 피드백을 달고, 섹션 단위로 고치는 작업대다. 마크다운에 더해 YAML·JSON·TOML·INI·CSV·글·로그·HTML·그림·PDF·Word·PowerPoint·Excel·한글(HWPX)·Jupyter 를 연다(오피스는 뽑은 글로 읽기만, 설정·코드는 Claude 가 제안만 — 받은 판 `docs/ARCHITECTURE.md` "여러 형식"). 처음 열면 작업 공간 **개요**(목적·폴더 역할·구성·메타데이터·살펴볼 것)가 뜬다. 문서 폴더 맨 위 `docbench.json`(팀 규칙 — 앞머리 키·폴더 README·이름·검토 주기 …)이 있으면 개요가 그것으로도 점검하고, 같은 점검을 CI 에서 `docbench check`·GitHub Action(`uses: d-j-lee/docbench@v<판>`)으로 돌린다 — 붙일 때 팀이 원하면 규칙 파일과 CI 단계도 제안한다(규칙은 팀이 정한다).
 피드백·이력은 사람이 읽는 파일로 **기록 폴더**에 남는다 — 기본은 문서 폴더 밖(기록 보관함/<문서 폴더 이름>, 문서 폴더에는 문서만), 팀이 git 으로 함께 쓰면 문서 폴더 안 `.docbench/`.
 대시보드에는 기본으로 **DocBench 앱**(`docbench app` — 이 PC 에 하나 도는 작은 서비스)을 켜 두고, 대시보드 탭이 앱의 `/host.js` 로 `DocBenchHost.mount(el, { root, key })` 를 부른다. 백엔드는 언어와 상관없이 이 PC 의 설정 폴더에서 열쇠 파일을 읽어 페이지에 넣기만 한다.
 사람은 읽으며 초안을 모으고 한 번에 보낸다(검토 회차 — 결과는 "볼 것"에서 확인·되돌리기). Claude 는 세 길로 처리한다: 화면 아래 **Claude 작업**(앱·서버가 띄우는 백그라운드 `claude -p`, 모델·노력 선택, 진행 로그 — 읽기만 하고 반영은 DocBench 가 판 비교로), **터미널 한 줄**(설치 없음 — 기록 폴더에서 Claude Code 를 켜면 결과 파일을 남기고 화면·앱이 반영), 또는 켜 둔 Claude Code 가 `docbench` CLI 로.

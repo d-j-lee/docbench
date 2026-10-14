@@ -6,7 +6,8 @@
       "id": "intro",
       "label": "안내",
       "match": [
-        "README.md"
+        "README.md",
+        "docbench.json"
       ]
     },
     {

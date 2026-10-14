@@ -275,35 +275,103 @@ export function parseJsonText(text: string): unknown {
 
 // ---------------------------------------------------------------- glob
 
-const globCache = new Map<string, RegExp>();
+/** 조각 하나의 낱말 — 글자 · `?` · `*` · `{a,b}`(조각 안의 갈래) */
+type GlobTok = string | { any: 1 } | { star: 1 } | { alt: string[] };
+/** 펼친 glob — '/' 를 품은 갈래({docs/a,b})만 미리 펼치고, '/' 로 나눈 조각마다 낱말 */
+const globCache = new Map<string, (GlobTok[] | '**')[][]>();
+/** '/' 를 품은 갈래를 펼친 수 한도 — 곱으로 불어나지 않게 */
+const GLOB_ALTS_MAX = 64;
 
-/** 작은 glob — `**`, `*`, `?`, `{a,b}` 만. 경로는 '/' 구분 상대 경로. ci = 대소문자 무시(Windows) */
-export function globToRegExp(pat: string, ci = false): RegExp {
-  const key = (ci ? 'i:' : 's:') + pat;
-  const hit = globCache.get(key);
-  if (hit) return hit;
-  let re = '';
-  for (let i = 0; i < pat.length; i++) {
-    const c = pat[i];
-    if (c === '*') {
-      if (pat[i + 1] === '*') {
-        i++;
-        if (pat[i + 1] === '/') { i++; re += '(?:.*/)?'; } else re += '.*';
-      } else re += '[^/]*';
-    } else if (c === '?') re += '[^/]';
-    else if (c === '{') {
-      const end = pat.indexOf('}', i);
-      if (end < 0) { re += '\\{'; continue; }
-      re += '(?:' + pat.slice(i + 1, end).split(',').map((s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&')).join('|') + ')';
-      i = end;
-    } else re += c.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+/** '/' 를 품은 {…} 만 펼친다 (조각 안 갈래는 낱말로 둔다) */
+function expandSlashBraces(p: string): string[] {
+  let out = [p];
+  for (let round = 0; round < 8; round++) {
+    let changed = false;
+    const next: string[] = [];
+    for (const s of out) {
+      const m = /\{([^{}]*\/[^{}]*)\}/.exec(s);
+      if (!m) { next.push(s); continue; }
+      changed = true;
+      for (const alt of m[1].split(',')) next.push(s.slice(0, m.index) + alt + s.slice(m.index + m[0].length));
+    }
+    out = next.slice(0, GLOB_ALTS_MAX);
+    if (!changed) break;
   }
-  const out = new RegExp('^' + re + '$', ci ? 'i' : '');
-  globCache.set(key, out);
   return out;
 }
 
-export const matchAny = (rel: string, pats: string[] | undefined, ci = false): boolean => !!pats && pats.some((p) => globToRegExp(p, ci).test(rel));
+function tokenize(seg: string): GlobTok[] | '**' {
+  if (seg === '**') return '**';
+  const out: GlobTok[] = [];
+  for (let i = 0; i < seg.length; i++) {
+    const c = seg[i];
+    if (c === '*') { if (!(typeof out[out.length - 1] === 'object' && 'star' in (out[out.length - 1] as object))) out.push({ star: 1 }); }
+    else if (c === '?') out.push({ any: 1 });
+    else if (c === '{') {
+      const end = seg.indexOf('}', i);
+      const inner = end < 0 ? '' : seg.slice(i + 1, end);
+      if (end < 0 || inner.includes('{')) { out.push(c); continue; }
+      out.push({ alt: inner.split(',') });
+      i = end;
+    } else out.push(c);
+  }
+  return out;
+}
+
+/** 조각 하나 — (낱말 위치, 글자 위치) 를 한 번씩만 본다: 되돌아가기로 불어나지 않는다 */
+function segMatch(toks: GlobTok[], s: string): boolean {
+  const W = s.length + 1;
+  const memo = new Uint8Array((toks.length + 1) * W);
+  const go = (ti: number, si: number): boolean => {
+    if (ti === toks.length) return si === s.length;
+    const k = ti * W + si;
+    if (memo[k]) return memo[k] === 2;
+    const t = toks[ti];
+    let r: boolean;
+    if (typeof t === 'string') r = s[si] === t && go(ti + 1, si + 1);
+    else if ('any' in t) r = si < s.length && go(ti + 1, si + 1);
+    else if ('star' in t) r = go(ti + 1, si) || (si < s.length && go(ti, si + 1));
+    else r = t.alt.some((o) => s.startsWith(o, si) && go(ti + 1, si + o.length));
+    memo[k] = r ? 2 : 1;
+    return r;
+  };
+  return go(0, 0);
+}
+
+/** 조각 목록 — `**` 조각은 폴더 0개 이상 */
+function segsMatch(ps: (GlobTok[] | '**')[], ss: string[]): boolean {
+  const W = ss.length + 1;
+  const memo = new Uint8Array((ps.length + 1) * W);
+  const go = (i: number, j: number): boolean => {
+    if (i === ps.length) return j === ss.length;
+    const k = i * W + j;
+    if (memo[k]) return memo[k] === 2;
+    const p = ps[i];
+    const r = p === '**' ? go(i + 1, j) || (j < ss.length && go(i, j + 1)) : j < ss.length && segMatch(p, ss[j]) && go(i + 1, j + 1);
+    memo[k] = r ? 2 : 1;
+    return r;
+  };
+  return go(0, 0);
+}
+
+/**
+ * 작은 glob — `**`(폴더 0개 이상), `*`·`?`(한 조각 안), `{a,b}`. 경로는 '/' 구분 상대 경로(폴더는 끝에 '/'). ci = 대소문자 무시(Windows).
+ * 정규식으로 바꾸지 않는다 — 함께 쓰는 설정(docbench.json·config.json)의 `*a*a*a…` 같은 패턴이 되돌아가기로 화면을 멈추지 않게(D90).
+ * 조각 안의 `**` 는 `*` 와 같다
+ */
+export function globMatch(pat: string, rel: string, ci = false): boolean {
+  const key = (ci ? 'i:' : 's:') + pat;
+  let alts = globCache.get(key);
+  if (!alts) {
+    alts = expandSlashBraces(ci ? pat.toLowerCase() : pat).map((a) => a.split('/').map(tokenize));
+    if (globCache.size > 2000) globCache.clear();
+    globCache.set(key, alts);
+  }
+  const ss = (ci ? rel.toLowerCase() : rel).split('/');
+  return alts.some((ps) => segsMatch(ps, ss));
+}
+
+export const matchAny = (rel: string, pats: string[] | undefined, ci = false): boolean => !!pats && pats.some((p) => globMatch(p, rel, ci));
 
 export const isDocPath = (rel: string, c: Pick<WorkspaceConfig, 'include' | 'exclude'>, ci = false): boolean =>
   docFloor(rel) && matchAny(rel, c.include, ci) && !matchAny(rel, c.exclude, ci);

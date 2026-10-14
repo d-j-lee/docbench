@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/d-j-lee/docbench/main/docs/docbench.schema.json",
+  "ignore": ["notes/**"],
+  "rules": [
+    {
+      "kind": "front-matter",
+      "name": "설계·운영 문서의 앞머리",
+      "paths": ["docs/**"],
+      "keys": ["owner", "status"],
+      "values": { "status": ["draft", "review", "approved"] },
+      "hint": "담당(owner)과 상태(status: draft·review·approved)를 문서 맨 위 앞머리에 — 개요에서 상태·담당별로 모입니다."
+    },
+    {
+      "kind": "naming",
+      "paths": ["docs/**", "data/**"],
+      "style": ["no-spaces", "no-version-marks"],
+      "hint": "공백·판 표시(_v2·최종·(1)) 없이 — 판은 변경 이력이 맡습니다."
+    },
+    { "kind": "review", "paths": ["docs/운영-런북.md"], "days": 180, "level": "info" }
+  ]
+}

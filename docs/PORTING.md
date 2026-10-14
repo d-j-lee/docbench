@@ -202,6 +202,7 @@ node bin\docbench.mjs serve D:\work\docs --port 4317
 - **기록 폴더**(피드백·이력·작업 기록): `init` 은 기본으로 문서 폴더 **밖**에 만든다 — 기록 보관함(이 PC 의 설정 `dataHome`, 없으면 `%LOCALAPPDATA%\docbench\data`) 아래 `<문서 폴더 이름>\`. 문서 폴더에는 아무것도 생기지 않는다(같은 폴더에서 일하는 다른 프로그램·다른 Claude 세션이 헷갈리지 않게, D57). 다른 자리면 `--data <폴더>`, 팀이 git 으로 함께 쓰려면 `--inside`(문서 폴더 안 `.docbench\`). 예전 판이 만든 `.docbench\` 가 있는 폴더는 그대로 안을 쓴다. `docbench status` 가 기록 자리를 보여 준다.
 - `--claude` 는 문서 폴더에 `.claude\skills\docbench-feedback\` 를 복사한다 — 터미널 Claude 가 그 문서 폴더에서 시작할 때만 쓸모 있다(아니면 플러그인으로 깐다).
 - `config.json`(기록 폴더, 함께 쓰는 설정): 그룹·문서별 제목·신뢰 표시·깊이(예: [examples/sample-workspace/.docbench/config.json](../examples/sample-workspace/.docbench/config.json)).
+- `docbench.json`(문서 폴더 맨 위, **팀 규칙** — D90): 목적·폴더 역할·점검 규칙(앞머리 키·폴더 README·이름·검토 주기·두지 않을 파일·크기·있어야 할 파일). 사람이 쓰는 문서라 git 으로 함께 나누고, 대시보드든 CI(`docbench check`·`action.yml`)든 같은 점검을 한다. 정해 둔 키만 읽는다(실행 명령·사람은 여기서도 읽지 않는다). 예: [examples/sample-workspace/docbench.json](../examples/sample-workspace/docbench.json), 스키마 [docbench.schema.json](docbench.schema.json).
 - **이 PC 의 설정**(Windows `%LOCALAPPDATA%\docbench\config.json`, macOS `~/Library/Application Support/docbench/`, Linux `~/.config/docbench/` — 문서 폴더 밖, 로밍되지 않는 이 PC 자리. `DOCBENCH_HOME` 으로 옮김. `docbench status` 가 위치를 보여 준다): 실행 명령 `assistant`·`notify.command`, 이름 `user`·표시 이름 `name`, 기록 자리, 앱의 허용 출처. **실행 명령·이름은 여기에만** — 문서 폴더 `config.json` 에 적으면 무시하고 `docbench status`·`serve` 가 경고한다. git·OneDrive·공유 폴더로 퍼지는 문서 폴더에 누가 명령을 넣어도 남의 PC 에서 돌지 않고, PC 마다 다른 경로가 공유 파일에 섞이지 않는다.
 
   ```json
@@ -300,7 +301,7 @@ node bin\docbench.mjs serve D:\work\docs --allow-origin http://localhost:3000
 
 `docs/openapi.yaml` 의 엔드포인트를 구현하면 `createRestAdapters({ base })` 가 그대로 붙는다. 꼭 지킬 것:
 판 비교(`baseVersion` 다르면 409 + `current`), 피드백 `version` 비교, 피드백 고치기에서 `null` 은 그 값을 지움(빠진 키는 그대로 — `FeedbackPatch`), 줄바꿈은 LF 로 주고받기, 변경 알림(SSE 또는 폴링).
-여러 형식(D87)·개요(D88)는 선택이다 — `GET /raw`(그림·원본 내려받기, 내려받기 헤더로만), `GET /overview`(`core.computeOverview` 로 계산하면 같은 점검), `POST /doc`(새 문서) 를 구현하고 `session.features` 에 `raw`·`overview`·`create` 를 켠다. 없으면 화면이 그 기능만 숨긴다(그림 미리보기·개요 화면·README 만들기). 마크다운이 아닌 문서는 `DocContent.format` 과 형식 규칙(`core/formats`)을 따른다 — 뽑은 글·그림은 `readOnly`·`readOnlyReason: format`, 섹션 계산은 `sectionSources(md, id)` 처럼 문서 id 를 넘긴다.
+여러 형식(D87)·개요(D88)는 선택이다 — `GET /raw`(그림·원본 내려받기, 내려받기 헤더로만), `GET /overview`(`core.computeOverview` 로 계산하면 같은 점검 — 팀 규칙은 문서 폴더의 `docbench.json` 을 `core.parseRulesText` 로 읽어 `rules` 로 넘긴다), `POST /doc`(새 문서) 를 구현하고 `session.features` 에 `raw`·`overview`·`create` 를 켠다. 없으면 화면이 그 기능만 숨긴다(그림 미리보기·개요 화면·README 만들기). 마크다운이 아닌 문서는 `DocContent.format` 과 형식 규칙(`core/formats`)을 따른다 — 뽑은 글·그림은 `readOnly`·`readOnlyReason: format`, 섹션 계산은 `sectionSources(md, id)` 처럼 문서 id 를 넘긴다.
 화면만 쓰고 어댑터를 직접 짜도 된다 — `src/types.ts` 의 `DocBenchAdapters` 를 채워 `createDocBench(el, { adapters })`.
 
 ## 4. 웹 컴포넌트로 엮기 (B·C)
