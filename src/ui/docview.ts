@@ -11,6 +11,7 @@ import { titleFromText, docStem } from '../core/workspace';
 import { formatFor, markdownLike, editableFormat, claudeChanges } from '../core/formats';
 import { frontMatterData } from '../core/markdown';
 import { docMetaOf, resolveRelative } from '../core/overview';
+import { RULES_FILE } from '../core/rules';
 import { decorate, sectionize, textIndex, selectedSpan, wrapRange, type Section } from './render';
 import { renderDoc, releaseDoc, hasSourceToggle, downloadButton } from './viewers';
 import { h, $$, icon, fmtBytes, fmtTime, debounce, relTime } from './dom';
@@ -173,6 +174,9 @@ export class DocView {
       if (chips.childNodes.length) head.append(chips);
     }
     if (m.notice) head.append(h('p', { class: 'db-notice tone-' + (m.notice.tone || 'warn'), text: m.notice.text }));
+    // 팀 규칙 파일(D90) — 무엇인지와 점검 결과로 가는 길
+    if (this.id === RULES_FILE) head.append(h('div', { class: 'db-notice tone-info db-row' }, h('span', { text: this.t('doc.rules') }),
+      this.app.hasOverview() ? h('button', { class: 'db-btn sm', type: 'button', onclick: () => void this.app.navigate('overview') }, this.t('doc.rules.see')) : null));
     // 뽑은 글·잘린 글·못 뽑은 글 — 무엇을 보고 있는지 + 원본 내려받기
     const dl = () => (this.app.ad.docs.loadBytes ? downloadButton(this.id, { t: this.t, loadBytes: (id) => this.app.ad.docs.loadBytes!(id) }, head, this.t('view.download.original')) : null);
     if (f.kind === 'derived' && c.deriveError) head.append(h('div', { class: 'db-notice tone-warn db-row' }, h('span', { text: this.t('doc.derive.fail.' + (['too-large', 'not-zip', 'unsupported'].includes(c.deriveError) ? c.deriveError : 'broken'), { fmt: f.label }) }), dl()));

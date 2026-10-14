@@ -116,7 +116,7 @@ test('CLI: init — 기록은 문서 폴더 밖(기본, 문서 폴더에 아무�
   assert.deepEqual([marker.docsName, marker.docsPath], [path.basename(dir), dir]);
   // 문서 폴더(또는 그 아래)에서 부르면 그 기록을 찾는다
   const st = JSON.parse((await db(path.join(dir, 'docs'), 'status', '--json')).stdout);
-  assert.deepEqual([st.root, st.data, st.dataMode, st.docs], [dir, r.data, 'outside', 7]);
+  assert.deepEqual([st.root, st.data, st.dataMode, st.docs], [dir, r.data, 'outside', 8]);
   // 기록 폴더 안에서 불러도 문서 폴더를 안다
   assert.equal(JSON.parse((await db(r.data, 'status', '--json')).stdout).root, dir);
 
@@ -177,7 +177,7 @@ test('CLI: 작업 폴더 밖이면 만들지 않고 멈춘다(종료 2), DOCBENC
   await assert.rejects(db(outside, 'fb', 'list'), (e) => e.code === 2);
   assert.equal((await fs.readdir(outside)).length, 0, '.docbench 를 몰래 만들지 않는다');
   const r = await run(process.execPath, [cli, 'status', '--json'], { cwd: outside, env: { ...process.env, DOCBENCH_ROOT: dir } });
-  assert.equal(JSON.parse(r.stdout).docs, 7);
+  assert.equal(JSON.parse(r.stdout).docs, 8);
 });
 
 test('CLI: 섹션 쓰기 안전장치 — 판 필수, 제목 줄 유지, 하위 섹션 보존, BOM 입력', async (t) => {

@@ -31,6 +31,7 @@ import { formatFor, formatOf, editableFormat, claudeChanges, titledFormat, isMar
 import { deriveText } from '../core/derive';
 import { frontMatterData } from '../core/markdown';
 import { computeOverview, pickReadmes, relativeLinks, OVERVIEW_LINK_LIMITS } from '../core/overview';
+import { parseRulesText, literalRulePaths, RULES_FILE, RULES_MAX_BYTES, bytesLabel } from '../core/rules';
 import { sectionSources } from '../core/source';
 import type { WorkspaceOverview } from '../types';
 import { cleanRunEntry, completeJsonLines, liveRunners, outdatedRunners, runnerIsMine, makeRunRequest, pickRunner, runnerAlive, runFiles, validRunId, normalizeRunInput, buildRunPrompt, buildReviewPrompt, TERMINAL_RUNNER, isTerminalRunner, validDocId, RUN_MAX_DOCS, emptySummary, safeAccountId } from '../core/runs';
@@ -852,16 +853,20 @@ export class FolderWorkspace {
   async inventory(): Promise<Inventory> {
     const items: InventoryItem[] = [];
     const max = this.config.maxInventory;
+    let cut = false;
     const walk = async (dir: string, parent: string, depth: number): Promise<void> => {
-      if (depth > 10 || items.length >= max) return;
+      if (depth > 10) { cut = true; return; }
+      if (items.length >= max) return;
       const ents = ((await this.fs.list(dir).catch(() => null)) || []).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      // 이 폴더의 파일을 먼저 다 담고 하위 폴더로 — 한도에 닿아도 위쪽 파일(맨 위 README …)이 빠지지 않게
+      const subs: string[] = [];
       for (const e of ents) {
         if (items.length >= max) break;
         const rel = parent + e.name;
         if (e.kind === 'directory') {
           if (!walkable(e.name)) continue;
           items.push({ id: rel + '/', parent, name: e.name, folder: true });
-          await walk(rel, rel + '/', depth + 1);
+          subs.push(rel);
         } else {
           const st = await this.fs.stat(rel).catch(() => null);
           const isDoc = this.docs.has(rel);
@@ -869,42 +874,65 @@ export class FolderWorkspace {
           items.push({ id: rel, parent, name: e.name, folder: false, kind: ext || 'file', size: st?.size, modified: st ? new Date(st.mtimeMs).toISOString() : undefined, flags: isDoc ? ['doc'] : [], docId: isDoc ? rel : undefined });
         }
       }
+      for (const rel of subs) await walk(rel, rel + '/', depth + 1);
     };
     await walk('', '', 0);
-    return { asof: new Date().toISOString(), source: this.fs.name + (items.length >= max ? ` (처음 ${max}개)` : ''), items, flagLabels: INVENTORY_FLAG_LABELS, open: [] };
+    return { asof: new Date().toISOString(), source: this.fs.name + (items.length >= max ? ` (처음 ${max}개)` : ''), items, flagLabels: INVENTORY_FLAG_LABELS, open: [], ...(cut ? { cut } : {}) };
   }
 
   /**
    * 작업 공간 개요(D88 — 서버 overview 와 같은 재료): 폴더 지도 항목 + 매니페스트(제목·앞머리) + README 앞부분 + 문서 사이 링크(작은 작업 공간만)
    */
-  async overview(): Promise<WorkspaceOverview> {
+  async overview(o: { scope?: string } = {}): Promise<WorkspaceOverview> {
+    const scope = (o.scope || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     await this.manifest();
     const inv = await this.inventory();
-    const capped = inv.items.length >= this.config.maxInventory;
+    const capped = inv.items.length >= this.config.maxInventory || !!inv.cut;
     const readmes: Record<string, { id: string; text: string }> = {};
-    for (const [dir, id] of Object.entries(pickReadmes(inv.items))) {
+    for (const [dir, id] of Object.entries(pickReadmes(inv.items, scope))) {
       if (id.split('/').some((seg) => seg.startsWith('.'))) continue;
       const f = await this.fs.read(id, 8192).catch(() => null);
       if (f) readmes[dir] = { id, text: decodeBytes(cutAtLine(f.bytes), this.legacy).text };
     }
     let links: { from: string; to: string[] }[] | undefined;
-    const md = [...this.docs.keys()].filter(isMarkdownPath);
+    const md = [...this.docs.keys()].filter((id) => isMarkdownPath(id) && (!scope || id.startsWith(scope + '/')));
     if (this.index.complete && !capped && md.length <= OVERVIEW_LINK_LIMITS.docs) {
       links = [];
       let total = 0;
       for (const id of md) {
         total += this.docs.get(id)?.size || 0;
         if (total > OVERVIEW_LINK_LIMITS.bytes) { links = undefined; break; }
-        const r = await this.readRaw(id).catch(() => null);
-        if (r) links.push({ from: id, to: relativeLinks(r.text, id) });
+        // 링크만 본다 — 판(해시)은 셈하지 않고, 아주 큰 글은 건너뛴다
+        if ((this.docs.get(id)?.size || 0) > TEXT_MAX_BYTES) continue;
+        const f = await this.fs.read(this.resolve(id)).catch(() => null);
+        if (f) links.push({ from: id, to: relativeLinks(decodeBytes(f.bytes, this.legacy).text, id) });
       }
     }
     const meta: Record<string, Record<string, string | string[]>> = {};
-    for (const [id, d] of this.docs) if (d.meta) meta[id] = d.meta;
+    // 앞부분을 읽은 마크다운 문서는 앞머리가 없어도 {} — 팀 규칙이 "아직 못 읽음"과 "앞머리 없음"을 가른다
+    for (const [id, d] of this.docs) if (d.meta) meta[id] = d.meta; else if (isMarkdownPath(id) && d.title && d.titleMtime === d.mtimeMs) meta[id] = {};
+    const rules = await this.loadRules();
+    // 팀 규칙 require·forbid 의 글자 그대로 쓴 경로 — 폴더 지도 밖(숨김·node_modules …)도 있는지 확인
+    const present: string[] = [];
+    for (const p of literalRulePaths(rules?.spec)) {
+      const bare = p.replace(/\/+$/, '');
+      if (!bare || bare.split('/').some((x) => x === '..')) continue;
+      if (await this.fs.stat(bare).then((x) => !!x, () => false)) present.push(bare);
+      else if (await this.fs.list(bare).then((x) => !!x, () => false)) present.push(bare + '/');
+    }
     return computeOverview({
       root: this.fs.name, items: inv.items, complete: this.index.complete && !capped, reason: capped ? 'many' : this.index.reason,
       isDoc: (p) => isDocPath(p, this.config, this.ci), meta, config: { purpose: this.config.purpose, folders: this.config.folders }, readmes, links,
+      ...(rules ? { rules } : {}), ci: this.ci, ...(scope ? { base: scope } : {}), ...(present.length ? { present } : {}),
     });
+  }
+
+  /** 팀 규칙 파일(D90, 문서 폴더 맨 위 docbench.json) — 없으면 undefined. 읽기만 */
+  private async loadRules(): Promise<Parameters<typeof computeOverview>[0]['rules']> {
+    const f = await this.fs.read(RULES_FILE, RULES_MAX_BYTES + 1).catch(() => null);
+    if (!f) return undefined;
+    if (f.bytes.length > RULES_MAX_BYTES) return { file: RULES_FILE, spec: null, problems: [{ at: RULES_FILE, code: 'too-big', value: bytesLabel(RULES_MAX_BYTES) }] };
+    return { file: RULES_FILE, ...parseRulesText(decodeBytes(f.bytes, this.legacy).text) };
   }
 
   // ------------------------------------------------------------ 바뀜 확인 (감시 대신)

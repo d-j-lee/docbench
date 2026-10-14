@@ -146,11 +146,11 @@ components:
       required: [id, md, version]
     WorkspaceOverview:
       type: object
-      description: src/types.ts WorkspaceOverview (D88). 점검 문구는 화면 사전(overview.check.<code>)이 정한다
+      description: src/types.ts WorkspaceOverview (D88·D90). 점검 문구는 core/checktext(overview.check.<code>)가 정한다 — 화면·CLI 한 벌
       properties:
         asof: { type: string, format: date-time }
         root: { type: string }
-        purpose: { type: object, properties: { text: { type: string }, from: { enum: [config, readme] }, docId: { type: string } } }
+        purpose: { type: object, properties: { text: { type: string }, from: { enum: [config, readme] }, docId: { type: string, description: 'README 또는 팀 규칙 파일(docbench.json)' } } }
         scope: { type: object, properties: { complete: { type: boolean }, items: { type: integer }, reason: { enum: [big-root, many] } } }
         totals: { type: object, properties: { files: { type: integer }, dirs: { type: integer }, bytes: { type: integer }, docs: { type: integer }, recent7: { type: integer }, newest: { type: string } } }
         groups: { type: array, items: { type: object, properties: { group: { enum: [doc, data, code, office, image, pdf, media, archive, other] }, files: { type: integer }, bytes: { type: integer } } } }
@@ -161,15 +161,30 @@ components:
         ai: { type: array, items: { type: object, properties: { path: { type: string }, kind: { enum: [claude, agents, gemini, cursor, copilot, mcp, skill, prompt] } } } }
         git: { type: object, properties: { modified: { type: integer }, untracked: { type: integer }, added: { type: integer } } }
         links: { type: object, properties: { docs: { type: integer }, links: { type: integer } } }
+        rules:
+          type: object
+          description: '팀 규칙 파일(docbench.json, D90) — 있을 때만. unchecked = 앞머리를 아직 읽지 않아 앞머리 규칙에서 빠진 문서 수'
+          properties: { file: { type: string }, count: { type: integer }, problems: { type: integer }, unchecked: { type: integer } }
         checks:
           type: array
           items:
             type: object
             properties:
-              code: { enum: [secrets, huge-files, no-readme, review-due, broken-links, version-copies, temp-files, empty-folders, folder-no-readme, same-name, long-paths, stale-docs, orphan-docs, git-uncommitted] }
+              code:
+                enum: [secrets, huge-files, no-readme, review-due, broken-links, version-copies, temp-files, empty-folders, folder-no-readme, same-name, long-paths, stale-docs, orphan-docs, git-uncommitted,
+                       rule-front-matter, rule-readme, rule-naming, rule-review, rule-forbid, rule-max-size, rule-require, rules-invalid]
               level: { enum: [risk, action, tidy, info] }
               n: { type: integer }
               paths: { type: array, items: { type: string }, description: 앞의 40개까지 }
+              rule:
+                type: object
+                description: 팀 규칙에서 온 점검 — index = 규칙 파일 rules 의 자리(0부터), want = 요구(키·이름 규칙·일수·크기), scope = 그 규칙의 paths
+                properties: { index: { type: integer }, kind: { enum: [front-matter, readme, naming, review, forbid, max-size, require] }, name: { type: string }, hint: { type: string }, want: { type: string }, scope: { type: array, items: { type: string } } }
+              notes: { type: object, additionalProperties: { type: string }, description: '경로마다 짧은 까닭 — 빠진 앞머리 키(owner · status=wip)·맞지 않는 이름 규칙·마지막 검토일·크기' }
+              problems:
+                type: array
+                description: rules-invalid 만 — 규칙 파일의 문제
+                items: { type: object, properties: { at: { type: string }, code: { enum: [json, not-object, too-big, unknown-key, unknown-kind, missing, bad-value, pattern, too-many, too-slow] }, value: { type: string } } }
       required: [asof, root, scope, totals, groups, folders, recent, large, meta, ai, checks]
     Feedback:
       type: object
@@ -467,8 +482,12 @@ paths:
       tags: [workspace]
       summary: 작업 공간 개요 (session.features.overview, D88)
       description: |
-        폴더 지도 항목 + 매니페스트(앞머리) + README 앞부분 + 문서 사이 상대 링크(문서 400개·8 MB 까지)로 계산한다(core.computeOverview).
+        폴더 지도 항목 + 매니페스트(앞머리) + README 앞부분 + 문서 사이 상대 링크(문서 400개·8 MB 까지) + 팀 규칙(문서 폴더 맨 위 docbench.json, D90)
+        + 마지막 커밋 시각(git, 작은 폴더만 — D92)으로 계산한다(core.computeOverview).
+        scope 를 주면 작업 공간 안 그 폴더만(그 폴더를 맨 위로 — README·역할·점검, 경로는 작업 공간 기준, D93).
         내용은 열지 않는다 — 비밀로 보이는 파일도 이름으로만. 큰 폴더면 scope.complete 가 false 이고 다 봐야 아는 점검(빈 폴더·깨진 링크)은 하지 않는다.
+      parameters:
+        - { name: scope, in: query, required: false, schema: { type: string }, description: "작업 공간 안 폴더(상대 경로). '..'·절대 경로는 400" }
       responses:
         '200': { description: 'src/types.ts WorkspaceOverview', content: { application/json: { schema: { $ref: '#/components/schemas/WorkspaceOverview' } } } }
   /doc/version:

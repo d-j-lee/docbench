@@ -124,7 +124,10 @@ docbench fb add --doc <문서> --section "<섹션 키>" --title "<짧은 제목>
 # 그 밖에
 docbench doc new <문서> --file new.md -m "<요약>"   # 새 문서 (폴더는 있어야 한다, 있으면 종료 3)
 docbench overview [--json]                          # 작업 공간 개요 — 목적·구성·폴더 역할·메타데이터·점검
+docbench check [--json]                             # 팀 규칙(docbench.json)·점검 — 걸리면 종료 5 (새 문서를 만들거나 고친 뒤 확인)
 ```
+
+**팀 규칙 (D90)** — 문서 폴더 맨 위 `docbench.json` 이 있으면 새 문서·앞머리·이름은 그 규칙(앞머리 키와 값 목록·이름 규칙·폴더 README)을 따른다. 규칙 파일은 사람이 정하는 문서라 Claude 는 고치지 않고(JSON — 제안만) 바꿀 점은 `fb add` 로 제안한다.
 
 **형식마다 할 수 있는 일 (D87)** — `fb show` 가 그 문서의 형식과 함께 알려 준다. 앱의 Claude 작업과 같은 규칙이다.
 

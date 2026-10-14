@@ -150,7 +150,8 @@ export class App {
   }
 
   /** 작업 공간 개요를 보일 수 있나 (저장소가 주고, 호스트가 끄지 않았고, 범위가 작업 공간 전부일 때) */
-  hasOverview(): boolean { return !!this.ad.docs.overview && this.opts.features?.overview !== false && !this.scope; }
+  /** 개요 화면 — 범위(scope)로 열었으면 그 폴더의 개요 */
+  hasOverview(): boolean { return !!this.ad.docs.overview && this.opts.features?.overview !== false; }
 
   /** 목록을 다시 받는다 (새 문서를 만든 뒤 등) */
   async reloadManifest(): Promise<void> {
@@ -315,6 +316,8 @@ export class App {
         this.manifest = m; this.rules = compileRules(m.render); this.explorer?.invalidate(); this.renderRail(); void this.countTodos();
       });
     } else if (ev.type === 'doc' && ev.id) {
+      // 문서가 바뀌면 개요(앞머리·링크·팀 규칙 docbench.json)도 다시 — 다음에 볼 때 읽는다
+      invalidateOverview(this);
       this.todoDirty(ev.id);
       if (this.doc && this.doc.id === ev.id) void this.doc.onExternalChange();
       else if (this.manifest.docs[ev.id]) { this.changedDocs.add(ev.id); this.renderRail(); }
@@ -1050,6 +1053,7 @@ export class App {
   }
   hideToast(): void { this.els.toast.hidden = true; clearTimeout(this.toastT); }
   emit(ev: DocBenchEvent): void {
+    if (ev.type === 'doc:saved') invalidateOverview(this);
     try { this.opts.onEvent?.(ev); } catch { /* 호스트 오류는 삼킨다 */ }
     this.root.dispatchEvent(new CustomEvent('docbench:' + ev.type, { detail: ev, bubbles: true }));
   }

@@ -10,8 +10,8 @@ import crypto from 'node:crypto';
 test('작업 폴더: 문서 목록·매니페스트·그룹', async (t) => {
   const dir = await tempWorkspace(); t.after(() => rm(dir));
   const ws = await new Workspace(dir).init();
-  // 마크다운 6 + CSV 1 (D87 — 여러 형식이 문서가 된다)
-  assert.equal(ws.docs.size, 7);
+  // 마크다운 6 + CSV 1 (D87 — 여러 형식이 문서가 된다) + 팀 규칙 docbench.json(D90 — 사람이 고치는 문서)
+  assert.equal(ws.docs.size, 8);
   const m = await ws.manifest();
   assert.equal(m.schema, 2);
   assert.deepEqual(m.groups.map((g) => g.id), ['_bench', 'intro', 'core', 'qa', 'notes', 'dir:data']);

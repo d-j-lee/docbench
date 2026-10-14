@@ -10,7 +10,7 @@
 | Engineering | Design docs · ADRs · API specs · READMEs | Collect review notes on sections, apply them in one go, check only what changed |
 | Infrastructure · Ops | Runbooks · incident reports · checklists | Spot blanks (`TODO`, `TBD`) at a glance and keep a history of changed procedures |
 | QA | Test plans · result reports | Batch notes per item to Claude and share the result with **Copy summary** |
-| Data · AI | Experiment reports · model cards · metric definitions | Separate claims from evidence with tags like `[실측]` (measured) and `[추정]` (estimated) |
+| Data · AI | Experiment reports · model cards · metric definitions | Separate claims from evidence with tags like `[measured]` and `[estimated]` |
 | Product · PM | Plans · PRDs · meeting notes | Each reviewer sends with **Suggest only**; the planner applies or rejects under **To review** |
 | Design · UX | UX writing guides · design principles | Select one phrase and fix it with **Rewrite as** |
 | Sales · Business development | Proposals · customer FAQs | Note only what changes per customer; keep shared rules in **Standing instructions** |
@@ -53,7 +53,7 @@ When measured and estimated numbers are mixed, readers cannot judge the report.
 
 **How**
 
-1. Use the (Korean) evidence tags: `[실측]` measured, `[문서]` documented, `[조사]` researched, `[추정]` estimated, `[미확인]` unverified. They show in different colors.
+1. Use evidence tags: `[measured]`, `[documented]`, `[researched]`, `[estimated]`, `[unverified]` (or the Korean `[실측]` `[문서]` `[조사]` `[추정]` `[미확인]`). They show in different colors.
 2. Send a **Claude review** with the note "flag numbers without a source and claims without a tag".
 3. Answer the questions with sources and check the edits. Every request reminds Claude not to drop tags or invent numbers.
 

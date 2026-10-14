@@ -180,13 +180,21 @@ function tableView(text: string, sep: string, ctx: ViewerCtx): HTMLDivElement {
   const cols = Math.min(TABLE_MAX_COLS, Math.max(...rows.map((r) => r.length)));
   const numeric = (s: string) => /^\s*[-+]?[\d,]*\.?\d+(e[-+]?\d+)?\s*%?\s*$/i.test(s);
   const t = h('table', { class: 'db-csv' });
+  // 칸 너비 — 짧은 글의 열은 줄을 바꾸지 않고, 긴 글의 열은 좁은 화면에서도 읽을 만한 폭을 지킨다(표가 가로로 밀린다)
+  const width = (s: string) => { let w = 0; for (const ch of s.slice(0, 120)) w += ch.charCodeAt(0) > 0x2e80 ? 2 : 1; return w; };
+  const colCls: (string | null)[] = [];
+  for (let c = 0; c < cols; c++) {
+    let max = 0;
+    for (let r = 0; r < Math.min(rows.length, 200); r++) max = Math.max(max, width(rows[r][c] ?? ''));
+    colCls.push(max > 32 ? 'wide' : max <= 20 ? 'short' : null);
+  }
   const head = h('tr', {}, h('th', { class: 'rn db-noindex', 'aria-hidden': 'true' }));
-  for (let c = 0; c < cols; c++) head.append(h('th', { text: rows[0][c] ?? '' }));
+  for (let c = 0; c < cols; c++) head.append(h('th', { class: colCls[c], text: rows[0][c] ?? '' }));
   t.append(h('thead', {}, head));
   const body = h('tbody');
   for (let r = 1; r < rows.length; r++) {
     const tr = h('tr', {}, h('td', { class: 'rn db-noindex', 'aria-hidden': 'true', text: r }));
-    for (let c = 0; c < cols; c++) { const v = rows[r][c] ?? ''; tr.append(h('td', { class: numeric(v) ? 'num' : null, text: v })); }
+    for (let c = 0; c < cols; c++) { const v = rows[r][c] ?? ''; tr.append(h('td', { class: [numeric(v) ? 'num' : '', colCls[c] || ''].join(' ').trim() || null, text: v })); }
     body.append(tr);
   }
   t.append(body);

@@ -1,0 +1,158 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/d-j-lee/docbench/main/docs/docbench.schema.json",
+  "title": "DocBench team rules (docbench.json)",
+  "description": "Team conventions for a docs workspace. DocBench's overview and `docbench check` (CI) use them on top of the built-in checks. Put this file at the top of the docs folder. Paths are globs relative to that folder: ** = any folders, * and ? = within one name, {a,b} = either; folders end with /.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": { "type": "string" },
+    "$comment": { "type": "string" },
+    "purpose": {
+      "type": "string",
+      "maxLength": 400,
+      "description": "What this workspace is for (one or two sentences). Shown at the top of the overview; takes precedence over the README's first paragraph."
+    },
+    "folders": {
+      "type": "object",
+      "description": "What each top folder holds. Key = folder name.",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "string", "maxLength": 200 },
+          { "type": "object", "additionalProperties": false, "properties": { "role": { "type": "string", "maxLength": 200 } } }
+        ]
+      }
+    },
+    "ignore": {
+      "$ref": "#/definitions/paths",
+      "description": "Paths left out of every check (archives, vendored files)."
+    },
+    "checks": {
+      "type": "object",
+      "description": "Change the level of a built-in check, or turn it off.",
+      "propertyNames": {
+        "enum": ["secrets", "huge-files", "no-readme", "review-due", "broken-links", "version-copies", "temp-files", "empty-folders", "folder-no-readme", "same-name", "long-paths", "stale-docs", "orphan-docs", "git-uncommitted"]
+      },
+      "additionalProperties": { "enum": ["risk", "action", "tidy", "info", "off", false] }
+    },
+    "rules": {
+      "type": "array",
+      "maxItems": 100,
+      "items": { "$ref": "#/definitions/rule" }
+    }
+  },
+  "definitions": {
+    "paths": {
+      "oneOf": [
+        { "$ref": "#/definitions/path" },
+        { "type": "array", "maxItems": 50, "items": { "$ref": "#/definitions/path" } }
+      ]
+    },
+    "path": { "type": "string", "minLength": 1, "maxLength": 300, "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$)).*$" },
+    "level": {
+      "enum": ["risk", "action", "tidy", "info"],
+      "description": "risk · action (default) · tidy · info. `docbench check --fail-on` fails at this level or heavier."
+    },
+    "common": {
+      "type": "object",
+      "properties": {
+        "paths": { "$ref": "#/definitions/paths" },
+        "except": { "$ref": "#/definitions/paths", "description": "Paths left out of this rule." },
+        "name": { "type": "string", "maxLength": 80, "description": "Shown as the check's title." },
+        "hint": { "type": "string", "maxLength": 400, "description": "Why, and how to fix — shown with the check." },
+        "level": { "$ref": "#/definitions/level" }
+      }
+    },
+    "rule": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["front-matter", "readme", "naming", "review", "forbid", "max-size", "require"] }
+      },
+      "allOf": [
+        { "$ref": "#/definitions/common" },
+        {
+          "if": { "properties": { "kind": { "const": "front-matter" } } },
+          "then": {
+            "description": "Markdown documents in paths (default **) must have these front-matter keys; values limits what a key may hold.",
+            "properties": {
+              "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true,
+              "keys": { "oneOf": [{ "type": "string" }, { "type": "array", "maxItems": 20, "items": { "type": "string" } }] },
+              "values": { "type": "object", "additionalProperties": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": ["string", "number", "boolean"] } }] } }
+            },
+            "anyOf": [{ "required": ["keys"] }, { "required": ["values"] }],
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "readme" } } },
+          "then": {
+            "description": "Folders matching paths (folder globs, e.g. \"*\" = every top folder) need a README or index — only folders with at least minFiles files (default 1).",
+            "properties": { "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true, "minFiles": { "type": "integer", "minimum": 0 } },
+            "required": ["paths"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "naming" } } },
+          "then": {
+            "description": "File and folder names (before the extension) in paths (default **) follow every style. Conventional names (README, LICENSE, CHANGELOG …) and hidden files are skipped.",
+            "properties": {
+              "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true,
+              "style": { "oneOf": [{ "$ref": "#/definitions/style" }, { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/style" } }] }
+            },
+            "required": ["style"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "review" } } },
+          "then": {
+            "description": "Documents in paths (default **) are looked at again within days. Uses the later of the front-matter review date (reviewed, last_reviewed, updated, lastmod …) and the last change (git commit, else file time). With field, only that front-matter date counts — edits are not reviews, and a missing date fails.",
+            "properties": {
+              "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true,
+              "days": { "type": "integer", "minimum": 1, "maximum": 36500 },
+              "field": { "type": "string", "description": "Front-matter key holding the last review date — when set, only this date counts." }
+            },
+            "required": ["days"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "forbid" } } },
+          "then": {
+            "description": "Files or folders matching paths should not be here. Inside hidden or tool folders (.github, node_modules, dist …) only literal paths are checked.",
+            "properties": { "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true },
+            "required": ["paths"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "max-size" } } },
+          "then": {
+            "description": "Files in paths (default **) must not be larger than max (bytes, or \"500 KB\", \"2 MB\").",
+            "properties": {
+              "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true,
+              "max": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "string", "pattern": "^\\s*\\d+(\\.\\d+)?\\s*([bB]|[kKmMgG]([iI]?[bB])?)?\\s*$" }] }
+            },
+            "required": ["max"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "require" } } },
+          "then": {
+            "description": "Each path (pattern) must match at least one file or folder. Inside hidden or tool folders (.github, node_modules, dist …) only literal paths are checked.",
+            "properties": { "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true },
+            "required": ["paths"],
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    "style": {
+      "enum": ["kebab-case", "snake_case", "lowercase", "no-spaces", "ascii", "date-prefix", "number-prefix", "no-version-marks"],
+      "description": "kebab-case (a-z0-9 joined by -) · snake_case · lowercase · no-spaces · ascii · date-prefix (2026-10-14-…) · number-prefix (0001-…) · no-version-marks (no _v2, final, (1), copy …)"
+    }
+  }
+}

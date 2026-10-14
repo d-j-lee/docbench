@@ -388,7 +388,7 @@ export function buildRunPrompt(ctx: RunContext): string {
     '',
     'Section text rules (edit/propose):',
     '- Start with the section\'s heading line, unchanged, at the same level. Include every subsection of the original section (copy unchanged ones verbatim).',
-    '- Change only what the feedback asks for. Keep every other character identical: wording, numbers, tables, links, list markers, blank lines, and evidence tags such as [실측] [문서] [추정] [미확인].',
+    '- Change only what the feedback asks for. Keep every other character identical: wording, numbers, tables, links, list markers, blank lines, and evidence tags such as [실측] [문서] [추정] [미확인] (English: [measured] [documented] [estimated] [unverified]).',
     '- Do not invent facts, numbers or sources. If information is missing, use ask, or keep [미확인].',
     '- Write in the language and tone the document already uses. No notes or comments inside the text.',
     '- Several items about the same section: make ONE edit on the first of them; for the others use answer and say it was handled together.',
@@ -635,7 +635,7 @@ export function buildReviewPrompt(ctx: ReviewContext): string {
       '- question: information is missing, contradictory or ambiguous — ask one specific question (text empty).',
       '- Give every item a "category" — the kind of problem — and a "severity" (high: wrong or harmful if left, or blocks the document\'s purpose; medium: fix before sharing; low: nice to have). Categories:',
       ...categoryGuideLines(),
-      '- Skip trivial style nits unless the instructions ask for them. Do not invent facts, numbers or sources; keep evidence tags such as [실측] [문서] [추정] [미확인].',
+      '- Skip trivial style nits unless the instructions ask for them. Do not invent facts, numbers or sources; keep evidence tags such as [실측] [문서] [추정] [미확인] [measured] [estimated] [unverified].',
       // 폴더 범위(문서 여럿) — 화면 안내(review.scope.folder.hint)가 약속하는 일
       ...(ctx.docs.length > 1 ? ['- Several documents are given: also flag terms, numbers or rules that disagree between them, and content duplicated across them (name the other document).'] : []),
     ]),

@@ -1,5 +1,6 @@
 # 시험과 릴리스.
 #  - check   (Linux): npm run check 전부 — 타입·빌드·단위·서버/CLI·브라우저 e2e·배포물 확인
+#  - docs    (Linux): 이 저장소의 Action 으로 이 저장소의 문서를 점검(docbench check — 팀 규칙 docbench.json·깨진 링크)
 #  - windows (Windows): 타입·단위·서버/CLI — 경로·잠금·감시·claude.cmd 해석을 실제 Windows 에서
 #  - release (main 에 새 판이 올라왔을 때): check 가 통과하면 태그 v<판> 과 GitHub Release 를 만들고
 #            release/docbench.html·docbench.mjs 를 첨부한다. 본문은 CHANGELOG.md 의 그 판 절.
@@ -32,6 +33,19 @@ jobs:
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - run: npm run check
+
+  docs:
+    name: docs (docbench check)
+    # 이 저장소의 Action(action.yml)으로 이 저장소를 점검한다 — 팀 규칙(docbench.json)·깨진 링크 …, PR 에 주석
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: ./
+        with:
+          path: .
+          lang: ko
 
   windows:
     name: test (Windows)

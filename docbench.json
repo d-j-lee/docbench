@@ -1,0 +1,42 @@
+{
+  "$schema": "./docs/docbench.schema.json",
+  "ignore": [
+    "test/fixtures/**",
+    "examples/sample-workspace/**",
+    "release/**"
+  ],
+  "checks": {
+    "orphan-docs": "off",
+    "same-name": "off",
+    "folder-no-readme": "off"
+  },
+  "rules": [
+    {
+      "kind": "require",
+      "name": "핵심 문서",
+      "paths": [
+        "README.md",
+        "CHANGELOG.md",
+        "docs/ARCHITECTURE.md",
+        "docs/DECISIONS.md",
+        "docs/SECURITY.md",
+        "docs/openapi.yaml",
+        "docs/docbench.schema.json"
+      ],
+      "hint": "CLAUDE.md 의 '고칠 때' — 공개 API·결정·보안 경계는 이 문서들이 정본입니다."
+    },
+    {
+      "kind": "naming",
+      "paths": [
+        "docs/**",
+        "examples/**",
+        "integrations/**"
+      ],
+      "style": [
+        "no-spaces",
+        "no-version-marks"
+      ],
+      "hint": "판은 git·CHANGELOG 가 맡습니다 — 이름에 _v2·final 을 붙이지 않습니다."
+    }
+  ]
+}

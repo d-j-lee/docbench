@@ -31,7 +31,7 @@ export function buildProposePrompt(req: ProposeRequest): string {
     'You are editing ONE section of a Markdown document in response to reviewer feedback.',
     '',
     'Rules:',
-    '- Change only what the feedback asks for. Keep every other character of the section identical: wording, numbers, tables, links, evidence tags such as [실측] or [미확인], list markers, blank lines.',
+    '- Change only what the feedback asks for. Keep every other character of the section identical: wording, numbers, tables, links, evidence tags such as [실측] [미확인] [measured] [unverified], list markers, blank lines.',
     '- The first line must stay the section heading line, unchanged unless the feedback explicitly asks to rename it.',
     '- Write in the language and tone the document already uses. Add no notes or comments inside the section.',
     '- Do not invent facts or numbers. If the feedback needs information you do not have, keep the text and say so in the rationale.',

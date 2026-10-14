@@ -6,6 +6,8 @@
  */
 import type { FeedbackCategory, FileGroup, OverviewCheck, WorkspaceOverview } from '../types';
 import { formatFor, claudeChanges, formatOf } from '../core/formats';
+import { RULES_FILE, rulesTemplate } from '../core/rules';
+import { docMetaOf, type DocFrontMeta } from '../core/overview';
 import { h, icon, fmtBytes, fmtTime, relTime } from './dom';
 import { groupIcon } from './viewers';
 import type { App } from './app';
@@ -17,7 +19,9 @@ type CheckAction =
   /** 맨 위 README 에 초안 하나(목록을 담아) */
   | { kind: 'draft-readme'; body: string; category: FeedbackCategory }
   /** README 만들기 (맨 위 · 폴더마다) */
-  | { kind: 'create-readme' };
+  | { kind: 'create-readme' }
+  /** 팀 규칙 파일 열기 (규칙 파일의 문제) */
+  | { kind: 'open-rules' };
 
 const GROUP_ORDER: FileGroup[] = ['doc', 'data', 'code', 'office', 'pdf', 'image', 'media', 'archive', 'other'];
 /** 펼치기 전에 보일 경로 수 */
@@ -38,7 +42,7 @@ export async function renderOverview(app: App, force = false): Promise<void> {
   if (!cache || force || Date.now() - cache.at > FRESH_MS) {
     if (!cache) page.replaceChildren(h('p', { class: 'db-loading', text: t('overview.loading') }));
     try {
-      const ov = await app.ad.docs.overview();
+      const ov = await app.ad.docs.overview(app.scope ? { scope: app.scope } : undefined);
       if (!ov) { page.replaceChildren(h('p', { class: 'db-empty', text: t('overview.none') })); return; }
       cache = { at: Date.now(), ov };
       caches.set(app.ad.docs, cache);
@@ -99,8 +103,9 @@ function paint(app: App, ov: WorkspaceOverview): void {
         h('i', { class: 'g-' + g.group }), h('span', { class: 'ic', html: icon(groupIcon(g.group)) }), t('group.' + g.group), ' ', h('b', { text: g.files }), h('small', { text: fmtBytes(g.bytes) })))));
   }
 
-  // ---- 살펴볼 것 (점검)
+  // ---- 살펴볼 것 (점검) — 팀 규칙(docbench.json, D90)이 있으면 그것으로도
   root.append(h('h2', { class: 'db-ov-h', text: t('overview.checks') }));
+  root.append(rulesLine(app, ov));
   if (!ov.checks.length) root.append(h('p', { class: 'db-hint', text: t('overview.checks.none') }));
   else {
     const list = h('div', { class: 'db-notes db-ov-checks' });
@@ -112,19 +117,19 @@ function paint(app: App, ov: WorkspaceOverview): void {
   if (ov.folders.length) {
     const tb = h('tbody');
     for (const f of ov.folders) {
-      const name = f.path ? f.path + '/' : t('overview.folder.top');
+      const name = f.path ? rel(app, f.path) + '/' : t('overview.folder.top');
       tb.append(h('tr', {},
-        h('td', {}, f.path ? h('button', { class: 'db-linkbtn', type: 'button', onclick: () => void app.revealFolder(f.path) }, h('span', { class: 'ic', html: icon('folder') }), name) : h('span', { class: 'db-hint', text: name })),
+        h('td', { class: 'nm' }, f.path ? h('button', { class: 'db-linkbtn', type: 'button', onclick: () => void app.revealFolder(f.path) }, h('span', { class: 'ic', html: icon('folder') }), name) : h('span', { class: 'db-hint', text: name })),
         h('td', { class: 'role' }, f.role ? h('span', { title: f.roleFrom === 'config' ? t('overview.role.config') : t('overview.role.readme') }, f.role)
           : f.path && canCreate(app) && f.files >= 3 ? h('button', { class: 'db-linkbtn soft', type: 'button', title: t('overview.role.add.hint'), onclick: () => void createReadme(app, ov, f.path) }, t('overview.role.add')) : h('span', { class: 'db-hint', text: '—' })),
         h('td', { class: 'n' }, String(f.files)),
         h('td', { class: 'n' }, String(f.docs)),
-        h('td', { class: 'n' }, fmtBytes(f.bytes)),
-        h('td', { class: 'n db-hint' }, f.modified ? relTime(f.modified, t) : '')));
+        h('td', { class: 'n sz' }, fmtBytes(f.bytes)),
+        h('td', { class: 'n md db-hint' }, f.modified ? relTime(f.modified, t) : '')));
     }
     root.append(h('h2', { class: 'db-ov-h', text: t('overview.folders') }),
       h('div', { class: 'db-tw', tabindex: '0' }, h('table', { class: 'db-ov-folders' },
-        h('thead', {}, h('tr', {}, h('th', { text: t('overview.col.folder') }), h('th', { text: t('overview.col.role') }), h('th', { class: 'n', text: t('overview.col.files') }), h('th', { class: 'n', text: t('overview.col.docs') }), h('th', { class: 'n', text: t('overview.col.size') }), h('th', { class: 'n', text: t('overview.col.modified') }))),
+        h('thead', {}, h('tr', {}, h('th', { text: t('overview.col.folder') }), h('th', { text: t('overview.col.role') }), h('th', { class: 'n', text: t('overview.col.files') }), h('th', { class: 'n', text: t('overview.col.docs') }), h('th', { class: 'n sz', text: t('overview.col.size') }), h('th', { class: 'n md', text: t('overview.col.modified') }))),
         tb)));
   }
 
@@ -132,15 +137,7 @@ function paint(app: App, ov: WorkspaceOverview): void {
   const m = ov.meta;
   root.append(h('h2', { class: 'db-ov-h', text: t('overview.meta') }));
   if (!m.docs) root.append(h('p', { class: 'db-hint', text: t('overview.meta.none') }));
-  else {
-    const chips = (rec: Record<string, number>, cls: string, prefix = '') => Object.entries(rec).sort((a, b) => b[1] - a[1]).slice(0, 16)
-      .map(([k, n]) => h('span', { class: 'db-fm-c ' + cls }, prefix + k, h('b', { text: n })));
-    root.append(h('div', { class: 'db-ov-meta' },
-      h('p', { class: 'db-hint', text: t('overview.meta.lead', { n: m.docs }) }),
-      Object.keys(m.status).length ? h('div', { class: 'row' }, h('span', { class: 'k', text: t('overview.meta.status') }), h('div', { class: 'db-fm' }, ...chips(m.status, 'status'))) : null,
-      Object.keys(m.owners).length ? h('div', { class: 'row' }, h('span', { class: 'k', text: t('overview.meta.owners') }), h('div', { class: 'db-fm' }, ...chips(m.owners, 'owner'))) : null,
-      Object.keys(m.tags).length ? h('div', { class: 'row' }, h('span', { class: 'k', text: t('overview.meta.tags') }), h('div', { class: 'db-fm' }, ...chips(m.tags, 'tag', '#'))) : null));
-  }
+  else root.append(metaBlock(app, ov));
 
   // ---- AI 협업 파일
   root.append(h('h2', { class: 'db-ov-h', text: t('overview.ai') }));
@@ -157,6 +154,79 @@ function paint(app: App, ov: WorkspaceOverview): void {
   app.els.main.scrollTop = keep;
 }
 
+/** 팀 규칙 한 줄 — 있으면 무엇으로 점검했는지와 열기, 없으면 무엇을 할 수 있는지와 만들기 */
+function rulesLine(app: App, ov: WorkspaceOverview): HTMLElement {
+  const t = app.t;
+  const r = ov.rules;
+  if (r) {
+    const isDoc = r.file in app.manifest.docs;
+    return h('div', { class: 'db-ov-rules on' },
+      h('span', { text: t('overview.rules.on', { file: r.file, n: r.count }) }),
+      r.unchecked ? h('span', { class: 'db-hint', text: ' ' + t('overview.rules.unchecked', { n: r.unchecked }) }) : null,
+      isDoc ? h('button', { class: 'db-linkbtn', type: 'button', onclick: () => void app.navigate(r.file) }, t('overview.rules.open')) : null);
+  }
+  return h('div', { class: 'db-ov-rules' },
+    h('span', { class: 'db-hint', text: t('overview.rules.off') }),
+    canCreate(app) ? h('button', { class: 'db-btn sm', type: 'button', title: t('overview.rules.make.hint'), onclick: () => void createRules(app) }, t('overview.rules.make')) : null);
+}
+
+type MetaField = 'status' | 'owners' | 'tags';
+/** 앞머리로 보기를 고른 값 — 개요를 다시 그려도 남는다(작업 공간마다) */
+const metaPicks = new WeakMap<object, { k: MetaField; v: string } | null>();
+/** 다가오는 기한으로 보일 날 수 */
+const UPCOMING_DAYS = 30;
+/** 고른 값의 문서를 보일 수 */
+const PICK_SHOWN = 60;
+
+/**
+ * 문서 메타데이터 (S28) — 상태·담당·꼬리표 칩을 누르면 그 값의 문서들, 다가오는 기한(30일 안). 문서마다 앞머리는 매니페스트에서
+ * (개요의 수와 같은 docMetaOf 규칙 — 상태는 대소문자 무시)
+ */
+function metaBlock(app: App, ov: WorkspaceOverview): HTMLElement {
+  const t = app.t;
+  const m = ov.meta;
+  const now = Date.now();
+  const docs = Object.entries(app.manifest.docs).filter(([id, d]) => app.inScope(id) && d.meta).map(([id, d]) => ({ id, title: d.title, dm: docMetaOf(d.meta!, now) }));
+  const box = h('div', { class: 'db-ov-pick', 'aria-live': 'polite' });
+  const label: Record<MetaField, string> = { status: t('overview.meta.status'), owners: t('overview.meta.owners'), tags: t('overview.meta.tags') };
+  const matches = (dm: DocFrontMeta, k: MetaField, v: string) => (k === 'status' ? (dm.status || '').toLowerCase() === v : k === 'owners' ? dm.owners.includes(v) : dm.tags.includes(v));
+  const buttons: HTMLElement[] = [];
+  const show = () => {
+    const sel = metaPicks.get(app.ad.docs) || null;
+    for (const b of buttons) b.setAttribute('aria-pressed', String(!!sel && b.dataset.k === sel.k && b.dataset.v === sel.v));
+    if (!sel) { box.replaceChildren(); box.hidden = true; return; }
+    const hits = docs.filter((d) => matches(d.dm, sel.k, sel.v)).sort((a, b) => a.id.localeCompare(b.id, 'ko'));
+    box.hidden = false;
+    box.replaceChildren(...[
+      h('div', { class: 'hd' }, h('b', { text: t('overview.meta.pick', { k: label[sel.k], v: (sel.k === 'tags' ? '#' : '') + sel.v, n: hits.length }) }),
+        h('button', { class: 'db-btn ghost sm', type: 'button', onclick: () => { metaPicks.set(app.ad.docs, null); show(); } }, t('overview.meta.clear'))),
+      hits.length ? h('div', { class: 'db-ov-files' }, ...hits.slice(0, PICK_SHOWN).map((d) => fileRow(app, d.id, d.title !== d.id ? d.title : '', true))) : h('p', { class: 'db-hint', text: t('overview.meta.pick.none') }),
+      hits.length > PICK_SHOWN ? h('p', { class: 'db-hint', text: t('overview.meta.more', { n: hits.length - PICK_SHOWN }) }) : null,
+    ].filter((x) => x != null) as HTMLElement[]);
+  };
+  const chips = (rec: Record<string, number>, cls: string, k: MetaField, prefix = '') => Object.entries(rec).sort((a, b) => b[1] - a[1]).slice(0, 16).map(([v, n]) => {
+    const b = h('button', { class: 'db-fm-c ' + cls, type: 'button', 'data-k': k, 'data-v': v, 'aria-pressed': 'false', title: t('overview.meta.pick.hint'),
+      onclick: () => { const cur = metaPicks.get(app.ad.docs); metaPicks.set(app.ad.docs, cur && cur.k === k && cur.v === v ? null : { k, v }); show(); } }, prefix + v, h('b', { text: n }));
+    buttons.push(b);
+    return b;
+  });
+  const row = (k: MetaField, cls: string, prefix = '') => (Object.keys(m[k]).length ? h('div', { class: 'row' }, h('span', { class: 'k', text: label[k] }), h('div', { class: 'db-fm' }, ...chips(m[k], cls, k, prefix))) : null);
+  // 다가오는 기한 — 지난 것은 점검(검토 기한 지남)에 있다
+  const soon = docs.flatMap((d) => d.dm.dates.filter((x) => !x.past && Date.parse(x.date) - now <= UPCOMING_DAYS * 864e5).map((x) => ({ ...x, id: d.id, title: d.title })))
+    .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 8);
+  const out = h('div', { class: 'db-ov-meta' },
+    h('p', { class: 'db-hint', text: t('overview.meta.lead', { n: m.docs }) }),
+    row('status', 'status'), row('owners', 'owner'), row('tags', 'tag', '#'),
+    soon.length ? h('div', { class: 'row' }, h('span', { class: 'k', text: t('overview.meta.upcoming') }), h('div', { class: 'db-fm' },
+      ...soon.map((x) => h('button', { class: 'db-fm-c date', type: 'button', title: x.id, onclick: () => void app.navigate(x.id), html: icon('clock') }, `${x.date} · ${x.field} · ${x.title}`)))) : null,
+    box);
+  show();
+  return out;
+}
+
+/** 범위로 연 화면에서는 범위 안 경로로 보인다(누르면 작업 공간 경로로 연다) */
+const rel = (app: App, p: string) => (app.scope && p.startsWith(app.scope + '/') ? p.slice(app.scope.length + 1) : p);
+
 const stat = (v: string | number, k: string, sub: string) => h('div', { class: 'db-stat' }, h('div', { class: 'v', text: v }), h('div', { class: 'k', text: k }), sub ? h('div', { class: 'k sub', text: sub }) : null);
 
 /** 파일 한 줄 — 문서면 누르면 열고, 아니면 그 폴더를 펼친다 */
@@ -164,7 +234,7 @@ function fileRow(app: App, path: string, note: string, doc?: boolean): HTMLEleme
   const isDoc = doc ?? path in app.manifest.docs;
   const f = formatOf(path);
   return h('button', { class: 'db-ov-file' + (isDoc ? '' : ' nodoc'), type: 'button', title: path, onclick: () => void (isDoc ? app.navigate(path) : app.revealFolder(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '')) },
-    h('span', { class: 'ic', html: icon(groupIcon(f ? f.group : 'other')) }), h('span', { class: 't', text: path }), h('small', { text: note }));
+    h('span', { class: 'ic', html: icon(groupIcon(f ? f.group : 'other')) }), h('span', { class: 't', text: rel(app, path) }), h('small', { text: note }));
 }
 
 /** 점검 한 줄 — 수준 · 무엇 · 왜 · 경로 · 바로 할 일 */
@@ -173,10 +243,17 @@ function checkRow(app: App, ov: WorkspaceOverview, c: OverviewCheck): HTMLElemen
   const tone = c.level === 'risk' ? 'bad' : c.level === 'action' ? 'warn' : c.level === 'tidy' ? 'info' : 'neutral';
   const paths = h('div', { class: 'db-ov-paths' });
   const showPaths = (all: boolean) => {
+    if (c.problems) {
+      // 규칙 파일의 문제 — 어디가 왜
+      paths.replaceChildren(h('ul', { class: 'db-ov-problems' }, ...c.problems.map((p) => h('li', { text: t('overview.rules.problem.' + p.code, { at: p.at, value: p.value ?? '' }) }))));
+      return;
+    }
     paths.replaceChildren(...(all ? c.paths : c.paths.slice(0, PATHS_SHOWN)).map((p) => {
       const isDoc = p in app.manifest.docs;
       const dir = p.endsWith('/') ? p.slice(0, -1) : null;
-      return h('button', { class: 'db-chip', type: 'button', title: p, onclick: () => void (isDoc ? app.navigate(p) : app.revealFolder(dir ?? (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))) }, p);
+      const note = c.notes && Object.hasOwn(c.notes, p) ? c.notes[p] : undefined;
+      return h('button', { class: 'db-chip', type: 'button', title: note ? `${p} — ${note}` : p, onclick: () => void (isDoc ? app.navigate(p) : app.revealFolder(dir ?? (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))) },
+        rel(app, p), note ? h('small', { class: 'nt', text: note }) : null);
     }));
     if (!all && c.paths.length > PATHS_SHOWN) paths.append(h('button', { class: 'db-chip all', type: 'button', onclick: () => showPaths(true) }, t('overview.paths.more', { n: c.paths.length - PATHS_SHOWN })));
     if (c.n > c.paths.length) paths.append(h('span', { class: 'db-hint', text: t('overview.paths.cut', { n: c.n }) }));
@@ -184,16 +261,27 @@ function checkRow(app: App, ov: WorkspaceOverview, c: OverviewCheck): HTMLElemen
   showPaths(false);
   const act = actionOf(c, t);
   let btn: HTMLElement | null = null;
-  if (act?.kind === 'create-readme' && canCreate(app)) {
+  if (act?.kind === 'open-rules') {
+    btn = ov.rules && ov.rules.file in app.manifest.docs ? h('button', { class: 'db-btn sm', type: 'button', onclick: () => void app.navigate(ov.rules!.file) }, t('overview.rules.open')) : null;
+  } else if (act?.kind === 'create-readme' && canCreate(app)) {
     btn = h('button', { class: 'db-btn sm', type: 'button', onclick: () => void (c.code === 'no-readme' ? createReadme(app, ov, '') : createReadme(app, ov, c.paths[0].replace(/\/$/, ''))) }, t(c.code === 'no-readme' ? 'overview.readme.make' : 'overview.readme.makeFolder', { dir: c.paths[0] }));
-  } else if (act && act.kind !== 'create-readme' && app.can('feedback.create')) {
+  } else if (act && (act.kind === 'draft-each' || act.kind === 'draft-readme') && app.can('feedback.create')) {
     const targets = draftTargets(app, ov, c, act);
     if (targets.length) btn = h('button', { class: 'db-btn sm', type: 'button', title: t('overview.draft.hint', { ai: app.ai }), onclick: (e: Event) => void makeDrafts(app, c, act, targets, e.currentTarget as HTMLButtonElement), html: icon('chat') + ' ' }, t(targets.length > 1 ? 'overview.draft.n' : 'overview.draft', { n: targets.length, ai: app.ai }));
   }
+  // 팀 규칙에서 온 점검은 규칙 이름·요구(want)·적용 경로
+  const title = checkTitle(t, c);
+  const scope = c.rule ? h('p', { class: 'db-hint scope', text: t('overview.rule.scope', { i: c.rule.index + 1, scope: c.rule.scope.join(' · ') }) }) : null;
   return h('div', { class: 'db-note db-ov-check', 'data-code': c.code },
     h('span', { class: 'lv tone-' + tone, text: t('overview.level.' + c.level) }),
-    h('div', { class: 'nt' }, h('b', { text: t('overview.check.' + c.code, { n: c.n }) }), h('p', { text: t('overview.check.' + c.code + '.hint') }), paths),
+    h('div', { class: 'nt' }, h('b', { text: title }), h('p', { text: c.rule?.hint || t('overview.check.' + c.code + '.hint') }), scope, paths),
     btn);
+}
+
+/** 점검 제목 — 팀 규칙에 이름이 있으면 이름 (CLI 의 checkTitle 과 같은 뜻) */
+function checkTitle(t: App['t'], c: OverviewCheck): string {
+  const base = t('overview.check.' + c.code, { n: c.n, want: c.rule?.want ?? '' });
+  return c.rule?.name ? `${c.rule.name} — ${base}` : base;
 }
 
 function actionOf(c: OverviewCheck, t: App['t']): CheckAction | null {
@@ -203,22 +291,29 @@ function actionOf(c: OverviewCheck, t: App['t']): CheckAction | null {
     case 'review-due': return { kind: 'draft-each', body: t('overview.draft.body.review-due'), category: 'fact' };
     case 'stale-docs': return { kind: 'draft-each', body: t('overview.draft.body.stale-docs'), category: 'fact' };
     case 'orphan-docs': return { kind: 'draft-readme', body: t('overview.draft.body.orphan-docs', { list: c.paths.map((p) => '- ' + p).join('\n') }), category: 'gap' };
+    case 'rule-readme': return { kind: 'create-readme' };
+    case 'rule-front-matter': return { kind: 'draft-each', body: t('overview.draft.body.rule-front-matter', { want: c.rule?.want ?? '' }), category: 'gap' };
+    case 'rule-review': return { kind: 'draft-each', body: t('overview.draft.body.rule-review', { days: c.rule?.want ?? '' }), category: 'fact' };
+    case 'rules-invalid': return { kind: 'open-rules' };
     default: return null;
   }
 }
 
 /** 초안을 남길 문서 — Claude 가 고치거나 제안할 수 있는 형식의 문서만(목록에 있는 것), 10개까지 */
 function draftTargets(app: App, ov: WorkspaceOverview, c: OverviewCheck, act: CheckAction): string[] {
+  if (act.kind !== 'draft-each' && act.kind !== 'draft-readme') return [];
   const ok = (id: string) => id in app.manifest.docs && app.inScope(id) && claudeChanges(formatFor(id)).length > 0;
   if (act.kind === 'draft-readme') {
-    const readme = ov.purpose?.docId || Object.keys(app.manifest.docs).find((d) => /^readme\.(md|markdown)$/i.test(d));
+    // 맨 위 README (목적이 팀 규칙 파일에서 왔으면 그 파일이 아니라 README)
+    const top = app.scope ? app.scope + '/' : '';
+    const readme = ov.folders.find((f) => f.path === '')?.readme || Object.keys(app.manifest.docs).find((d) => d.startsWith(top) && /^readme\.(md|markdown)$/i.test(d.slice(top.length)));
     return readme && ok(readme) ? [readme] : [];
   }
   return c.paths.filter(ok).slice(0, 10);
 }
 
 async function makeDrafts(app: App, c: OverviewCheck, act: CheckAction, ids: string[], btn: HTMLButtonElement): Promise<void> {
-  if (act.kind === 'create-readme') return;
+  if (act.kind !== 'draft-each' && act.kind !== 'draft-readme') return;
   const t = app.t;
   btn.disabled = true;
   let n = 0;
@@ -235,7 +330,7 @@ async function makeDrafts(app: App, c: OverviewCheck, act: CheckAction, ids: str
   app.panel.render();
   app.renderRail();
   btn.textContent = t('overview.draft.done', { n });
-  app.toast(t(n ? 'overview.draft.saved' : 'overview.draft.already', { n, code: t('overview.check.' + c.code, { n: c.n }) }), { action: t('fb.draft.see'), onAction: () => app.panel.open(undefined, 'draft') });
+  app.toast(t(n ? 'overview.draft.saved' : 'overview.draft.already', { n, code: checkTitle(t, c) }), { action: t('fb.draft.see'), onAction: () => app.panel.open(undefined, 'draft') });
 }
 
 const canCreate = (app: App) => !!app.ad.docs.create && app.can('doc.edit');
@@ -246,10 +341,13 @@ const canCreate = (app: App) => !!app.ad.docs.create && app.can('doc.edit');
  */
 async function createReadme(app: App, ov: WorkspaceOverview, dir: string): Promise<void> {
   const t = app.t;
+  // 맨 위 = 범위로 열었으면 그 폴더
+  const top = !dir || dir === app.scope;
+  if (!dir) dir = app.scope;
   const id = (dir ? dir + '/' : '') + 'README.md';
   let md: string;
-  if (!dir) {
-    const rows = ov.folders.filter((f) => f.path).map((f) => `| \`${f.path}/\` | ${f.role || t('overview.readme.roleTodo')} |`);
+  if (top) {
+    const rows = ov.folders.filter((f) => f.path).map((f) => `| \`${rel(app, f.path)}/\` | ${f.role || t('overview.readme.roleTodo')} |`);
     md = `# ${ov.root || app.manifest.project.name}\n\n${t('overview.readme.purposeTodo')}\n` +
       (rows.length ? `\n## ${t('overview.readme.folders')}\n\n| ${t('overview.col.folder')} | ${t('overview.col.role')} |\n|---|---|\n${rows.join('\n')}\n` : '') +
       `\n## ${t('overview.readme.rules')}\n\n- ${t('overview.readme.rulesTodo')}\n`;
@@ -266,6 +364,22 @@ async function createReadme(app: App, ov: WorkspaceOverview, dir: string): Promi
   } catch (e) {
     const code = (e as { code?: string }).code;
     if (code === 'CONFLICT') { app.toast(t('overview.readme.exists', { id })); await app.navigate(id); return; }
+    app.toast(t('err.generic', { msg: (e as Error).message }), { sticky: true });
+  }
+}
+
+/** 팀 규칙 파일 만들기 — 스키마 주소와 규칙 하나(쓰는 법이 보이게). 만들고 나면 연다 */
+async function createRules(app: App): Promise<void> {
+  const t = app.t;
+  try {
+    await app.ad.docs.create!(RULES_FILE, rulesTemplate(t('overview.rules.templateHint')), { summary: t('overview.rules.summary') });
+    invalidateOverview(app);
+    app.toast(t('overview.rules.made', { file: RULES_FILE }));
+    await app.reloadManifest();
+    await app.navigate(RULES_FILE);
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === 'CONFLICT') { app.toast(t('overview.readme.exists', { id: RULES_FILE })); await app.navigate(RULES_FILE); return; }
     app.toast(t('err.generic', { msg: (e as Error).message }), { sticky: true });
   }
 }

@@ -4,6 +4,8 @@ export * from './formats';
 export * from './outline';
 export * from './derive';
 export * from './overview';
+export * from './rules';
+export * from './checktext';
 export * from './source';
 export * from './selectors';
 export * from './feedback';

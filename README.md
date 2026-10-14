@@ -1,8 +1,13 @@
 # DocBench
 
+**한국어** · [English](README.en.md)
+
 사람과 AI가 같은 문서를 **읽고 · 피드백하고 · 고치고 · 기록**하는 작업대 — 그리고 그 문서들이 사는 **작업 공간**을 한눈에.
 
+![설계 노트를 읽으며 그 자리에 피드백 — 문서 안의 말풍선과 검토 패널에 모인 초안](docs/images/ko-review.png)
+
 - **작업 공간 개요**: 처음 열면 이 공간이 **무엇을 위한 곳인지**(README 첫 문단·설정 `purpose`), 폴더마다 하는 일, 무엇이 들었는지(문서·데이터·코드·오피스·그림 …), 문서 앞머리의 상태·담당·꼬리표·검토 기한, CLAUDE.md·AGENTS.md·스킬 같은 AI 협업 파일, 그리고 **살펴볼 것** — 비밀로 보이는 파일, 판 사본(_v2·최종·(1)), 임시 파일, 깨진 링크, 기한 지난 문서, README 없는 폴더 … 그 자리에서 README 를 만들거나 Claude 에게 맡길 초안을 남긴다
+- **팀 규칙과 CI 점검**: 맨 위 `docbench.json` 에 팀 약속(앞머리 키·폴더 README·이름 규칙·검토 주기·두지 않을 파일·크기 한도·있어야 할 파일)을 적으면 개요가 그것으로도 점검하고, 같은 점검을 `docbench check` 로 CI·pre-commit 에서 돌린다 — GitHub Action 이 PR 에 주석을 단다. 아래 [팀 규칙과 CI 점검](#팀-규칙과-ci-점검)
 - **여러 형식**: 마크다운에 더해 YAML·JSON·TOML·INI(키마다 섹션), AsciiDoc·reStructuredText·Org, 글·로그·코드(색·줄 번호), CSV·TSV(표), HTML(정제한 읽기 화면)·SVG·그림, Word·PowerPoint·Excel·한글(HWPX)·Jupyter(글을 뽑아 읽고 피드백), PDF. 설정·코드는 Claude 가 **제안만**, 오피스 원본은 고치지 않는다 — 아래 [문서 형식](#문서-형식)
 - **보기**: 제목 깊이별 접기(상태 기억), 근거 표기 칩(`[실측]` `[추정]` …), 빈칸 형광, 이름표 거르기, 찾기, 목차. 왼쪽은 탐색기 — 펼친 폴더만 읽어 드라이브를 통째로 열어도 바로 뜨고, 자주 쓰는 문서·폴더는 "작업 중"에 고정한다
 - **검토 회차**: 읽으면서 섹션·문구 옆 작은 칸에 적어 **초안**으로 모으고(요청 문구가 고민되면 "이렇게 바꿔"로 바꿀 글을 직접, ★ 급함), 다 읽은 뒤 고른 것을 **한 번에 보낸다** — 묶음에 붙일 말 한 줄과 함께. Claude 가 한 일은 **볼 것**에 회차별로 모여 확인·되돌리기·다시 요청을 고른다. 피드백 하나마다 대화가 오가지 않는다
@@ -84,6 +89,8 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 
 ## 문서 형식
 
+![YAML 은 키마다 섹션 — Claude 는 제안만](docs/images/ko-formats.png)
+
 작업대가 여는 파일은 정해 둔 형식뿐이다(허용 목록 — 함께 쓰는 설정으로 넓혀도 `.env`·키·실행 파일·숨김 폴더는 문서가 되지 않는다). 형식마다 섹션을 세는 법과 **Claude 가 할 수 있는 일**이 다르다.
 
 | 형식 | 화면 | 섹션 | 사람 | Claude |
@@ -100,8 +107,65 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 - 모양은 글·마크다운이어도 도구·에이전트가 읽는 파일 — 의존성 목록(`requirements*.txt`)·`CODEOWNERS`·MDX·AI 지시 파일(`CLAUDE.md`·`AGENTS.md`·`SKILL.md` …) — 은 Claude 가 제안만 한다. 비밀로 보이는 파일(`.env`·`credentials.json`·`secrets.yaml`·키 …)은 문서가 되지 않는다(개요가 이름으로만 짚는다).
 - 기본으로 **코드는 문서 목록에서 빠진다**(코드 저장소에서 문서가 코드에 묻히지 않게). 코드까지 다루려면 기록 폴더 `config.json` 에 `"include": ["**/*"]` — 그래도 Claude 는 제안만. 마크다운만 보려면 `"include": ["**/*.md"]`.
 - 문서 안 상대 경로 그림(`![](img/a.png)`)은 작업 공간 파일로 보이고(단일 HTML 도), 상대 링크는 작업대 안에서 열린다(`#제목` 은 그 섹션으로).
-- 문서 맨 앞 앞머리(`---` 로 감싼 `status: review` · `owner: 김철수` · `tags: [api]` · `review: 2026-12-01`)는 문서 머리의 칩과 개요의 메타데이터가 된다. 검토 기한이 지나면 개요의 "살펴볼 것"에 뜬다.
-- 이 작업 공간의 목적·폴더 역할은 README 로 충분하다(맨 위 README 의 첫 문단 · 폴더 README 의 첫 문단). 설정으로 적으려면 `config.json` 에 `"purpose": "…"`, `"folders": { "data": { "role": "원천 데이터 — 고치지 않는다" } }`.
+- 문서 맨 앞 앞머리(`---` 로 감싼 `status: review` · `owner: 김철수` · `tags: [api]` · `review: 2026-12-01`)는 문서 머리의 칩과 개요의 메타데이터가 된다 — 개요의 상태·담당·꼬리표 칩을 누르면 그 문서들이, 30일 안의 기한은 "다가오는 기한"으로 모인다. 검토 기한이 지나면 "살펴볼 것"에 뜬다.
+- 넓은 작업 공간 안의 폴더를 따로 열면(앱에 하위 폴더 더하기·대시보드 탭의 `scope`) 개요도 **그 폴더의 개요**다 — 그 폴더 README 가 목적, 점검·팀 규칙은 그 안만.
+- 이 작업 공간의 목적·폴더 역할은 README 로 충분하다(맨 위 README 의 첫 문단 · 폴더 README 의 첫 문단). 따로 적으려면 팀 규칙 파일 `docbench.json` 에 `"purpose": "…"`, `"folders": { "data": "원천 데이터 — 고치지 않는다" }` (README 보다 먼저).
+
+## 팀 규칙과 CI 점검
+
+![작업 공간 개요 — 팀 규칙(docbench.json)으로도 점검](docs/images/ko-overview.png)
+
+작업 공간은 목적에 맞게 관리되어야 한다 — 그 약속을 문서 폴더 맨 위 **`docbench.json`** 에 적는다. 사람이 쓰고 git 으로 함께 나누는 문서다(DocBench 는 읽기만 한다. 개요의 **규칙 파일 만들기**가 틀을 만들어 준다).
+
+```json
+{
+  "$schema": "https://raw.githubusercontent.com/d-j-lee/docbench/main/docs/docbench.schema.json",
+  "ignore": ["archive/**"],
+  "checks": { "stale-docs": "off" },
+  "rules": [
+    { "kind": "front-matter", "paths": "docs/**", "keys": ["owner", "status"], "values": { "status": ["draft", "review", "approved"] } },
+    { "kind": "readme", "paths": "*", "minFiles": 3 },
+    { "kind": "naming", "paths": "docs/**", "style": ["kebab-case", "no-version-marks"] },
+    { "kind": "review", "paths": "policies/**", "days": 180, "level": "risk" },
+    { "kind": "forbid", "paths": ["**/*.docx"], "hint": "마크다운으로 옮겨 git 에서 차이를 봅니다" },
+    { "kind": "max-size", "paths": "**/*.{png,jpg}", "max": "1 MB" },
+    { "kind": "require", "paths": ["README.md", "CHANGELOG.md", "docs/adr/"] }
+  ]
+}
+```
+
+| 규칙 | 점검 |
+|---|---|
+| `front-matter` | 마크다운 문서의 앞머리에 `keys` 가 있는가, `values` 의 값만 쓰는가 |
+| `readme` | 이 폴더들(`"*"` = 맨 위 폴더마다)에 README 가 있는가 — 파일이 `minFiles` 개 이상인 폴더만 |
+| `naming` | 이름(확장자 앞)이 `kebab-case` · `snake_case` · `lowercase` · `no-spaces` · `ascii` · `date-prefix` · `number-prefix` · `no-version-marks`(_v2·최종·(1) 없음)를 따르는가. README·LICENSE 같은 관례 이름은 뺀다 |
+| `review` | `days` 일 안에 다시 봤는가 — 앞머리 검토일(`reviewed`·`updated` …)과 마지막 변경(git 커밋, 없으면 파일 시각) 중 늦은 날. `field` 를 주면 그 앞머리 날짜만(고친 것은 검토가 아니다 — 날짜가 없으면 걸린다) |
+| `forbid` · `max-size` · `require` | 두지 않을 파일·폴더 / 크기 한도 / 패턴마다 하나는 있어야 할 파일·폴더. 숨김·도구 폴더(`.github`·`node_modules`·`dist` …) 안은 글자 그대로 쓴 경로만 본다(`.github/workflows/`) |
+
+- 모든 규칙에 `paths`·`except`(glob — `**` 폴더 여럿, `*`·`?` 이름 안, `{a,b}` 갈래, 폴더는 끝에 `/`), `name`(점검 제목), `hint`(까닭·고치는 법), `level`(`risk`·`action`(기본)·`tidy`·`info`). `ignore` 는 모든 점검에서 빼고, `checks` 는 늘 하는 점검의 수준을 바꾸거나 끈다(`"off"`). 규칙 파일이 틀리면 조용히 넘어가지 않고 "규칙 파일에 문제"로 뜬다 — 편집기에서는 `$schema` 로 자동 완성·검사.
+- 개요에서는 규칙 점검마다 걸린 경로와 까닭(빠진 키·맞지 않는 이름·마지막 검토일)을 보이고, 앞머리·검토 주기는 그 문서들에 **Claude 에게 맡길 초안**을 남긴다.
+
+**CI** — 같은 점검을 저장소에서. 기록 폴더가 없어도 되고 아무것도 쓰지 않는다. `--fail-on` 수준(기본 `action`: 주의·할 일) 이상이 있으면 종료 코드 5.
+
+```bash
+node docbench.mjs check docs                   # 사람이 읽는 글 (--lang en · --json)
+node docbench.mjs check . --fail-on risk       # 주의만 실패로 · never = 보고만
+```
+
+```yaml
+# .github/workflows/docs.yml — PR 의 파일 화면에 주석(::error/::warning)과 작업 요약
+on: pull_request
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }    # 검토 주기·오래됨을 커밋 시각으로 (얕게 받으면 모두 마지막 커밋에 바뀐 것으로 보인다 — check 가 알린다)
+      - uses: d-j-lee/docbench@v0.10.0
+        with: { path: docs, fail-on: action, lang: en }
+```
+
+이 저장소도 자기 Action 으로 자기 문서를 점검한다([`docbench.json`](docbench.json) · [CI](.github/workflows/ci.yml)).
 
 ## CLI
 
@@ -113,7 +177,8 @@ docbench link <폴더> [--data 기록폴더] [--owner 계정] [--force]
 docbench status [--json]
 docbench fb list|show|add|reply|propose …
 docbench doc list|sections|show|write|new …
-docbench overview [--json]        # 작업 공간 개요 — 목적·구성·폴더 역할·메타데이터·점검
+docbench overview [--scope 폴더] [--json]   # 작업 공간 개요 — 목적·구성·폴더 역할·메타데이터·점검
+docbench check [폴더] [--fail-on 수준] [--format text|json|github] [--rules 파일] [--lang en]   # 팀 규칙·점검 (CI, 걸리면 5)
 docbench log <문서> -m 요약 [--fb id]
 docbench inbox [--clear]
 docbench runner [폴더] …          # 0.3–0.4 의 폴더별 실행기 (예전 연결용 — 새로는 app)
@@ -122,13 +187,14 @@ docbench runner [폴더] …          # 0.3–0.4 의 폴더별 실행기 (예�
 CLI 는 두 가지로 받는다: 저장소(`npm install` 후 `node bin/docbench.mjs`, 서버 화면 포함) 또는 **파일 하나** [`release/docbench.mjs`](release/docbench.mjs)(`node docbench.mjs …`, 서버 화면만 빼고 전부 — CP949 용 iconv-lite 포함, Node 20.11+).
 설정은 기록 폴더의 `config.json`(함께 씀)과 **이 PC 의 설정**(Windows `%LOCALAPPDATA%\docbench\config.json`, 문서 폴더 밖 — 실행 명령 `assistant`·`notify.command`, 사람 `user`·표시 이름 `name`, 기록 보관함 `dataHome`, 폴더별 기록 짝 `workspaces[<폴더>].data`·짝 계정 `owners`, 앱의 허용 출처 `app.allowOrigins` 는 여기에만). 앱의 열쇠는 그 옆 `app-token`. serve 의 토큰은 `DOCBENCH_TOKEN` 으로도 준다.
 모든 명령은 `--json` 으로 기계가 읽기 좋은 출력을 낸다. 작업 폴더는 `--root` → `DOCBENCH_ROOT` → 현재 폴더에서 위로(기록 짝이 있거나 `.docbench` 가 있는 문서 폴더, 또는 지금 자리가 기록 폴더) 찾고, 기록 폴더는 `--data` → 문서 폴더 안 `.docbench` → 이 PC 의 설정의 짝 → 기록 보관함/<이름>(같은 이름의 다른 문서 폴더면 `<이름> (2)` …) 순으로 찾는다. 없으면 만들지 않고 종료 코드 2(만드는 것은 `init`·`link`·`serve`·앱에 더하기). 넓은 작업 공간으로 합쳐진 기록이면 어디로 갔는지 알리고 2.
-판이 바뀐 사이 쓰기를 시도하면 3, 읽기 전용이면 4. 섹션 쓰기는 판(`--base`)이 필수이고, 제목 줄이 바뀌거나 하위 섹션이 사라지면 멈춘다. 자세한 흐름은 [docs/FEEDBACK-PROTOCOL.md](docs/FEEDBACK-PROTOCOL.md).
+판이 바뀐 사이 쓰기를 시도하면 3, 읽기 전용이면 4, `check` 에 걸리면 5(`check` 는 기록 폴더 없이도 돈다). 섹션 쓰기는 판(`--base`)이 필수이고, 제목 줄이 바뀌거나 하위 섹션이 사라지면 멈춘다. 자세한 흐름은 [docs/FEEDBACK-PROTOCOL.md](docs/FEEDBACK-PROTOCOL.md).
 
 ## 저장소 지도
 
 ```
 src/core/          DOM 없는 핵심 — 섹션 키·범위, 문구 앵커, 피드백 모델, 차이, AI 프롬프트, Claude 작업 규약(runs.ts),
                    형식(formats.ts — 허용 목록·Claude 규칙)·구조 글(outline.ts)·오피스 글 뽑기(derive.ts)·작업 공간 개요(overview.ts),
+                   팀 규칙(rules.ts — docbench.json)·점검 문구(checktext.ts — 화면·CLI 한 벌),
                    기록 폴더 규칙·탐색기 항목(workspace.ts), 기록 합치기(records.ts) — 서버·CLI 와 공유
 src/ui/            화면 — 개요(overview.ts), 탐색기(explorer.ts), 형식마다 그리기(viewers.ts·highlight.ts), Claude 작업 창(runs.ts) 등. 컨테이너 쿼리 기반이라 어떤 패널 폭에도 맞는다
 src/adapters/      memory · rest · claude-artifact · folder(로컬 폴더를 브라우저가 직접)
@@ -142,7 +208,8 @@ integrations/      Claude Code 플러그인(스킬 docbench-setup · docbench-fe
 release/           docbench.html(단일 HTML) · docbench.mjs(CLI 파일 하나, 앱 포함) — 빌드 없이 받아 쓴다 (npm run release 로만 갱신)
 examples/          sample-workspace(까다로운 예제 문서) · dashboard-tab(언어 무관 대시보드 탭, PORTING §2) ·
                    dashboard-embed(Node 대시보드에 끼우기, §3-C) · react(래퍼) · claude-artifact(아티팩트 한 장)
-docs/              설계·이식·보안·REST 계약(openapi.yaml)·결정 기록
+docs/              설계·이식·보안·REST 계약(openapi.yaml)·팀 규칙 스키마(docbench.schema.json)·결정 기록
+action.yml         GitHub Action — docbench check 를 PR 주석·작업 요약으로
 test/              단위(vitest) · 서버(node:test) · 브라우저 e2e(Playwright)
 ```
 
@@ -154,6 +221,7 @@ npm test            # 단위 + 서버
 npm run test:e2e    # Chromium 필요: npx playwright install chromium
 # 실행은 Node 20.11+, 개발(npm ci 의 시험 도구)은 Node 22.22+
 npm run check       # 전부
+node scripts/screenshots.mjs   # README 의 화면 사진(docs/images) 다시 찍기 — 화면을 바꿨으면
 ```
 
 빌드 결과물: `dist/docbench.js`(ESM), `dist/docbench.iife.js`(전역 `DocBench`), `dist/docbench.css`, `dist/app.js`(앱 화면), `dist/core.mjs`(서버·CLI), `dist/docbench.html`(단일 HTML), `dist/docbench.mjs`(CLI 파일 하나 — 앱 화면까지 묶음), `dist/types/`.

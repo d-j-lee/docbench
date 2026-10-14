@@ -10,6 +10,8 @@ npm run typecheck    # 브라우저 TS + 서버/CLI JSDoc
 npm test             # 단위(vitest) + 서버·CLI(node:test) — Claude 는 test/fixtures/fake-claude.mjs 가 대신
 npm run test:e2e     # Playwright Chromium — npx playwright install chromium (한 번)
 npm run check        # 전부 + release 사본·플러그인 버전 확인. 끝내기 전에 이것
+node bin/docbench.mjs check .   # 이 저장소의 팀 규칙(docbench.json)·깨진 링크 — CI 의 docs 단계와 같다
+node scripts/screenshots.mjs    # README(ko·en) 의 화면 사진 docs/images — 개요·검토·형식 화면을 바꿨으면 다시 찍는다
 npm run release      # 화면·CLI 를 고쳤으면: release/docbench.{html,mjs} + 플러그인 cli/ 갱신(함께 커밋)
 claude plugin validate . && claude plugin validate ./integrations/claude-code --strict   # 스킬·플러그인을 고쳤으면
 ```
@@ -30,6 +32,7 @@ claude plugin validate . && claude plugin validate ./integrations/claude-code --
 - **DocBench 앱의 열쇠** (D67·D70): `/` 껍데기와 `/host.js` 말고는 열쇠가 있어야 한다(`Authorization: Bearer`·`?token=`·`/embed` 의 `?t=`). 쿠키를 쓰지 않는다(포트를 가리지 않아 다른 로컬 서버로 샌다). 127.0.0.1 + Host 검사, 바꾸는 요청은 `X-DocBench`. `/embed` 를 끼울 수 있는 출처는 `app.allowOrigins` 만(frame-ancestors), host.js ↔ 화면 메시지는 그 출처·`e.source` 만, 대시보드로 가는 이벤트에 문서·피드백 본문을 싣지 않는다.
 - **실행기 짝은 계정으로** (D63): 남의 앱·실행기를 저절로 고르지 않는다(`core.pickRunner` — 짝 계정 `owners` 또는 같은 이름만). 계정 id 는 모양이 맞을 때만 쓰고 고쳐 쓰지 않는다(`core.safeAccountId`).
 - **큰 폴더는 펼친 곳만** (D64): 열 때 모든 문서를 읽지 않는다(`SCAN_LIMITS`·`looksBigRoot`, 나무는 `tree`). 판은 연 문서부터 적는다 — 열 때 문서를 읽어 해시하는 길을 다시 만들지 않는다.
+- **팀 규칙 파일은 읽기만** (D90): 문서 폴더 맨 위 `docbench.json` 은 사람이 쓰는 문서 — DocBench 는 사람이 고른 "규칙 파일 만들기" 말고는 쓰지 않고, 정해 둔 키(`purpose`·`folders`·`ignore`·`checks`·`rules`)만 읽는다(`core/rules parseRulesText`). PC 설정 키를 여기서 읽는 길을 만들지 않는다. 경로 패턴은 `core.globMatch`·`matchPath`(D91) — 함께 쓰는 설정의 패턴을 정규식으로 바꾸지 않는다. 점검 문구는 `core/checktext` 한 벌(화면·CLI). `docbench check` 는 기록 없이 읽기만(`records: 'optional'`) — 기록을 만들거나 짝을 적지 않는다.
 - **AI 제안은 섹션을 자르지 않는다**: 한도를 넘으면 거부(`src/core/prompt.ts`). Claude 작업 결과도 `checkSectionText` 를 지나야 반영된다(CLI `doc write` 와 같은 안전장치).
 - 브라우저 번들은 CDN 없이 돈다(의존성 번들). 서버는 의존성 0(선택: iconv-lite).
 

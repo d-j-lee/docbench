@@ -7,7 +7,8 @@ import { normalizeFeedback, newFeedbackId } from '../core/feedback';
 import { diffSections, sectionSources } from '../core/source';
 import { toLF, frontMatterData } from '../core/markdown';
 import { formatOf, isMarkdownPath, editableFormat } from '../core/formats';
-import { computeOverview, isReadmeName, relativeLinks } from '../core/overview';
+import { computeOverview, pickReadmes, relativeLinks } from '../core/overview';
+import { parseRulesText, RULES_FILE } from '../core/rules';
 import { titleFromText } from '../core/workspace';
 
 export interface MemoryInit {
@@ -85,7 +86,7 @@ export function createMemoryAdapters(init: MemoryInit): DocBenchAdapters & { con
       inventory: init.inventory ? async () => init.inventory! : undefined,
       subscribe: (cb) => { docSubs.add(cb); return () => docSubs.delete(cb); },
       // 개요(D88) — 메모리의 문서만으로: 폴더·크기·앞머리·README·링크
-      overview: async () => {
+      overview: async (o) => {
         const items: InventoryItem[] = [];
         const dirs = new Set<string>();
         const enc = new TextEncoder();
@@ -96,11 +97,14 @@ export function createMemoryAdapters(init: MemoryInit): DocBenchAdapters & { con
         }
         for (const p of dirs) items.push({ id: p + '/', parent: p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '', name: p.split('/').pop()!, folder: true });
         const readmes: Record<string, { id: string; text: string }> = {};
-        for (const [id, d] of Object.entries(docs)) { const dir = id.includes('/') ? id.slice(0, id.lastIndexOf('/')) : ''; if (isReadmeName(id.split('/').pop()!) && !dir.includes('/')) readmes[dir] = { id, text: d.md }; }
+        for (const [dir, id] of Object.entries(pickReadmes(items, o?.scope))) readmes[dir] = { id, text: docs[id]?.md ?? '' };
         const meta: Record<string, Record<string, string | string[]>> = {};
-        for (const [id, d] of Object.entries(docs)) if (isMarkdownPath(id) || !formatOf(id)) { const m = frontMatterData(d.md); if (Object.keys(m).length) meta[id] = m; }
+        // 글이 다 있으니 앞머리가 없는 문서도 {}(읽음) — 팀 규칙이 "앞머리 없음"으로 본다
+        for (const [id, d] of Object.entries(docs)) if (isMarkdownPath(id) || !formatOf(id)) meta[id] = frontMatterData(d.md);
         const links = Object.entries(docs).filter(([id]) => isMarkdownPath(id) || !formatOf(id)).map(([id, d]) => ({ from: id, to: relativeLinks(d.md, id) }));
-        return computeOverview({ root: init.manifest.rootName || init.manifest.project.name, items, complete: true, isDoc: (p) => p in docs, meta, readmes, links, config: { purpose: init.manifest.purpose } });
+        // 팀 규칙(D90) — 문서로 실려 온 docbench.json
+        const rules = docs[RULES_FILE] ? { file: RULES_FILE, ...parseRulesText(docs[RULES_FILE].md) } : undefined;
+        return computeOverview({ root: init.manifest.rootName || init.manifest.project.name, items, complete: true, isDoc: (p) => p in docs, meta, readmes, links, config: { purpose: init.manifest.purpose }, ...(rules ? { rules } : {}), ...(o?.scope ? { base: o.scope } : {}) });
       },
       // 새 문서 — 메모리에만(시작하기에서 README 만들기를 해 볼 수 있게)
       create: async (id, md, o) => {

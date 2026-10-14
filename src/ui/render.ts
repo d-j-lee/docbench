@@ -8,12 +8,13 @@ import type { RenderRules, Tone } from '../types';
 import { h, CARET } from './dom';
 
 export const DEFAULT_RULES: Required<RenderRules> = {
+  // 근거 표기 — 한국어는 뒤에 무엇이 붙어도([실측 9/29]), 영어는 낱말로만([measured 9/29] · [documented] — [docs/a] 같은 글은 아니다)
   tags: [
-    { pattern: '\\[실측[^\\]]*\\]', tone: 'good' },
-    { pattern: '\\[(문서|확인)[^\\]]*\\]', tone: 'info' },
-    { pattern: '\\[조사[^\\]]*\\]', tone: 'neutral' },
-    { pattern: '\\[추정[^\\]]*\\]', tone: 'warn' },
-    { pattern: '\\[미확인[^\\]]*\\]', tone: 'bad' },
+    { pattern: '\\[(?:실측|measured\\b)[^\\]]*\\]', tone: 'good' },
+    { pattern: '\\[(?:문서|확인|documented\\b|verified\\b|confirmed\\b)[^\\]]*\\]', tone: 'info' },
+    { pattern: '\\[(?:조사|researched\\b)[^\\]]*\\]', tone: 'neutral' },
+    { pattern: '\\[(?:추정|estimated?\\b|assumed\\b)[^\\]]*\\]', tone: 'warn' },
+    { pattern: '\\[(?:미확인|unverified\\b|unconfirmed\\b)[^\\]]*\\]', tone: 'bad' },
   ],
   placeholders: ['\\[\\(?(작업 후 기입|코드 확인|결정 대기|확인 필요)[^\\]]*\\]', '\\b(TODO|TBD|FIXME)\\b'],
   labelMinRepeat: 3,

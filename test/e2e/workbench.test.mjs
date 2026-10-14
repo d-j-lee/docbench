@@ -495,6 +495,83 @@ test('여러 형식(D87)·개요(D88): 개요에서 목적·구성·점검 → Y
   await page.waitForSelector('.db-sec[data-key="server"]');
 });
 
+test('팀 규칙(D90): 개요가 docbench.json 으로도 점검 → 앞머리 초안을 Claude 에게 · 규칙 보기 · 깨진 규칙 파일은 알리고 · 없으면 만들기', async (t) => {
+  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
+  t.after(() => ctx.close());
+  const refresh = () => page.locator('.db-ov .db-meta .db-btn').click();
+
+  // 예제 작업 폴더의 규칙: docs/** 앞머리(owner·status) — 예제 문서에는 앞머리가 없다
+  await page.goto(url + '#overview');
+  await page.locator('.db-ov-rules.on').waitFor();
+  assert.match(await page.locator('.db-ov-rules').innerText(), /docbench\.json 의 규칙 3개/);
+  const fm = page.locator('.db-ov-check[data-code="rule-front-matter"]');
+  const text = await fm.innerText();
+  assert.match(text, /설계·운영 문서의 앞머리 — /);
+  assert.match(text, /담당\(owner\)과 상태/, '규칙의 hint 가 까닭으로');
+  assert.match(text, /규칙 1 · 적용 docs\/\*\*/);
+  assert.match(await fm.locator('.db-chip', { hasText: 'docs/설계-노트.md' }).innerText(), /owner · status/);
+  // 문서마다 Claude 에게 맡길 초안 — 앞머리를 채워 달라는 문서 전체 피드백
+  await fm.locator('.db-btn').click();
+  await until(async () => (await readFb()).some((f) => f.docId === 'docs/설계-노트.md' && f.status === 'draft' && /owner, status/.test(f.body)), 5000);
+
+  // 규칙 보기 → 규칙 파일(JSON 문서 — 키가 섹션)
+  await page.locator('.db-ov-rules .db-linkbtn').click();
+  await page.waitForSelector('.db-sec[data-key="rules"]');
+
+  // 깨진 규칙 파일: 조용히 넘어가지 않고 할 일로 — 무엇이 왜
+  const rulesFile = path.join(dir, 'docbench.json');
+  const good = await fs.readFile(rulesFile, 'utf8');
+  await fs.writeFile(rulesFile, good.replace('"kind": "naming"', '"kind": "nameing"'));
+  await page.goto(url + '#overview');
+  await refresh();
+  const bad = page.locator('.db-ov-check[data-code="rules-invalid"]');
+  await bad.waitFor();
+  assert.match(await bad.innerText(), /rules\[1\]\.kind: 모르는 규칙 종류 "nameing"/);
+
+  // 없으면: 무엇을 할 수 있는지 + 만들기 → 틀(스키마 주소·README 규칙)로 열린다
+  await fs.rm(rulesFile);
+  await refresh();
+  await page.locator('.db-ov-rules:not(.on) .db-btn').click();
+  await page.waitForSelector('.db-sec[data-key="rules"]');
+  const made = JSON.parse(await fs.readFile(rulesFile, 'utf8'));
+  assert.match(made.$schema, /docbench\.schema\.json$/);
+  assert.deepEqual(made.rules.map((r) => r.kind), ['readme']);
+  await fs.writeFile(rulesFile, good);
+});
+
+test('메타데이터로 보기(S28): 개요의 상태·담당·꼬리표 칩을 누르면 그 문서들, 다가오는 기한', async (t) => {
+  const soon = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10);
+  await fs.writeFile(path.join(dir, 'docs/배포-계획.md'), `---\nstatus: Review\nowner: dj\ntags: [api, 배포]\nreview: ${soon}\n---\n# 배포 계획\n\n글\n`);
+  await fs.writeFile(path.join(dir, 'docs/롤백.md'), '---\nstatus: review\nowner: kim\n---\n# 롤백\n');
+  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => errors.push(e.message));
+  t.after(() => ctx.close());
+  await page.goto(url + '#overview');
+  const meta = page.locator('.db-ov-meta');
+  await until(async () => (await page.locator('.db-ov-meta button.db-fm-c.status', { hasText: 'review' }).count()) > 0 || (await page.locator('.db-ov .db-meta .db-btn').click(), false), 8000);
+  // 상태는 대소문자를 가리지 않고 모인다(Review·review) → 누르면 두 문서
+  const chip = meta.locator('button.db-fm-c.status', { hasText: 'review' });
+  assert.match(await chip.innerText(), /review\s*2/);
+  await chip.click();
+  assert.equal(await chip.getAttribute('aria-pressed'), 'true');
+  const box = page.locator('.db-ov-pick');
+  assert.match(await box.locator('.hd').innerText(), /상태 review — 문서 2개/);
+  assert.deepEqual((await box.locator('.db-ov-file .t').allInnerTexts()).sort(), ['docs/롤백.md', 'docs/배포-계획.md']);
+  // 꼬리표로 바꾸면 그 값만 · 다시 누르면 닫힌다(키보드로도)
+  await meta.locator('button.db-fm-c.tag', { hasText: '#api' }).click();
+  assert.deepEqual(await box.locator('.db-ov-file .t').allInnerTexts(), ['docs/배포-계획.md']);
+  await meta.locator('button.db-fm-c.tag', { hasText: '#api' }).focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await box.isHidden(), true);
+  // 다가오는 기한(30일 안) → 누르면 그 문서
+  await meta.locator('button.db-fm-c.date', { hasText: soon }).click();
+  await page.locator('.db-doctitle', { hasText: '배포 계획' }).waitFor();
+});
+
 test('브라우저 오류 없음', () => {
   assert.deepEqual(errors, []);
 });
