@@ -76,7 +76,7 @@ Write the workspace's conventions in **`docbench.json`** at the top of the docs 
 | `readme` | These folders (`"*"` = each top folder) have a README — only folders with at least `minFiles` files |
 | `naming` | Names (before the extension) follow `kebab-case` · `snake_case` · `lowercase` · `no-spaces` · `ascii` · `date-prefix` · `number-prefix` · `no-version-marks`. Conventional names (README, LICENSE …) are skipped |
 | `review` | Looked at within `days` — the later of the front-matter review date (`reviewed`, `updated` …) and the last change (git commit, else file time). With `field`, only that date counts |
-| `forbid` · `max-size` · `require` | Files or folders that should not be here / size limit / at least one match per pattern |
+| `forbid` · `max-size` · `require` | Files or folders that should not be here / size limit / at least one match per pattern. Inside hidden or tool folders (`.github`, `node_modules`, `dist` …) only literal paths are checked (`.github/workflows/`) |
 
 Every rule takes `paths` and `except` (globs: `**` any folders, `*` and `?` within a name, `{a,b}`, folders end with `/`), `name`, `hint` and `level` (`risk`, `action` — default, `tidy`, `info`). `ignore` leaves paths out of every check; `checks` changes the level of a built-in check or turns it `"off"`. A broken rules file is not silently ignored — it shows up as a problem to fix.
 
@@ -95,7 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with: { fetch-depth: 0 }    # review cycles use commit times (a shallow clone falls back to file times — check says so)
+        with: { fetch-depth: 0 }    # review cycles use commit times (in a shallow clone every file looks changed in the last commit — check says so)
       - uses: d-j-lee/docbench@v0.10.0
         with: { path: docs, fail-on: action, lang: en }
 ```

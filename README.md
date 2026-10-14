@@ -140,7 +140,7 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 | `readme` | 이 폴더들(`"*"` = 맨 위 폴더마다)에 README 가 있는가 — 파일이 `minFiles` 개 이상인 폴더만 |
 | `naming` | 이름(확장자 앞)이 `kebab-case` · `snake_case` · `lowercase` · `no-spaces` · `ascii` · `date-prefix` · `number-prefix` · `no-version-marks`(_v2·최종·(1) 없음)를 따르는가. README·LICENSE 같은 관례 이름은 뺀다 |
 | `review` | `days` 일 안에 다시 봤는가 — 앞머리 검토일(`reviewed`·`updated` …)과 마지막 변경(git 커밋, 없으면 파일 시각) 중 늦은 날. `field` 를 주면 그 앞머리 날짜만(고친 것은 검토가 아니다 — 날짜가 없으면 걸린다) |
-| `forbid` · `max-size` · `require` | 두지 않을 파일·폴더 / 크기 한도 / 패턴마다 하나는 있어야 할 파일·폴더 |
+| `forbid` · `max-size` · `require` | 두지 않을 파일·폴더 / 크기 한도 / 패턴마다 하나는 있어야 할 파일·폴더. 숨김·도구 폴더(`.github`·`node_modules`·`dist` …) 안은 글자 그대로 쓴 경로만 본다(`.github/workflows/`) |
 
 - 모든 규칙에 `paths`·`except`(glob — `**` 폴더 여럿, `*`·`?` 이름 안, `{a,b}` 갈래, 폴더는 끝에 `/`), `name`(점검 제목), `hint`(까닭·고치는 법), `level`(`risk`·`action`(기본)·`tidy`·`info`). `ignore` 는 모든 점검에서 빼고, `checks` 는 늘 하는 점검의 수준을 바꾸거나 끈다(`"off"`). 규칙 파일이 틀리면 조용히 넘어가지 않고 "규칙 파일에 문제"로 뜬다 — 편집기에서는 `$schema` 로 자동 완성·검사.
 - 개요에서는 규칙 점검마다 걸린 경로와 까닭(빠진 키·맞지 않는 이름·마지막 검토일)을 보이고, 앞머리·검토 주기는 그 문서들에 **Claude 에게 맡길 초안**을 남긴다.
@@ -160,7 +160,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-        with: { fetch-depth: 0 }    # 검토 주기·오래됨을 커밋 시각으로 (얕게 받으면 파일 시각 — check 가 알린다)
+        with: { fetch-depth: 0 }    # 검토 주기·오래됨을 커밋 시각으로 (얕게 받으면 모두 마지막 커밋에 바뀐 것으로 보인다 — check 가 알린다)
       - uses: d-j-lee/docbench@v0.10.0
         with: { path: docs, fail-on: action, lang: en }
 ```

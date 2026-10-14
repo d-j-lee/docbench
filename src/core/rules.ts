@@ -7,8 +7,8 @@
  * 남이 만든 폴더를 열어도 안전하게: 경로 패턴은 정규식이 아닌 glob(되돌아가기 없음), 이름 규칙은 정해 둔 것만, 크기·개수에 한도.
  */
 import type { BuiltinCheckCode, CheckLevel, InventoryItem, NameStyle, OverviewCheck, RuleKind, RuleProblem, RuleSpec, WorkspaceRules } from '../types';
-import { globMatch, matchAny } from './workspace';
-import { isMarkdownPath } from './formats';
+import { globMatch, globShape, matchAny, GLOB_ALTS_MAX } from './workspace';
+import { formatOf, isMarkdownPath } from './formats';
 
 /** 규칙 파일 이름 — 문서 폴더 맨 위 */
 export const RULES_FILE = 'docbench.json';
@@ -19,6 +19,11 @@ export const RULES_MAX_BYTES = 256 * 1024;
 const RULES_MAX = 100;
 const PATTERNS_MAX = 50;
 const PATTERN_LEN_MAX = 300;
+/** 패턴 하나의 무게 한도 — 조각 수·'**' 조각 수 (펼친 갈래는 GLOB_ALTS_MAX) */
+const PATTERN_SEGMENTS_MAX = 32;
+const PATTERN_GLOBSTARS_MAX = 4;
+/** 객체 키로 받지 않는 이름 — 프로토타입을 건드리지 않게 */
+const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 export const RULE_KINDS: readonly RuleKind[] = ['front-matter', 'readme', 'naming', 'review', 'forbid', 'max-size', 'require'];
 export const NAME_STYLES: readonly NameStyle[] = ['kebab-case', 'snake_case', 'lowercase', 'no-spaces', 'ascii', 'date-prefix', 'number-prefix', 'no-version-marks'];
@@ -82,6 +87,9 @@ function patterns(v: unknown, at: string, problems: RuleProblem[]): string[] | n
     if (typeof p !== 'string' || !p.trim()) { problems.push({ at: `${at}[${i}]`, code: 'bad-value', value: show(p) }); continue; }
     const s = p.trim().replace(/\\/g, '/').replace(/^\.\//, '');
     if (s.length > PATTERN_LEN_MAX || s.startsWith('/') || s.split('/').includes('..')) { problems.push({ at: `${at}[${i}]`, code: 'pattern', value: show(p) }); continue; }
+    // 너무 무거운 패턴(갈래가 곱으로 불거나 '**' 가 많음)은 받지 않는다 — 남이 만든 규칙 파일이 화면을 오래 붙잡지 않게
+    const shape = globShape(s);
+    if (shape.alts > GLOB_ALTS_MAX || shape.segments > PATTERN_SEGMENTS_MAX || shape.globstars > PATTERN_GLOBSTARS_MAX) { problems.push({ at: `${at}[${i}]`, code: 'pattern', value: show(p) }); continue; }
     out.push(s);
   }
   if (out.length > PATTERNS_MAX) { problems.push({ at, code: 'too-many', value: String(PATTERNS_MAX) }); out.length = PATTERNS_MAX; }
@@ -115,8 +123,9 @@ function normalizeRule(raw: unknown, at: string, problems: RuleProblem[]): RuleS
       let values: Record<string, string[]> | undefined;
       if (raw.values != null) {
         if (!isObj(raw.values)) return bad('values');
-        values = {};
+        values = Object.create(null) as Record<string, string[]>;
         for (const [k, v] of Object.entries(raw.values).slice(0, 20)) {
+          if (UNSAFE_KEYS.has(k.trim())) { problems.push({ at: `${at}.values`, code: 'bad-value', value: show(k) }); continue; }
           const list = (typeof v === 'string' ? [v] : Array.isArray(v) ? v : []).map((x) => (typeof x === 'string' || typeof x === 'number' || typeof x === 'boolean' ? String(x).trim() : '')).filter(Boolean).slice(0, 50);
           if (!list.length) { problems.push({ at: `${at}.values.${k}`, code: 'bad-value', value: show(v) }); continue; }
           values[k.trim().slice(0, 60)] = list;
@@ -139,7 +148,7 @@ function normalizeRule(raw: unknown, at: string, problems: RuleProblem[]): RuleS
         if (NAME_STYLES.includes(s as NameStyle)) { if (!style.includes(s as NameStyle)) style.push(s as NameStyle); }
         else problems.push({ at: at + '.style', code: 'bad-value', value: show(s) });
       }
-      return style.length === list.length ? { ...base, kind, style } : null;
+      return style.length && list.every((x) => NAME_STYLES.includes(x as NameStyle)) ? { ...base, kind, style } : null;
     }
     case 'review': {
       const days = Number(raw.days);
@@ -174,8 +183,9 @@ export function parseRulesText(text: string): { spec: WorkspaceRules | null; pro
   if (raw.folders != null) {
     if (!isObj(raw.folders)) problems.push({ at: 'folders', code: 'bad-value', value: show(raw.folders) });
     else {
-      spec.folders = {};
+      spec.folders = Object.create(null) as Record<string, { role?: string }>;
       for (const [k, v] of Object.entries(raw.folders).slice(0, 500)) {
+        if (UNSAFE_KEYS.has(k.replace(/^\.?\/+|\/+$/g, ''))) { problems.push({ at: 'folders', code: 'bad-value', value: show(k) }); continue; }
         const role = typeof v === 'string' ? str(v, 200) : isObj(v) ? str(v.role, 200) : undefined;
         if (role) spec.folders[k.replace(/\\/g, '/').replace(/^\.?\/+|\/+$/g, '')] = { role };
         else if (!(typeof v === 'string' || (isObj(v) && (v.role == null || v.role === '')))) problems.push({ at: `folders.${k}`, code: 'bad-value', value: show(v) });
@@ -266,6 +276,23 @@ export interface RulesContext {
   ignored: (p: string) => boolean;
   /** 범위로 계산할 때 앞에 붙일 경로('<범위>/') — 규칙의 패턴은 작업 공간 기준이다 */
   prefix?: string;
+  /** 이 시각(ms)을 넘으면 멈춘다 — 남이 만든 무거운 규칙 파일이 화면·서버를 오래 붙잡지 않게 */
+  deadline?: number;
+  /**
+   * 폴더 지도가 들어가지 않는 곳(숨김·node_modules·dist …)에 있다고 확인한 경로 — require·forbid 의 글자 그대로 쓴 경로만
+   * (작업 공간 기준, 폴더는 끝 '/')
+   */
+  present?: string[];
+}
+
+/** 글자 그대로의 경로(와일드카드·갈래 없음) — 폴더 지도 밖이어도 디스크에서 바로 확인할 수 있다 */
+export const literalPath = (p: string): boolean => !/[*?{}]/.test(p);
+
+/** require·forbid 규칙의 글자 그대로 쓴 경로 — 저장소가 디스크에서 있는지 확인해 RulesContext.present 로 준다 */
+export function literalRulePaths(spec: WorkspaceRules | null | undefined): string[] {
+  const out = new Set<string>();
+  for (const r of spec?.rules || []) if (r.kind === 'require' || r.kind === 'forbid') for (const p of r.paths) if (literalPath(p)) out.add(p);
+  return [...out].slice(0, 200);
 }
 
 const baseOf = (p: string) => p.replace(/\/$/, '').split('/').pop() || p;
@@ -279,15 +306,22 @@ const fmValue = (fm: Record<string, string | string[]>, key: string): string | s
 const filled = (v: string | string[] | undefined) => (Array.isArray(v) ? v.some((x) => String(x).trim()) : typeof v === 'string' && !!v.trim());
 
 /** 규칙마다 점검 하나(걸린 것이 있을 때만) + 앞머리를 아직 읽지 않아 빠진 문서 수 */
-export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unchecked: number } {
+export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unchecked: number; stopped?: boolean } {
   const out: OverviewCheck[] = [];
   const unread = new Set<string>();
   const pre = ctx.prefix || '';
-  const inRule = (r: RuleSpec, id: string) => !ctx.ignored(id) && matchPath(pre + id, r.paths, ctx.ci) && !matchPath(pre + id, r.except, ctx.ci);
-  ctx.spec.rules.forEach((r, i) => {
+  const STOP = new Error('rules: time budget');
+  let calls = 0;
+  const inRule = (r: RuleSpec, id: string) => {
+    if (ctx.deadline && (++calls & 127) === 0 && Date.now() > ctx.deadline) throw STOP;
+    return !ctx.ignored(id) && matchPath(pre + id, r.paths, ctx.ci) && !matchPath(pre + id, r.except, ctx.ci);
+  };
+  const present = ctx.present || [];
+  let stopped = false;
+  try { ctx.spec.rules.forEach((r, i) => {
     const index = r.at ?? i;
     const paths: string[] = [];
-    const notes: Record<string, string> = {};
+    const notes: Record<string, string> = Object.create(null);
     const hit = (p: string, note?: string) => { paths.push(p); if (note && Object.keys(notes).length < ctx.pathsMax) notes[p] = note; };
     let want = '';
     switch (r.kind) {
@@ -313,12 +347,13 @@ export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unc
         if (!ctx.complete) break;
         const direct = new Map<string, string[]>();
         for (const f of ctx.files) { const p = parentOf(f.id); const arr = direct.get(p) || []; arr.push(baseOf(f.id)); direct.set(p, arr); }
+        // minFiles 0 = 빈 폴더까지
         const min = r.minFiles ?? 1;
         for (const d of ctx.dirs) {
           const p = d.id.replace(/\/$/, '');
           if (!p || !inRule(r, p + '/')) continue;
           const names = direct.get(p) || [];
-          if (names.length < Math.max(min, 1) || names.some(ctx.isIndexName)) continue;
+          if (names.length < min || names.some(ctx.isIndexName)) continue;
           hit(p + '/');
         }
         break;
@@ -339,6 +374,9 @@ export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unc
         const strict = !!r.field;
         const fields = r.field ? [r.field] : LAST_FIELDS;
         for (const f of ctx.files) {
+          // 다시 읽어 볼 글이 아닌 것(그림·로그)과 규칙 파일 자신은 검토 주기에서 뺀다
+          const fmt = formatOf(f.id);
+          if (fmt?.group === 'image' || fmt?.id === 'log' || pre + f.id === RULES_FILE) continue;
           if (!ctx.isDoc(f.id) || !inRule(r, f.id)) continue;
           const fm = ctx.meta[f.id];
           if (strict && !fm) { if (isMarkdownPath(f.id)) unread.add(f.id); continue; }
@@ -363,6 +401,12 @@ export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unc
           hit(it.id);
           if (it.folder) taken.push(it.id.endsWith('/') ? it.id : it.id + '/');
         }
+        // 폴더 지도 밖(숨김·node_modules·dist …)은 글자 그대로 쓴 경로만 — 저장소가 디스크에서 확인한 것
+        for (const p of present) {
+          if (!p.startsWith(pre) || !r.paths.some((x) => literalPath(x) && matchPath(p, [x], ctx.ci))) continue;
+          const id = p.slice(pre.length);
+          if (!paths.includes(id) && !taken.some((d) => id.startsWith(d)) && !ctx.ignored(id) && !matchPath(p, r.except, ctx.ci)) hit(id);
+        }
         break;
       }
       case 'max-size': {
@@ -378,7 +422,7 @@ export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unc
           if (r.except && matchAny(pat, r.except, ctx.ci)) continue;
           // 범위로 볼 때는 그 범위 안의 패턴만 — 작업 공간 다른 곳의 약속은 여기서 말할 수 없다
           if (pre && !pat.startsWith(pre)) continue;
-          const found = all.some((it) => matchPath(pre + it.id, [pat], ctx.ci));
+          const found = all.some((it) => matchPath(pre + it.id, [pat], ctx.ci)) || present.some((p) => matchPath(p, [pat], ctx.ci));
           if (!found) hit(pre ? pat.slice(pre.length) : pat);
         }
         break;
@@ -386,15 +430,15 @@ export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unc
     }
     if (!paths.length) return;
     const keep = paths.slice(0, ctx.pathsMax);
-    const kept: Record<string, string> = {};
-    for (const p of keep) if (notes[p]) kept[p] = notes[p];
+    const kept: Record<string, string> = Object.create(null);
+    for (const p of keep) if (Object.hasOwn(notes, p)) kept[p] = notes[p];
     out.push({
       code: `rule-${r.kind}`, level: r.level || 'action', n: paths.length, paths: keep,
       rule: { index, kind: r.kind, ...(r.name ? { name: r.name } : {}), ...(r.hint ? { hint: r.hint } : {}), want, scope: r.paths.slice(0, 8) },
       ...(Object.keys(kept).length ? { notes: kept } : {}),
     });
-  });
-  return { checks: out, unchecked: unread.size };
+  }); } catch (e) { if (e !== STOP) throw e; stopped = true; }
+  return { checks: out, unchecked: unread.size, ...(stopped ? { stopped } : {}) };
 }
 
 /** 규칙 파일의 문제 → 점검 하나 */

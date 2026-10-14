@@ -278,6 +278,8 @@ function isInside(child, root) {
 }
 
 const IGNORE_DIRS = core.IGNORE_DIRS;
+/** CI 점검(overview full)의 한도 — 화면용(D64)보다 넉넉히, 그래도 끝은 있게 */
+const FULL = { docs: 100000, visits: 2000000, ms: 120000, items: 200000, depth: 64, rulesMs: 60000 };
 
 export class Workspace {
   /**
@@ -299,7 +301,7 @@ export class Workspace {
     this.rulesFile = opts.rulesFile ? path.resolve(opts.rulesFile) : path.join(this.root, core.RULES_FILE);
     /** @type {'inside' | 'outside' | 'none'} none = 기록 없이 연 것(records optional) */
     this.dataMode = 'inside';
-    /** 커밋별 파일 시각 (HEAD 가 같으면 다시 재지 않는다) @type {{ head: string, times: Map<string, number>, shallow: boolean } | null | undefined} */
+    /** 커밋별 파일 시각 (HEAD 가 같으면 다시 재지 않는다 — 실패도 잠시 기억) @type {{ head: string, times: Map<string, number>, shallow: boolean, failed?: boolean, at: number, timeout: number } | null | undefined} */
     this.gitTimesCache = undefined;
     this.actor = opts.actor;
     /** @type {import('../dist/core.mjs').WorkspaceConfig} */
@@ -775,11 +777,17 @@ export class Workspace {
    */
   async overview(o = {}) {
     const scope = o.scope ? this.scopePath(o.scope) : '';
-    if (o.full) await this.readAllMeta();
+    if (o.full) {
+      // CI 점검: 한도를 넉넉히 — 훑기(문서 수·들른 항목·시간)와 폴더 지도(항목 수·깊이)
+      this.config.maxDocs = Math.max(this.config.maxDocs, FULL.docs);
+      await this.scan({ visits: FULL.visits, ms: FULL.ms });
+      await this.readAllMeta();
+    }
     await this.manifest();
-    const inv = await this.inventory();
+    const invMax = o.full ? FULL.items : this.config.maxInventory;
+    const inv = await this.inventory(o.full ? { max: invMax, depth: FULL.depth } : {});
     const items = /** @type {any[]} */ (inv.items);
-    const capped = items.length >= this.config.maxInventory;
+    const capped = items.length >= invMax || !!inv.cut;
     /** @type {Record<string, { id: string, text: string }>} */
     const readmes = {};
     for (const [dir, id] of Object.entries(core.pickReadmes(items, scope))) {
@@ -807,13 +815,22 @@ export class Workspace {
     // 앞부분을 읽은 마크다운 문서는 앞머리가 없어도 {} — 팀 규칙이 "아직 못 읽음"과 "앞머리 없음"을 가른다
     for (const [id, d] of this.docs) if (d.meta) meta[id] = d.meta; else if (core.isMarkdownPath(id) && d.title && d.titleMtime === d.mtimeMs) meta[id] = {};
     const rules = await this.loadRules();
+    // 팀 규칙 require·forbid 의 글자 그대로 쓴 경로 — 폴더 지도 밖(숨김·node_modules·dist …)도 디스크에서 확인
+    /** @type {string[]} */
+    const present = [];
+    for (const p of core.literalRulePaths(rules?.spec)) {
+      const abs = path.resolve(this.root, p);
+      if (!isInside(abs, this.root)) continue;
+      const st = await fs.lstat(abs).catch(() => null);
+      if (st && !st.isSymbolicLink()) present.push(p.replace(/\/+$/, '') + (st.isDirectory() ? '/' : ''));
+    }
     // 막 받은 저장소는 파일 시각이 받은 때 — 오래됨·검토 주기는 커밋 시각으로(작은 폴더만, CI 는 늘)
     const changed = this.git && (o.full || this.small) ? await this.gitTimes(o.full ? 60_000 : 4000) : null;
     return core.computeOverview({
       root: path.basename(this.root) || this.root, items, complete: this.index.complete && !capped, reason: capped ? 'many' : this.index.reason,
       isDoc: (p) => this.isDoc(p), meta, config: { purpose: this.config.purpose, folders: this.config.folders }, readmes, links, git: !!this.git,
       ...(rules ? { rules } : {}), ...(changed ? { changed: Object.fromEntries(changed.times) } : {}), ci: CI, ...(o.full ? { pathsMax: Infinity } : {}),
-      ...(scope ? { base: scope } : {}),
+      ...(scope ? { base: scope } : {}), ...(present.length ? { present } : {}), ...(o.full ? { rulesBudgetMs: FULL.rulesMs } : {}),
     });
   }
 
@@ -834,7 +851,14 @@ export class Workspace {
   async loadRules() {
     const st = await fs.stat(this.rulesFile).catch(() => null);
     if (!st || !st.isFile()) return undefined;
-    const rel = isInside(this.rulesFile, this.root) ? this.rel(this.rulesFile) : this.rulesFile;
+    const inside = isInside(this.rulesFile, this.root);
+    const rel = inside ? this.rel(this.rulesFile) : this.rulesFile;
+    // 문서 폴더의 규칙 파일이 링크로 폴더 밖(비밀 파일 …)을 가리키면 읽지 않는다 — 값이 점검·CI 로그에 실린다. 밖의 파일은 --rules 로 분명히 준 것만
+    if (inside) {
+      const real = await fs.realpath(this.rulesFile).catch(() => null);
+      this.realRoot ??= await fs.realpath(this.root).catch(() => this.root);
+      if (!real || !isInside(real, /** @type {string} */ (this.realRoot))) return { file: rel, spec: null, problems: [{ at: rel, code: 'bad-value', value: 'link outside the docs folder' }] };
+    }
     if (st.size > core.RULES_MAX_BYTES) return { file: rel, spec: null, problems: [{ at: path.basename(this.rulesFile), code: 'too-big', value: core.bytesLabel(core.RULES_MAX_BYTES) }] };
     const buf = await fs.readFile(this.rulesFile).catch(() => null);
     if (!buf) return undefined;
@@ -846,10 +870,15 @@ export class Workspace {
     if (!this.git) return null;
     const head = await gitHead(this.root);
     if (!head) return null;
-    if (this.gitTimesCache && this.gitTimesCache.head === head) return this.gitTimesCache;
+    const c = this.gitTimesCache;
+    if (c && c.head === head) {
+      // 실패(시간 초과)도 기억한다 — 개요를 열 때마다 다시 기다리지 않게. 10분 뒤나 더 넉넉한 한도(CI)면 다시
+      if (!c.failed) return c;
+      if (Date.now() - c.at < 600_000 && timeout <= c.timeout) return null;
+    }
     const r = await gitLastChange(this.root, this.git.prefix, { timeout });
-    this.gitTimesCache = r ? { head, ...r } : null;
-    return this.gitTimesCache;
+    this.gitTimesCache = r ? { head, ...r, at: Date.now(), timeout } : { head, times: new Map(), shallow: false, failed: true, at: Date.now(), timeout };
+    return r ? this.gitTimesCache : null;
   }
 
   /** 마크다운 문서의 앞부분(제목·앞머리)을 한도 없이 모두 읽는다 — CI 점검용(매니페스트는 한 번에 300개씩) */
@@ -1110,17 +1139,24 @@ export class Workspace {
   }
 
   // ------------------------------------------------------------ 폴더 지도
-  async inventory() {
+  /** @param {{ max?: number, depth?: number }} [o] 한도(기본: 설정 maxInventory · 10단계) — CI 점검은 넉넉히 */
+  async inventory(o = {}) {
     const items = [];
-    const max = this.config.maxInventory;
+    const max = o.max ?? this.config.maxInventory;
     const status = this.git && this.config.inventory?.flags !== false ? await gitStatus(this.root, this.git.prefix) : new Map();
     // 큰 폴더(드라이브 맨 위 등)는 두 단계까지만
-    const maxDepth = this.index.reason === 'big-root' ? 1 : 10;
+    const maxDepth = this.index.reason === 'big-root' ? 1 : o.depth ?? 10;
+    let cut = false;
     const walk = async (dir, parent, depth) => {
-      if (depth > maxDepth || items.length >= max) return;
+      // 깊이 한도로 들어가지 않은 폴더가 있으면 목록이 전부가 아니다 — 개요가 다 봐야 아는 점검을 하지 않게 알린다
+      if (depth > maxDepth) { cut = true; return; }
+      if (items.length >= max) return;
       let ents = [];
       try { ents = await fs.readdir(dir, { withFileTypes: true }); } catch { return; }
       ents.sort((a, b) => a.name.localeCompare(b.name));
+      // 이 폴더의 파일을 먼저 다 담고 하위 폴더로 — 한도에 닿아도 위쪽 파일(맨 위 README …)이 빠지지 않게
+      /** @type {[string, string][]} */
+      const subs = [];
       for (const e of ents) {
         if (items.length >= max) break;
         if (e.isSymbolicLink()) continue;
@@ -1130,7 +1166,7 @@ export class Workspace {
           if (!core.walkable(e.name)) continue;
           const st = await fs.stat(abs).catch(() => null);
           items.push({ id: rel + '/', parent, name: e.name, folder: true, modified: st ? new Date(st.mtimeMs).toISOString() : undefined });
-          await walk(abs, rel + '/', depth + 1);
+          subs.push([abs, rel + '/']);
         } else if (e.isFile()) {
           const st = await fs.stat(abs).catch(() => null);
           const flags = [];
@@ -1142,6 +1178,7 @@ export class Workspace {
           items.push({ id: rel, parent, name: e.name, folder: false, kind: ext || 'file', size: st?.size, modified: st ? new Date(st.mtimeMs).toISOString() : undefined, flags, docId: isDoc ? rel : undefined });
         }
       }
+      for (const [abs, rel] of subs) await walk(abs, rel, depth + 1);
     };
     await walk(this.root, '', 0);
     return {
@@ -1150,6 +1187,7 @@ export class Workspace {
       items,
       flagLabels: core.INVENTORY_FLAG_LABELS,
       open: [],
+      ...(cut ? { cut } : {}),
     };
   }
 

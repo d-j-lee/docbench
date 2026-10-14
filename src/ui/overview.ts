@@ -251,7 +251,7 @@ function checkRow(app: App, ov: WorkspaceOverview, c: OverviewCheck): HTMLElemen
     paths.replaceChildren(...(all ? c.paths : c.paths.slice(0, PATHS_SHOWN)).map((p) => {
       const isDoc = p in app.manifest.docs;
       const dir = p.endsWith('/') ? p.slice(0, -1) : null;
-      const note = c.notes?.[p];
+      const note = c.notes && Object.hasOwn(c.notes, p) ? c.notes[p] : undefined;
       return h('button', { class: 'db-chip', type: 'button', title: note ? `${p} — ${note}` : p, onclick: () => void (isDoc ? app.navigate(p) : app.revealFolder(dir ?? (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))) },
         rel(app, p), note ? h('small', { class: 'nt', text: note }) : null);
     }));
@@ -304,7 +304,9 @@ function draftTargets(app: App, ov: WorkspaceOverview, c: OverviewCheck, act: Ch
   if (act.kind !== 'draft-each' && act.kind !== 'draft-readme') return [];
   const ok = (id: string) => id in app.manifest.docs && app.inScope(id) && claudeChanges(formatFor(id)).length > 0;
   if (act.kind === 'draft-readme') {
-    const readme = ov.purpose?.docId || Object.keys(app.manifest.docs).find((d) => /^readme\.(md|markdown)$/i.test(d));
+    // 맨 위 README (목적이 팀 규칙 파일에서 왔으면 그 파일이 아니라 README)
+    const top = app.scope ? app.scope + '/' : '';
+    const readme = ov.folders.find((f) => f.path === '')?.readme || Object.keys(app.manifest.docs).find((d) => d.startsWith(top) && /^readme\.(md|markdown)$/i.test(d.slice(top.length)));
     return readme && ok(readme) ? [readme] : [];
   }
   return c.paths.filter(ok).slice(0, 10);

@@ -34,7 +34,9 @@ function oldGlob(pat: string): RegExp {
 }
 
 describe('glob', () => {
-  const pats = ['**/*.md', '*.md', 'docs/**', 'docs/**/*.md', '**/drafts/**', 'node_modules/**', '.git/**', '**/.*/**', 'a/*/b.md', '**/*.{md,txt}', 'docs/{a,b}/*.md', '?.md', 'README', '**/{AUTHORS,README}', '{docs/a,notes}/**'];
+  const pats = ['**/*.md', '*.md', 'docs/**', 'docs/**/*.md', '**/drafts/**', 'node_modules/**', '.git/**', '**/.*/**', 'a/*/b.md', '**/*.{md,txt}', 'docs/{a,b}/*.md', '?.md', 'README', '**/{AUTHORS,README}', '{docs/a,notes}/**',
+    // 조각 안의 ** 는 예전처럼 폴더를 넘는다(독립 검토 — 예전 설정의 뜻이 몰래 좁아지지 않게)
+    'docs/**.md', '**.md', 'a**/b.md', 'docs/a**'];
   const paths = ['a.md', 'docs/a.md', 'docs/x/y/z.md', 'docs/', 'notes/a.txt', 'x/drafts/y.md', 'drafts/y.md', 'node_modules/p/i.js', 'a/.cache/x', '.git/HEAD', 'a/q/b.md', 'docs/a/k.md', 'docs/c/k.md', 'b.md', 'README', 'x/README', 'docs/a/', 'docsx/a.md'];
   it('흔한 패턴은 예전(정규식)과 같은 뜻 — 다른 곳은 "docs/**" 가 docs 자신도 받는 것 하나', () => {
     for (const p of pats) for (const s of paths) {
@@ -42,6 +44,14 @@ describe('glob', () => {
       expect(globMatch(p, s), `${p} ~ ${s}`).toBe(oldGlob(p).test(s));
     }
     expect(globMatch('docs/**', 'docs')).toBe(true);
+  });
+  it('갈래 안 와일드카드(예전에는 정규식 오류) · 무거운 패턴의 모양(globShape)', async () => {
+    expect([globMatch('{*.md,*.txt}', 'a.txt'), globMatch('docs/{*.md,x/*}', 'docs/x/y'), globMatch('{*.md,*.txt}', 'a.csv')]).toEqual([true, true, false]);
+    const { globShape } = await import('../../src/core/workspace');
+    // 글자 갈래는 조각 안 낱말(펼치지 않는다), '/'·와일드카드를 품은 갈래만 펼친다 — 한도+1 까지 센다
+    expect(globShape('{a,b}{c,d}{e,f}{g,h}/x')).toMatchObject({ alts: 1 });
+    expect(globShape('{a/,b/}{c/,d/}{e/,f/}{g/,h/}x')).toMatchObject({ alts: 9 });
+    expect(globShape('**/a/**/b/**/c')).toMatchObject({ alts: 1, globstars: 3 });
   });
   it('긴 갈래 목록({md,…130개})도 — 기본 include 가 그런 모양', () => {
     const exts = Array.from({ length: 130 }, (_, i) => 'e' + i).concat('md');
@@ -108,6 +118,20 @@ describe('규칙 파일 읽기', () => {
     ]);
     expect(spec!.ignore).toEqual(['ok/**']);
     expect(spec!.rules).toEqual([{ kind: 'forbid', paths: ['**/*.tmp'], at: 8 }]);
+  });
+  it('무거운 패턴(갈래 8·조각 32·** 4 넘음)은 받지 않는다 · 같은 이름 규칙 둘은 하나로 · 프로토타입 키는 문제로', () => {
+    // JSON 글의 "__proto__" 키 (자바스크립트 객체로 쓰면 키가 아니라 프로토타입이 되어 시험이 안 된다)
+    const { spec, problems } = parseRulesText(`{
+      "ignore": ["{**/,**/}{**/,**/}{**/,**/}{**/,**/}x", "**/a/**/b/**/c/**/d/**/e"],
+      "folders": { "__proto__": "해킹", "docs": "설계" },
+      "rules": [{ "kind": "naming", "style": ["kebab-case", "kebab-case"] }, { "kind": "front-matter", "keys": ["owner"], "values": { "constructor": ["x"], "status": ["a"] } }]
+    }`);
+    expect(problems.map((p) => `${p.at}:${p.code}`)).toEqual(['folders:bad-value', 'ignore[0]:pattern', 'ignore[1]:pattern', 'rules[1].values:bad-value']);
+    expect(spec!.ignore).toEqual([]);
+    expect(Object.getPrototypeOf(spec!.folders)).toBe(null);
+    expect({ ...spec!.folders }).toEqual({ docs: { role: '설계' } });
+    expect(spec!.rules[0]).toMatchObject({ kind: 'naming', style: ['kebab-case'] });
+    expect({ ...(spec!.rules[1] as { values: object }).values }).toEqual({ status: ['a'] });
   });
   it('JSON 이 아니면 · 너무 크면 · BOM', () => {
     expect(parseRulesText('{ "rules": [ }').problems[0].code).toBe('json');
@@ -216,8 +240,37 @@ describe('팀 규칙 점검', () => {
     expect(pick(ov, 'rule-require')!.paths).toEqual(['CHANGELOG.md']);
   });
   it('일부만 훑었으면 README·있어야 할 것은 말하지 않는다', () => {
-    const ov = overview({ rules: [{ kind: 'readme', paths: ['*'] }, { kind: 'require', paths: ['NOPE.md'] }] }, { complete: false });
+    const ov = overview({ rules: [{ kind: 'readme', paths: ['*'] }, { kind: 'require', paths: ['NOPE.md'] }] }, { complete: false }, [file('a/x.md')]);
     expect(ov.checks.filter((c) => c.code.startsWith('rule-'))).toEqual([]);
+  });
+  it('폴더 지도 밖(숨김·dist …)은 저장소가 확인한 글자 그대로의 경로로(present) — require·forbid', () => {
+    const rules = { rules: [{ kind: 'require', paths: ['.github/workflows/', '.github/CODEOWNERS', 'build/x.md'] }, { kind: 'forbid', paths: ['build/', 'node_modules'] }] };
+    const ov = overview(rules, { present: ['.github/workflows/', '.github/CODEOWNERS', 'build/'] });
+    expect(pick(ov, 'rule-require')!.paths).toEqual(['build/x.md']);
+    expect(pick(ov, 'rule-forbid')!.paths).toEqual(['build/']);
+  });
+  it('README 규칙 minFiles 0 = 빈 폴더까지 · 검토 주기는 그림·로그·규칙 파일을 보지 않는다', () => {
+    const old = new Date(NOW - 400 * DAY).toISOString();
+    const ov = overview({ rules: [{ kind: 'readme', paths: '*', minFiles: 0 }, { kind: 'review', days: 30 }] }, { meta: {} },
+      [file('README.md'), dir('empty'), file('a.png', { modified: old }), file('x.log', { modified: old }), file('docbench.json', { modified: old }), file('p.md', { modified: old })]);
+    expect(pick(ov, 'rule-readme')!.paths).toEqual(['empty/']);
+    expect(pick(ov, 'rule-review')!.paths).toEqual(['p.md']);
+  });
+  it('시간 한도를 넘으면 멈추고 "규칙 파일에 문제(too-slow)" — 무거운 규칙 파일이 화면을 붙잡지 않는다', () => {
+    const seg = '*a'.repeat(40) + '*b';
+    const pat = ['**', seg, '**', seg, '**', seg].join('/');
+    const rules = { rules: Array.from({ length: 60 }, (_, k) => ({ kind: 'naming', style: 'ascii', paths: Array.from({ length: 6 }, (_, j) => pat + k + j) })) };
+    const items = Array.from({ length: 1500 }, (_, i) => file('docs/guide/' + 'a'.repeat(60) + '/aaaaaaaa-' + i + '.md'));
+    const t0 = Date.now();
+    const ov = overview(rules, { rulesBudgetMs: 200 }, items);
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(pick(ov, 'rules-invalid')!.problems!.map((p) => p.code)).toContain('too-slow');
+  });
+  it('경로마다 까닭은 자기 키만 — 파일 이름이 constructor 여도', () => {
+    const ov = overview({ rules: [{ kind: 'naming', style: 'kebab-case' }] }, {}, [file('README.md'), file('constructor'), file('Bad Name.md')]);
+    const c = pick(ov, 'rule-naming')!;
+    expect(c.paths).toEqual(['Bad Name.md']);
+    expect(Object.getPrototypeOf(c.notes)).toBe(null);
   });
   it('ignore 는 모든 점검에서 빼고, checks 는 수준을 바꾸거나 끈다', () => {
     const items = [file('README.md'), file('docs/spec_v2.md'), file('docs/spec_v3.md'), dir('archive'), file('archive/old.docx'), file('big.bin', { size: 60 * 1024 * 1024 })];
@@ -263,7 +316,7 @@ describe('점검 문구 한 벌 (화면·CLI)', () => {
       expect(CHECK_TEXT[lang]['overview.check.' + c], c).toBeTruthy();
       expect(CHECK_TEXT[lang]['overview.check.' + c + '.hint'], c).toBeTruthy();
     }
-    for (const p of ['json', 'not-object', 'too-big', 'unknown-key', 'unknown-kind', 'missing', 'bad-value', 'pattern', 'too-many']) expect(CHECK_TEXT[lang]['overview.rules.problem.' + p], p).toBeTruthy();
+    for (const p of ['json', 'not-object', 'too-big', 'unknown-key', 'unknown-kind', 'missing', 'bad-value', 'pattern', 'too-many', 'too-slow']) expect(CHECK_TEXT[lang]['overview.rules.problem.' + p], p).toBeTruthy();
     for (const l of CHECK_LEVELS) expect(CHECK_TEXT[lang]['overview.level.' + l]).toBeTruthy();
   });
   it('두 말의 낱말이 같다 · 값 채우기', () => {

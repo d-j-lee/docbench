@@ -45,6 +45,10 @@ export interface OverviewInput {
   pathsMax?: number;
   /** 경로 대소문자 무시 (Windows) */
   ci?: boolean;
+  /** 팀 규칙 점검에 쓸 시간(ms, 기본 1500 — CI 는 넉넉히). 넘으면 멈추고 "규칙 파일에 문제(too-slow)"로 알린다 */
+  rulesBudgetMs?: number;
+  /** 폴더 지도 밖(숨김·node_modules·dist …)에 있다고 디스크에서 확인한 경로 — 팀 규칙 require·forbid 의 글자 그대로 쓴 경로(literalRulePaths) */
+  present?: string[];
   /**
    * 범위 — 작업 공간 안의 이 폴더만 본다(대시보드 탭·넓은 작업 공간 안의 폴더). 항목·메타데이터·링크는 작업 공간 기준 경로 그대로 주고,
    * readmes 는 pickReadmes(items, base) 처럼 이 폴더 기준. 결과의 경로도 작업 공간 기준이다
@@ -269,7 +273,13 @@ function computeAt(input: OverviewInput, prefix: string): WorkspaceOverview {
   const ci = !!input.ci;
   const pathsMax = input.pathsMax ?? PATHS_MAX;
   /** 팀 규칙의 경로는 작업 공간 기준 — 범위로 계산할 때는 앞에 범위를 붙여 견준다 */
-  const ignored = (p: string) => !!spec?.ignore.length && matchPath(prefix + p, spec.ignore, ci);
+  const ignoredSeen = new Map<string, boolean>();
+  const ignored = (p: string) => {
+    if (!spec?.ignore.length) return false;
+    let r = ignoredSeen.get(p);
+    if (r === undefined) { r = matchPath(prefix + p, spec.ignore, ci); ignoredSeen.set(p, r); }
+    return r;
+  };
 
   // 묶음
   const groups = new Map<FileGroup, { files: number; bytes: number }>();
@@ -320,7 +330,8 @@ function computeAt(input: OverviewInput, prefix: string): WorkspaceOverview {
     .map((f) => ({ path: f.id, size: f.size || 0, ...(isDoc(f.id) ? { doc: true } : {}) }));
 
   // 앞머리 메타데이터
-  const meta: WorkspaceOverview['meta'] = { docs: 0, status: {}, owners: {}, tags: {}, due: [] };
+  // 앞머리 값이 키가 된다 — __proto__ 같은 값이 프로토타입을 건드리지 않게 프로토타입 없는 객체로
+  const meta: WorkspaceOverview['meta'] = { docs: 0, status: Object.create(null), owners: Object.create(null), tags: Object.create(null), due: [] };
   const bump = (m: Record<string, number>, k: string) => { const key = k.trim().slice(0, 40); if (key) m[key] = (m[key] || 0) + 1; };
   for (const [id, fm] of Object.entries(input.meta || {})) {
     if (!fm || !Object.keys(fm).length) continue;
@@ -368,6 +379,7 @@ function computeAt(input: OverviewInput, prefix: string): WorkspaceOverview {
   push('huge-files', input.git ? 'action' : 'info', huge.map((f) => f.id));
   const rootReadme = files.some((f) => !f.id.includes('/') && isReadmeName(baseOf(f.id)));
   const noReadme = spec?.checks['no-readme'] ?? 'action';
+  // 폴더 지도는 폴더마다 파일을 먼저 담으므로(하위 폴더로 들어가기 전에) 한도에 닿아도 맨 위 파일은 목록에 있다
   if (!rootReadme && files.length && noReadme !== 'off') checks.push({ code: 'no-readme', level: noReadme, n: 1, paths: [] });
   push('review-due', 'action', meta.due.map((d) => d.docId));
 
@@ -437,18 +449,21 @@ function computeAt(input: OverviewInput, prefix: string): WorkspaceOverview {
   // 팀 규칙 (D90)
   let rulesInfo: WorkspaceOverview['rules'];
   if (input.rules) {
-    const bad = rulesProblemCheck(input.rules.file, input.rules.problems);
-    if (bad) checks.push(bad);
+    const problems = [...input.rules.problems];
     let unchecked = 0;
     if (spec) {
       const r = evaluateRules({
         spec, files, dirs, complete: input.complete, isDoc, meta: input.meta || {}, changedAt, dateMs, isIndexName,
         marked: (n) => versionFamily(n).marked || COPY_ALONE.test(n), ci, now, pathsMax, ignored, prefix,
+        deadline: Date.now() + (input.rulesBudgetMs ?? 1500), present: input.present,
       });
       checks.push(...r.checks);
       unchecked = r.unchecked;
+      if (r.stopped) problems.push({ at: 'rules', code: 'too-slow', value: String(input.rulesBudgetMs ?? 1500) });
     }
-    rulesInfo = { file: input.rules.file, count: spec?.rules.length || 0, problems: input.rules.problems.length, unchecked };
+    const bad = rulesProblemCheck(input.rules.file, problems);
+    if (bad) checks.push(bad);
+    rulesInfo = { file: input.rules.file, count: spec?.rules.length || 0, problems: problems.length, unchecked };
   }
 
   const order = { risk: 0, action: 1, tidy: 2, info: 3 };
@@ -488,7 +503,8 @@ export function pickReadmes(items: InventoryItem[], base = ''): Record<string, s
     const rel = pickReadmes(items.filter((i) => i.id.startsWith(pre)).map((i) => ({ ...i, id: i.id.slice(pre.length) })));
     return Object.fromEntries(Object.entries(rel).map(([k, v]) => [k, pre + v]));
   }
-  const out: Record<string, string> = {};
+  // 폴더 이름이 키 — __proto__ 같은 이름에도 깨지지 않게
+  const out: Record<string, string> = Object.create(null);
   const rank = (n: string) => (/\.md$/i.test(n) ? 0 : /\.(markdown|txt|rst|adoc)$/i.test(n) ? 1 : !n.includes('.') ? 2 : 3);
   for (const f of items) {
     if (f.folder) continue;

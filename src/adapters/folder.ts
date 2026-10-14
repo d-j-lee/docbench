@@ -31,7 +31,7 @@ import { formatFor, formatOf, editableFormat, claudeChanges, titledFormat, isMar
 import { deriveText } from '../core/derive';
 import { frontMatterData } from '../core/markdown';
 import { computeOverview, pickReadmes, relativeLinks, OVERVIEW_LINK_LIMITS } from '../core/overview';
-import { parseRulesText, RULES_FILE, RULES_MAX_BYTES, bytesLabel } from '../core/rules';
+import { parseRulesText, literalRulePaths, RULES_FILE, RULES_MAX_BYTES, bytesLabel } from '../core/rules';
 import { sectionSources } from '../core/source';
 import type { WorkspaceOverview } from '../types';
 import { cleanRunEntry, completeJsonLines, liveRunners, outdatedRunners, runnerIsMine, makeRunRequest, pickRunner, runnerAlive, runFiles, validRunId, normalizeRunInput, buildRunPrompt, buildReviewPrompt, TERMINAL_RUNNER, isTerminalRunner, validDocId, RUN_MAX_DOCS, emptySummary, safeAccountId } from '../core/runs';
@@ -853,16 +853,20 @@ export class FolderWorkspace {
   async inventory(): Promise<Inventory> {
     const items: InventoryItem[] = [];
     const max = this.config.maxInventory;
+    let cut = false;
     const walk = async (dir: string, parent: string, depth: number): Promise<void> => {
-      if (depth > 10 || items.length >= max) return;
+      if (depth > 10) { cut = true; return; }
+      if (items.length >= max) return;
       const ents = ((await this.fs.list(dir).catch(() => null)) || []).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      // 이 폴더의 파일을 먼저 다 담고 하위 폴더로 — 한도에 닿아도 위쪽 파일(맨 위 README …)이 빠지지 않게
+      const subs: string[] = [];
       for (const e of ents) {
         if (items.length >= max) break;
         const rel = parent + e.name;
         if (e.kind === 'directory') {
           if (!walkable(e.name)) continue;
           items.push({ id: rel + '/', parent, name: e.name, folder: true });
-          await walk(rel, rel + '/', depth + 1);
+          subs.push(rel);
         } else {
           const st = await this.fs.stat(rel).catch(() => null);
           const isDoc = this.docs.has(rel);
@@ -870,9 +874,10 @@ export class FolderWorkspace {
           items.push({ id: rel, parent, name: e.name, folder: false, kind: ext || 'file', size: st?.size, modified: st ? new Date(st.mtimeMs).toISOString() : undefined, flags: isDoc ? ['doc'] : [], docId: isDoc ? rel : undefined });
         }
       }
+      for (const rel of subs) await walk(rel, rel + '/', depth + 1);
     };
     await walk('', '', 0);
-    return { asof: new Date().toISOString(), source: this.fs.name + (items.length >= max ? ` (처음 ${max}개)` : ''), items, flagLabels: INVENTORY_FLAG_LABELS, open: [] };
+    return { asof: new Date().toISOString(), source: this.fs.name + (items.length >= max ? ` (처음 ${max}개)` : ''), items, flagLabels: INVENTORY_FLAG_LABELS, open: [], ...(cut ? { cut } : {}) };
   }
 
   /**
@@ -882,7 +887,7 @@ export class FolderWorkspace {
     const scope = (o.scope || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     await this.manifest();
     const inv = await this.inventory();
-    const capped = inv.items.length >= this.config.maxInventory;
+    const capped = inv.items.length >= this.config.maxInventory || !!inv.cut;
     const readmes: Record<string, { id: string; text: string }> = {};
     for (const [dir, id] of Object.entries(pickReadmes(inv.items, scope))) {
       if (id.split('/').some((seg) => seg.startsWith('.'))) continue;
@@ -907,10 +912,18 @@ export class FolderWorkspace {
     // 앞부분을 읽은 마크다운 문서는 앞머리가 없어도 {} — 팀 규칙이 "아직 못 읽음"과 "앞머리 없음"을 가른다
     for (const [id, d] of this.docs) if (d.meta) meta[id] = d.meta; else if (isMarkdownPath(id) && d.title && d.titleMtime === d.mtimeMs) meta[id] = {};
     const rules = await this.loadRules();
+    // 팀 규칙 require·forbid 의 글자 그대로 쓴 경로 — 폴더 지도 밖(숨김·node_modules …)도 있는지 확인
+    const present: string[] = [];
+    for (const p of literalRulePaths(rules?.spec)) {
+      const bare = p.replace(/\/+$/, '');
+      if (!bare || bare.split('/').some((x) => x === '..')) continue;
+      if (await this.fs.stat(bare).then((x) => !!x, () => false)) present.push(bare);
+      else if (await this.fs.list(bare).then((x) => !!x, () => false)) present.push(bare + '/');
+    }
     return computeOverview({
       root: this.fs.name, items: inv.items, complete: this.index.complete && !capped, reason: capped ? 'many' : this.index.reason,
       isDoc: (p) => isDocPath(p, this.config, this.ci), meta, config: { purpose: this.config.purpose, folders: this.config.folders }, readmes, links,
-      ...(rules ? { rules } : {}), ci: this.ci, ...(scope ? { base: scope } : {}),
+      ...(rules ? { rules } : {}), ci: this.ci, ...(scope ? { base: scope } : {}), ...(present.length ? { present } : {}),
     });
   }
 

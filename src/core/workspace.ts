@@ -275,51 +275,76 @@ export function parseJsonText(text: string): unknown {
 
 // ---------------------------------------------------------------- glob
 
-/** 조각 하나의 낱말 — 글자 · `?` · `*` · `{a,b}`(조각 안의 갈래) */
+/** 조각 하나의 낱말 — 글자 · `?` · `*` · `{a,b}`(조각 안의 글자 갈래) */
 type GlobTok = string | { any: 1 } | { star: 1 } | { alt: string[] };
-/** 펼친 glob — '/' 를 품은 갈래({docs/a,b})만 미리 펼치고, '/' 로 나눈 조각마다 낱말 */
-const globCache = new Map<string, (GlobTok[] | '**')[][]>();
-/** '/' 를 품은 갈래를 펼친 수 한도 — 곱으로 불어나지 않게 */
-const GLOB_ALTS_MAX = 64;
+/** 조각 — 낱말과 경로 조각마다 맞춰 본 결과(같은 폴더 이름이 파일마다 되풀이된다). '**' = 폴더 0개 이상 */
+type GlobSeg = { toks: GlobTok[]; seen: Map<string, boolean> } | '**';
+/** 펼친 glob — 갈래마다 조각 목록 */
+const globCache = new Map<string, GlobSeg[][]>();
+/** 미리 펼친 갈래 수 한도 — 곱으로 불어나지 않게(팀 규칙은 넘으면 거부한다 — globShape) */
+export const GLOB_ALTS_MAX = 8;
+const SEEN_MAX = 4096;
 
-/** '/' 를 품은 {…} 만 펼친다 (조각 안 갈래는 낱말로 둔다) */
-function expandSlashBraces(p: string): string[] {
+/**
+ * 미리 펼칠 것: '/'·'*'·'?' 를 품은 {…}(조각 안 글자 갈래만 낱말로 둔다), 조각 안의 '**'(a**b — 예전 뜻대로 폴더를 넘는다:
+ * a*b 또는 a* / ** / *b). limit 을 넘으면 거기서 멈춘다
+ */
+function expandPattern(p: string, limit = GLOB_ALTS_MAX): string[] {
   let out = [p];
   for (let round = 0; round < 8; round++) {
     let changed = false;
     const next: string[] = [];
     for (const s of out) {
-      const m = /\{([^{}]*\/[^{}]*)\}/.exec(s);
-      if (!m) { next.push(s); continue; }
-      changed = true;
-      for (const alt of m[1].split(',')) next.push(s.slice(0, m.index) + alt + s.slice(m.index + m[0].length));
+      const m = /\{([^{}]*[/*?][^{}]*)\}/.exec(s);
+      if (m) { changed = true; for (const alt of m[1].split(',')) next.push(s.slice(0, m.index) + alt + s.slice(m.index + m[0].length)); continue; }
+      const segs = s.split('/');
+      const i = segs.findIndex((g) => g !== '**' && g.includes('**'));
+      if (i >= 0) {
+        changed = true;
+        const g = segs[i];
+        const k = g.indexOf('**');
+        const pre = g.slice(0, k), post = g.slice(k + 2).replace(/^\*+/, '');
+        next.push([...segs.slice(0, i), pre + '*' + post, ...segs.slice(i + 1)].join('/'));
+        next.push([...segs.slice(0, i), pre + '*', '**', '*' + post, ...segs.slice(i + 1)].join('/'));
+        continue;
+      }
+      next.push(s);
     }
-    out = next.slice(0, GLOB_ALTS_MAX);
+    out = next.slice(0, limit);
     if (!changed) break;
   }
   return out;
 }
 
-function tokenize(seg: string): GlobTok[] | '**' {
+/** 패턴의 크기 — 펼친 갈래 수(한도+1 까지 센다)·조각 수·'**' 조각 수. 팀 규칙이 너무 무거운 패턴을 거부하는 데 쓴다 */
+export function globShape(pat: string): { alts: number; segments: number; globstars: number } {
+  const alts = expandPattern(pat, GLOB_ALTS_MAX + 1);
+  return { alts: alts.length, segments: Math.max(...alts.map((a) => a.split('/').length)), globstars: Math.max(...alts.map((a) => a.split('/').filter((x) => x === '**').length)) };
+}
+
+function tokenize(seg: string): GlobSeg {
   if (seg === '**') return '**';
-  const out: GlobTok[] = [];
+  const toks: GlobTok[] = [];
   for (let i = 0; i < seg.length; i++) {
     const c = seg[i];
-    if (c === '*') { if (!(typeof out[out.length - 1] === 'object' && 'star' in (out[out.length - 1] as object))) out.push({ star: 1 }); }
-    else if (c === '?') out.push({ any: 1 });
+    if (c === '*') { const last = toks[toks.length - 1]; if (!(typeof last === 'object' && 'star' in last)) toks.push({ star: 1 }); }
+    else if (c === '?') toks.push({ any: 1 });
     else if (c === '{') {
       const end = seg.indexOf('}', i);
       const inner = end < 0 ? '' : seg.slice(i + 1, end);
-      if (end < 0 || inner.includes('{')) { out.push(c); continue; }
-      out.push({ alt: inner.split(',') });
+      if (end < 0 || inner.includes('{')) { toks.push(c); continue; }
+      toks.push({ alt: inner.split(',') });
       i = end;
-    } else out.push(c);
+    } else toks.push(c);
   }
-  return out;
+  return { toks, seen: new Map() };
 }
 
 /** 조각 하나 — (낱말 위치, 글자 위치) 를 한 번씩만 본다: 되돌아가기로 불어나지 않는다 */
-function segMatch(toks: GlobTok[], s: string): boolean {
+function segMatch(seg: Exclude<GlobSeg, '**'>, s: string): boolean {
+  const hit = seg.seen.get(s);
+  if (hit !== undefined) return hit;
+  const toks = seg.toks;
   const W = s.length + 1;
   const memo = new Uint8Array((toks.length + 1) * W);
   const go = (ti: number, si: number): boolean => {
@@ -335,11 +360,14 @@ function segMatch(toks: GlobTok[], s: string): boolean {
     memo[k] = r ? 2 : 1;
     return r;
   };
-  return go(0, 0);
+  const r = go(0, 0);
+  if (seg.seen.size >= SEEN_MAX) seg.seen.clear();
+  seg.seen.set(s, r);
+  return r;
 }
 
 /** 조각 목록 — `**` 조각은 폴더 0개 이상 */
-function segsMatch(ps: (GlobTok[] | '**')[], ss: string[]): boolean {
+function segsMatch(ps: GlobSeg[], ss: string[]): boolean {
   const W = ss.length + 1;
   const memo = new Uint8Array((ps.length + 1) * W);
   const go = (i: number, j: number): boolean => {
@@ -355,15 +383,15 @@ function segsMatch(ps: (GlobTok[] | '**')[], ss: string[]): boolean {
 }
 
 /**
- * 작은 glob — `**`(폴더 0개 이상), `*`·`?`(한 조각 안), `{a,b}`. 경로는 '/' 구분 상대 경로(폴더는 끝에 '/'). ci = 대소문자 무시(Windows).
- * 정규식으로 바꾸지 않는다 — 함께 쓰는 설정(docbench.json·config.json)의 `*a*a*a…` 같은 패턴이 되돌아가기로 화면을 멈추지 않게(D90).
- * 조각 안의 `**` 는 `*` 와 같다
+ * 작은 glob — `**`(폴더 0개 이상, 조각 안에 섞이면 폴더를 넘는 `*`), `*`·`?`(한 조각 안), `{a,b}`. 경로는 '/' 구분 상대 경로(폴더는 끝에 '/').
+ * ci = 대소문자 무시(Windows). 정규식으로 바꾸지 않는다 — 함께 쓰는 설정(docbench.json·config.json)의 `*a*a*a…` 같은 패턴이
+ * 되돌아가기로 화면을 멈추지 않게(D91). 조각마다 맞춰 본 결과를 기억한다(같은 폴더 이름이 파일마다 되풀이)
  */
 export function globMatch(pat: string, rel: string, ci = false): boolean {
   const key = (ci ? 'i:' : 's:') + pat;
   let alts = globCache.get(key);
   if (!alts) {
-    alts = expandSlashBraces(ci ? pat.toLowerCase() : pat).map((a) => a.split('/').map(tokenize));
+    alts = expandPattern(ci ? pat.toLowerCase() : pat).map((a) => a.split('/').map(tokenize));
     if (globCache.size > 2000) globCache.clear();
     globCache.set(key, alts);
   }

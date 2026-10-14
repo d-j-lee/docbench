@@ -164,3 +164,53 @@ test('CLI overview --scope: 작업 공간 안 그 폴더만 · 밖이면 1', asy
   assert.ok(o.recent.every((r) => r.path.startsWith('docs/')));
   assert.equal((await db(dir, ['overview', '--scope', '../x'])).code, 1);
 });
+
+test('독립 검토 고침: 폴더 지도 밖(.github·build)의 글자 그대로 경로 · 큰 저장소의 CI 한도 · 링크로 밖을 가리키는 규칙 파일', async (t) => {
+  const many = {};
+  for (let i = 0; i < 4100; i++) many[`a/f${String(i).padStart(4, '0')}.txt`] = 'x';
+  const dir = await plainFolder(t, {
+    ...many, 'README.md': '# x\n', 'z/Bad Name.md': '# b\n', '.github/workflows/ci.yml': 'on: push\n', 'build/out.txt': 'x',
+    'docbench.json': JSON.stringify({ rules: [
+      { kind: 'require', paths: ['.github/workflows/', 'build/', '.github/CODEOWNERS'] },
+      { kind: 'forbid', paths: ['build/'] }, { kind: 'naming', paths: 'z/**', style: 'no-spaces' },
+    ] }),
+  });
+  const o = JSON.parse((await db(dir, ['check', '--json'])).stdout);
+  const codes = (c) => o.checks.find((x) => x.code === c);
+  assert.equal(o.scope.complete, true, '4000 항목 넘는 저장소도 CI 는 끝까지 훑는다');
+  assert.ok(!codes('no-readme'), '맨 위 README 가 있다');
+  assert.deepEqual(codes('rule-require').paths, ['.github/CODEOWNERS']);
+  assert.deepEqual(codes('rule-forbid').paths, ['build/']);
+  assert.deepEqual(codes('rule-naming').paths, ['z/Bad Name.md']);
+  // 규칙 파일이 링크로 문서 폴더 밖(비밀)을 가리키면 읽지 않는다 — 값이 CI 로그에 실리지 않게
+  const outside = dir + '-outside';
+  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  await fs.mkdir(outside, { recursive: true });
+  await fs.writeFile(path.join(outside, 'creds.json'), '{"token":"ghp_SECRET_0123"}');
+  await fs.rm(path.join(dir, 'docbench.json'));
+  await fs.symlink(path.join(outside, 'creds.json'), path.join(dir, 'docbench.json'));
+  const r = await db(dir, ['check']);
+  assert.ok(!r.stdout.includes('ghp_SECRET'), r.stdout);
+  assert.match(r.stdout, /link outside the docs folder/);
+});
+
+test('check --format github: 남이 만든 글(파일 이름·규칙 hint)의 줄바꿈이 워크플로 명령·요약 표를 만들지 못한다', async (t) => {
+  const dir = await plainFolder(t, {
+    'README.md': '# x\n', 'docs/evil\n::warning title=INJECTED::x.md': '# e\n',
+    'docbench.json': JSON.stringify({ rules: [{ kind: 'naming', paths: 'docs/**', style: 'kebab-case', name: 'n\n| injected | row |', hint: 'h\n::error title=INJECTED::boom' }] }),
+  });
+  const summary = path.join(dir, 'summary.md');
+  const r = await db(dir, ['check', '--format', 'github'], { GITHUB_WORKSPACE: dir, GITHUB_STEP_SUMMARY: summary });
+  assert.ok(!/^::(warning|error) title=INJECTED/m.test(r.stdout), r.stdout);
+  assert.ok(r.stdout.split('\n').filter((l) => l.startsWith('::')).every((l) => /^::(error|warning|notice) (file=[^,]*,)?title=/.test(l)));
+  const md = await fs.readFile(summary, 'utf8');
+  assert.ok(!/^\| injected \| row \|/m.test(md), md);
+});
+
+test('check: 폴더를 주지 않으면 위로 올라가 팀 규칙 파일이 있는 곳을 점검한다', async (t) => {
+  const dir = await plainFolder(t, { 'README.md': '# x\n', 'docs/guide/a.md': '# a\n', 'docbench.json': JSON.stringify({ rules: [{ kind: 'require', paths: ['CHANGELOG.md'] }] }) });
+  const r = await db(path.join(dir, 'docs/guide'), ['check', '--json']);
+  const o = JSON.parse(r.stdout);
+  assert.equal(o.root, dir);
+  assert.equal(o.rules.file, 'docbench.json');
+});

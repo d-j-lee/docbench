@@ -299,7 +299,7 @@ export interface WorkspaceRules {
 /** 규칙 파일의 문제 — at = 어디(rules[2].style), value = 받은 값 */
 export interface RuleProblem {
   at: string;
-  code: 'json' | 'not-object' | 'too-big' | 'unknown-key' | 'unknown-kind' | 'missing' | 'bad-value' | 'pattern' | 'too-many';
+  code: 'json' | 'not-object' | 'too-big' | 'unknown-key' | 'unknown-kind' | 'missing' | 'bad-value' | 'pattern' | 'too-many' | 'too-slow';
   value?: string;
 }
 
@@ -774,6 +774,8 @@ export interface Inventory {
   hiddenFlags?: string[];
   /** 처음에 펼쳐 둘 폴더 경로 */
   open?: string[];
+  /** 깊이 한도로 더 들어가지 않은 폴더가 있다 — 목록이 전부가 아니다(개요는 다 봐야 아는 점검을 하지 않는다) */
+  cut?: boolean;
 }
 
 // ---------------------------------------------------------------- 옵션·이벤트

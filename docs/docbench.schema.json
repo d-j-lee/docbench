@@ -121,7 +121,7 @@
         {
           "if": { "properties": { "kind": { "const": "forbid" } } },
           "then": {
-            "description": "Files or folders matching paths should not be here.",
+            "description": "Files or folders matching paths should not be here. Inside hidden or tool folders (.github, node_modules, dist …) only literal paths are checked.",
             "properties": { "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true },
             "required": ["paths"],
             "additionalProperties": false
@@ -133,7 +133,7 @@
             "description": "Files in paths (default **) must not be larger than max (bytes, or \"500 KB\", \"2 MB\").",
             "properties": {
               "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true,
-              "max": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "string", "pattern": "^\\s*\\d+(\\.\\d+)?\\s*([bB]|[kKmMgG][iI]?[bB]?)?\\s*$" }] }
+              "max": { "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "string", "pattern": "^\\s*\\d+(\\.\\d+)?\\s*([bB]|[kKmMgG]([iI]?[bB])?)?\\s*$" }] }
             },
             "required": ["max"],
             "additionalProperties": false
@@ -142,7 +142,7 @@
         {
           "if": { "properties": { "kind": { "const": "require" } } },
           "then": {
-            "description": "Each path (pattern) must match at least one file or folder.",
+            "description": "Each path (pattern) must match at least one file or folder. Inside hidden or tool folders (.github, node_modules, dist …) only literal paths are checked.",
             "properties": { "kind": true, "paths": true, "except": true, "name": true, "hint": true, "level": true },
             "required": ["paths"],
             "additionalProperties": false

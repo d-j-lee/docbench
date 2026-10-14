@@ -184,7 +184,7 @@ components:
               problems:
                 type: array
                 description: rules-invalid 만 — 규칙 파일의 문제
-                items: { type: object, properties: { at: { type: string }, code: { enum: [json, not-object, too-big, unknown-key, unknown-kind, missing, bad-value, pattern, too-many] }, value: { type: string } } }
+                items: { type: object, properties: { at: { type: string }, code: { enum: [json, not-object, too-big, unknown-key, unknown-kind, missing, bad-value, pattern, too-many, too-slow] }, value: { type: string } } }
       required: [asof, root, scope, totals, groups, folders, recent, large, meta, ai, checks]
     Feedback:
       type: object

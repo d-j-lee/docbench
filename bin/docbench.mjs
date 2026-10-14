@@ -169,6 +169,18 @@ async function findRoot(start) {
     d = up;
   }
 }
+/** 지금 자리에서 위로 이 이름의 파일이 있는 폴더 (git 저장소 맨 위·홈에서 멈춘다) @param {string} start @param {string} name */
+function upFind(start, name) {
+  let d = path.resolve(start);
+  const home = path.resolve(os.homedir());
+  for (;;) {
+    if (existsSync(path.join(d, name))) return d;
+    if (existsSync(path.join(d, '.git')) || d === home) return null;
+    const up = path.dirname(d);
+    if (up === d) return null;
+    d = up;
+  }
+}
 /** @param {string} f */
 const readJsonFile = (f) => fs.readFile(f, 'utf8').then((t) => core.parseJsonText(t), () => null);
 
@@ -258,15 +270,23 @@ async function readInput(a) {
  * (Claude 작업 실행기도 같은 규칙으로 검사한다)
  * @param {string} cur 지금 섹션 글 @param {string} next 새 섹션 글 @param {any} a
  */
+/**
+ * 한 줄로 — 파일 이름·규칙의 name·hint·문제 값은 남이 만든 저장소에서 온다. 줄바꿈이 섞이면 CI 가 그 줄을
+ * 명령(::error …)으로 읽는다(GitHub 워크플로 명령은 줄 머리에서만) — 늘 한 줄로 만들고 제어 문자를 지운다
+ * @param {unknown} v
+ */
+const oneLine = (v) => String(v ?? '').replace(/[\r\n\u2028\u2029]+/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
 /** 점검 한 줄 제목 — 사전(core/checktext, 화면과 한 벌). 팀 규칙은 이름이 있으면 이름으로 @param {any} c @param {string} lang */
 const checkTitle = (c, lang) => {
-  const base = core.checkText(lang, 'overview.check.' + c.code, { n: c.n, want: c.rule?.want ?? '' });
-  return c.rule?.name ? `${c.rule.name} — ${base}` : base;
+  const base = core.checkText(lang, 'overview.check.' + c.code, { n: c.n, want: oneLine(c.rule?.want ?? '') });
+  return oneLine(c.rule?.name ? `${c.rule.name} — ${base}` : base);
 };
 /** 점검의 까닭·고치는 법 — 팀 규칙의 hint 가 먼저 @param {any} c @param {string} lang */
-const checkHint = (c, lang) => c.rule?.hint || core.checkText(lang, 'overview.check.' + c.code + '.hint');
+const checkHint = (c, lang) => oneLine(c.rule?.hint || core.checkText(lang, 'overview.check.' + c.code + '.hint'));
 /** 규칙 파일의 문제 한 줄 @param {any} p @param {string} lang */
-const problemText = (p, lang) => core.checkText(lang, 'overview.rules.problem.' + p.code, { at: p.at, value: p.value ?? '' });
+const problemText = (p, lang) => oneLine(core.checkText(lang, 'overview.rules.problem.' + p.code, { at: p.at, value: p.value ?? '' }));
+/** 경로마다 까닭 — 자기 키만(파일 이름이 constructor 여도) @param {any} c @param {string} p */
+const noteOf = (c, p) => (c.notes && Object.hasOwn(c.notes, p) ? oneLine(c.notes[p]) : '');
 
 /**
  * 점검 목록 → 사람이 읽는 줄 @param {any[]} checks @param {string} lang @param {number} max 점검마다 보일 경로 수
@@ -277,8 +297,9 @@ function checkLines(checks, lang, max) {
   for (const c of checks) {
     L.push(`  [${core.checkText(lang, 'overview.level.' + c.level)}] ${checkTitle(c, lang)}`);
     for (const p of c.problems || []) L.push('      ' + problemText(p, lang));
-    if (!c.problems) for (const p of c.paths.slice(0, max)) L.push('      ' + p + (c.notes?.[p] ? '  — ' + c.notes[p] : ''));
-    if (!c.problems && c.n > Math.min(max, c.paths.length)) L.push('      ' + core.checkText(lang, 'check.more', { n: c.n - Math.min(max, c.paths.length) }));
+    if (!c.problems) for (const p of c.paths.slice(0, max)) L.push('      ' + oneLine(p) + (noteOf(c, p) ? '  — ' + noteOf(c, p) : ''));
+    // 경로가 없는 점검(맨 위 README 없음)은 "외 n개"가 없다
+    if (!c.problems && c.paths.length && c.n > Math.min(max, c.paths.length)) L.push('      ' + core.checkText(lang, 'check.more', { n: c.n - Math.min(max, c.paths.length) }));
     L.push('      · ' + checkHint(c, lang));
   }
   return L;
@@ -320,7 +341,8 @@ const ghEsc = (v, prop) => {
  * @param {any} a @param {string | undefined} sub
  */
 async function checkCmd(a, sub) {
-  const root = path.resolve(sub || a.root || process.env.DOCBENCH_ROOT || '.');
+  // 폴더를 주지 않으면 지금 자리에서 위로: 기록 짝이 있는 문서 폴더(다른 명령과 같다) → 팀 규칙 파일이 있는 곳 → 지금 자리
+  const root = path.resolve(sub || a.root || process.env.DOCBENCH_ROOT || (await findRoot(process.cwd())) || upFind(process.cwd(), core.RULES_FILE) || '.');
   if (!existsSync(root)) die('문서 폴더가 없습니다: ' + root, 2);
   const lang = String(a.lang || process.env.DOCBENCH_LANG || 'ko') === 'en' ? 'en' : 'ko';
   const failOn = a['fail-on'] == null ? 'action' : String(a['fail-on']);
@@ -346,7 +368,7 @@ async function checkCmd(a, sub) {
     const checks = ov.checks.map((c) => ({ ...c, title: checkTitle(c, lang), hint: checkHint(c, lang), ...(c.problems ? { problems: c.problems.map((p) => ({ ...p, text: problemText(p, lang) })) } : {}) }));
     process.stdout.write(JSON.stringify({ root, rules: ov.rules ?? null, scope: ov.scope, failOn, failed: failing.length > 0, summary, notes, checks }, null, 2) + '\n');
   } else {
-    const L = [core.checkText(lang, 'check.head', { root }), ov.rules ? core.checkText(lang, 'check.rules', { file: ov.rules.file, n: ov.rules.count }) : core.checkText(lang, 'check.rules.none')];
+    const L = [core.checkText(lang, 'check.head', { root: oneLine(root) }), ov.rules ? core.checkText(lang, 'check.rules', { file: ov.rules.file, n: ov.rules.count }) : core.checkText(lang, 'check.rules.none')];
     for (const n of notes) L.push('! ' + n);
     L.push('');
     if (!ov.checks.length) L.push(core.checkText(lang, 'check.none'));
@@ -360,13 +382,21 @@ async function checkCmd(a, sub) {
       for (const c of ov.checks) {
         const cmd = fail.has(c) ? 'error' : c.level === 'risk' || c.level === 'action' ? 'warning' : 'notice';
         const title = ghEsc(checkTitle(c, lang), true);
-        const msg = (p) => ghEsc(c.problems ? c.problems.map((x) => problemText(x, lang)).join('\n') : (c.code === 'rule-require' ? p + ' — ' : c.notes?.[p] ? c.notes[p] + ' — ' : '') + checkHint(c, lang));
+        const msg = (p) => ghEsc(c.problems ? c.problems.map((x) => problemText(x, lang)).join('\n') : (c.code === 'rule-require' ? oneLine(p) + ' — ' : noteOf(c, p) ? noteOf(c, p) + ' — ' : '') + checkHint(c, lang));
         const files = c.paths.length && !c.problems ? c.paths.slice(0, 50) : [c.problems ? c.paths[0] : ''];
-        for (const p of files) L.push(`::${cmd} ${p && c.code !== 'rule-require' && !/[*?{]/.test(p) ? `file=${ghEsc((prefix ? prefix + '/' : '') + p.replace(/\/$/, ''), true)},` : ''}title=${title}::${msg(p)}`);
+        // 주석을 붙일 파일 — 저장소 기준 경로. 저장소 밖(--rules 로 준 다른 곳의 규칙 파일)·패턴·없는 경로는 붙이지 않는다
+        const fileOf = (p) => {
+          if (!p || c.code === 'rule-require' || /[*?{]/.test(p)) return '';
+          if (path.isAbsolute(p)) return ws0 && (p + path.sep).startsWith(ws0 + path.sep) ? path.relative(ws0, p).split(path.sep).join('/') : '';
+          return (prefix ? prefix + '/' : '') + p.replace(/\/$/, '');
+        };
+        for (const p of files) { const f = fileOf(p); L.push(`::${cmd} ${f ? `file=${ghEsc(f, true)},` : ''}title=${title}::${msg(p)}`); }
       }
       if (process.env.GITHUB_STEP_SUMMARY) {
-        const md = [`### ${core.checkText(lang, 'check.head', { root: prefix || path.basename(root) })}`, '', verdict, '', ...notes.map((n) => `> ${n}`), notes.length ? '' : null,
-          '| | | |', '|---|---|---:|', ...ov.checks.map((c) => `| ${core.checkText(lang, 'overview.level.' + c.level)} | ${checkTitle(c, lang).replace(/\|/g, '\\|')} | ${c.n} |`), ''].filter((x) => x != null).join('\n');
+        // 표 칸 — 한 줄로, 마크다운·HTML 이 되지 않게(남이 만든 규칙 이름이 링크·그림·표 깨기가 되지 않게)
+        const cell = (v) => oneLine(v).replace(/[\\`*_[\]|<>!]/g, (ch) => '\\' + ch);
+        const md = [`### ${cell(core.checkText(lang, 'check.head', { root: prefix || path.basename(root) }))}`, '', cell(verdict), '', ...notes.map((n) => `> ${cell(n)}`), notes.length ? '' : null,
+          '| | | |', '|---|---|---:|', ...ov.checks.map((c) => `| ${cell(core.checkText(lang, 'overview.level.' + c.level))} | ${cell(checkTitle(c, lang))} | ${c.n} |`), ''].filter((x) => x != null).join('\n');
         await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, md + '\n').catch(() => undefined);
       }
     }
