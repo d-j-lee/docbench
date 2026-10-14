@@ -30,6 +30,8 @@
  */
 import type { ChangeEntry, Manifest, TreeEntry } from '../types';
 import { headingPlain } from './markdown';
+import { formatOf, isMarkdownPath, titledFormat, defaultIncludePatterns } from './formats';
+import { outlineHeads } from './outline';
 
 /** 밖에 둔 기록 폴더의 표식 — 어느 문서 폴더의 기록인지 */
 export const DATA_MARKER = 'docbench-data.json';
@@ -67,8 +69,11 @@ export function parseDataMarker(x: unknown): DataMarker | null {
 
 export const newDataMarker = (docsName: string, docsPath?: string, docs?: string[]): DataMarker => ({ protocol: DATA_PROTOCOL, docsName, ...(docsPath ? { docsPath } : {}), createdAt: new Date().toISOString(), ...(docs?.length ? { docs: docsSample(docs) } : {}) });
 
-/** 표식에 적을 문서 표본 — 정렬해서 앞의 DATA_SAMPLE 개 */
-export const docsSample = (ids: Iterable<string>): string[] => [...ids].sort().slice(0, DATA_SAMPLE);
+/**
+ * 표식에 적을 문서 표본 — 마크다운 문서만, 정렬해서 앞의 DATA_SAMPLE 개.
+ * 마크다운만 세는 것은 여러 형식(0.9, D87) 전에 만든 표식과 같은 표본이 나오게 — 표본이 달라지면 같은 문서 폴더를 남의 것으로 본다(D61)
+ */
+export const docsSample = (ids: Iterable<string>): string[] => [...ids].filter(isMarkdownPath).sort().slice(0, DATA_SAMPLE);
 
 /** 어느 폴더에나 흔한 이름 — 같은 폴더인지 가리는 데 쓰지 않는다 */
 const COMMON_DOC = /(^|\/)(readme|index|changelog|license|todo|notes?)\.(md|markdown)$/i;
@@ -131,6 +136,10 @@ export const LOCK_STALE_MS = 15000;
 export interface WorkspaceConfig {
   title: string;
   subtitle: string;
+  /** 이 작업 공간이 무엇을 위한 곳인가 — 개요의 "목적"(없으면 맨 위 README 의 첫 문단, D88) */
+  purpose?: string;
+  /** 폴더마다 하는 일 — 개요의 "폴더 역할"(없으면 그 폴더 README 의 첫 문단). 키는 맨 위 폴더 이름 */
+  folders?: Record<string, { role?: string; note?: string }>;
   links?: { label: string; url: string }[];
   include: string[];
   exclude: string[];
@@ -158,7 +167,9 @@ export interface WorkspaceConfig {
 export const DEFAULT_CONFIG: WorkspaceConfig = {
   title: '',
   subtitle: '',
-  include: ['**/*.md', '**/*.markdown'],
+  // 등록된 형식에서 코드만 뺀 것(D87). 바닥 규칙(docFloor — 등록된 형식만)은 따로 늘 걸린다.
+  // 팀이 좁히려면 config.json 에 include (예: ["**/*.md"]), 코드까지 넓히려면 ["**/*"]
+  include: defaultIncludePatterns(),
   exclude: ['node_modules/**', '.git/**', '.docbench/**', '**/.*/**', '.claude/**'],
   groups: [],
   docs: {},
@@ -298,12 +309,12 @@ export const isDocPath = (rel: string, c: Pick<WorkspaceConfig, 'include' | 'exc
   docFloor(rel) && matchAny(rel, c.include, ci) && !matchAny(rel, c.exclude, ci);
 
 /**
- * 설정과 상관없이 문서가 될 수 있는 바닥 규칙 — 마크다운 파일이고, 숨김(.git·.docbench·.vscode …)·의존성 폴더 안이 아닐 것.
- * 함께 쓰는 config.json 의 include 는 누구나 고칠 수 있다: `**\/*` 로 넓혀 `.git/hooks/…` 나 스크립트를 "문서"로 만들고
- * 꾸민 피드백으로 Claude 작업이 그 파일을 고치게 하는 길을 막는다(D71).
+ * 설정과 상관없이 문서가 될 수 있는 바닥 규칙 — 작업대가 아는 형식(core/formats 의 허용 목록)이고, 숨김(.git·.docbench·.vscode …)·
+ * 의존성 폴더 안이 아닐 것. 함께 쓰는 config.json 의 include 는 누구나 고칠 수 있다: 넓혀도 `.git/hooks/…`·`.env`·키 파일·실행 파일은
+ * 문서가 되지 못한다(D71). 실행되는 형식(코드·HTML)은 문서여도 Claude 결과는 제안만이다(formats.claude, D87).
  */
 export const docFloor = (rel: string): boolean =>
-  /\.(md|markdown)$/i.test(rel) && !rel.split('/').some((seg) => seg.startsWith('.') || seg === 'node_modules');
+  !!formatOf(rel) && !rel.split('/').some((seg) => seg.startsWith('.') || seg === 'node_modules');
 
 /** 훑을 폴더인가 — 숨김 폴더·빌드 산출물·의존성 폴더는 건너뛴다 */
 export const walkable = (dirName: string): boolean => !IGNORE_DIRS.has(dirName) && !dirName.startsWith('.') && !SYSTEM_DIRS.has(dirName);
@@ -419,23 +430,49 @@ export const requestFileName = (now = Date.now()): string => `req-${now}.json`;
 
 // ---------------------------------------------------------------- 매니페스트
 
-/** 문서 첫 `# 제목` (앞부분 글만 받아도 된다). 없으면 파일 이름 */
+/** 목록에 보일 파일 이름 — 마크다운은 확장자를 떼고, 다른 형식은 확장자까지(형식이 이름의 일부다) */
+export const docStem = (id: string): string => {
+  const file = id.split('/').pop() || id;
+  return isMarkdownPath(file) || !formatOf(file) ? file.replace(/\.(md|markdown|mdx|mdown|mkdn?)$/i, '') : file;
+};
+
+/**
+ * 문서 제목 (앞부분 글만 받아도 된다). 마크다운 첫 `# 제목`, AsciiDoc `= 제목`, Org `#+TITLE:`, HTML `<title>`·첫 `<h1>`.
+ * 제목을 글에서 찾지 않는 형식(코드·데이터·그림 …)과 못 찾으면 파일 이름
+ */
 export function titleFromText(text: string, id: string): string {
-  const base = id.split('/').pop()!.replace(/\.(md|markdown)$/i, '');
-  const m = text.match(/^#\s+(.+)$/m);
-  return m ? headingPlain(m[1]).slice(0, 80) : base;
+  const base = docStem(id);
+  const f = formatOf(id);
+  if (f && !titledFormat(f)) return base;
+  if (!f || f.kind === 'markdown') {
+    const m = text.match(/^#\s+(.+)$/m);
+    return m ? headingPlain(m[1]).slice(0, 80) || base : base;
+  }
+  if (f.id === 'html') {
+    const h = /<title[^>]*>([^<]+)<\/title>/i.exec(text) || /<h1[^>]*>([\s\S]*?)<\/h1>/i.exec(text);
+    return h ? h[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim().slice(0, 80) || base : base;
+  }
+  if (f.id === 'org') { const t = /^#\+TITLE:\s*(.+)$/im.exec(text); if (t) return t[1].trim().slice(0, 80) || base; }
+  // AsciiDoc·rST·Org: 가장 윗 단계의 첫 제목
+  const heads = outlineHeads(text, f);
+  if (!heads.length) return base;
+  const top = Math.min(...heads.map((x) => x.level));
+  return heads.find((x) => x.level === top)!.title.slice(0, 80) || base;
 }
+
+/** README 인가 (README.md · README.txt · README …) */
+export const isReadme = (id: string): boolean => /(^|\/)readme(\.[\w]+)?$/i.test(id);
 
 /** README 먼저, 얕은 것 먼저, 이름순 */
 export function sortDocIds(ids: string[]): string[] {
   return ids.slice().sort((a, b) => {
-    const ra = /(^|\/)readme\.md$/i.test(a) ? 0 : 1, rb = /(^|\/)readme\.md$/i.test(b) ? 0 : 1;
+    const ra = isReadme(a) ? 0 : 1, rb = isReadme(b) ? 0 : 1;
     const da = a.split('/').length, db = b.split('/').length;
     return da - db || ra - rb || a.localeCompare(b, 'ko');
   });
 }
 
-export interface DocFileInfo { title: string; size?: number; mtimeMs?: number }
+export interface DocFileInfo { title: string; size?: number; mtimeMs?: number; meta?: Record<string, string | string[]> }
 
 /** 설정 + 문서 목록 → 화면 매니페스트. 설정 그룹에 안 걸린 문서는 최상위 폴더별로 묶는다 */
 export function buildManifest(c: WorkspaceConfig, docIds: string[], info: (id: string) => DocFileInfo | undefined, subtitle: string, ci = false, extra: { folders?: Manifest['folders']; rootName?: string } = {}): Manifest {
@@ -461,8 +498,11 @@ export function buildManifest(c: WorkspaceConfig, docIds: string[], info: (id: s
   for (const id of ids) {
     const d = info(id);
     const over = c.docs?.[id] || {};
+    const fmt = formatOf(id);
     docs[id] = {
       title: over.title || d?.title || id,
+      ...(fmt && fmt.kind !== 'markdown' ? { format: fmt.id } : {}),
+      ...(d?.meta && Object.keys(d.meta).length ? { meta: d.meta } : {}),
       role: over.role, audience: over.audience, trust: over.trust, depth: over.depth, notice: over.notice as Manifest['docs'][string]['notice'],
       readOnly: c.readOnly || over.readOnly || undefined,
       source: { path: id, size: d?.size, modified: d?.mtimeMs != null ? new Date(d.mtimeMs).toISOString() : undefined },
@@ -479,6 +519,7 @@ export function buildManifest(c: WorkspaceConfig, docIds: string[], info: (id: s
     assistantName: c.assistantName,
     folders: extra.folders,
     rootName: extra.rootName,
+    ...(typeof c.purpose === 'string' && c.purpose.trim() ? { purpose: c.purpose.trim().slice(0, 400) } : {}),
   };
 }
 

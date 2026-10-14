@@ -428,6 +428,73 @@ test('대시보드 전역 CSS 가 작업대 안으로 새지 않는다', async (
   assert.deepEqual(await probe(page), want);
 });
 
+test('여러 형식(D87)·개요(D88): 개요에서 목적·구성·점검 → YAML 키가 섹션(적기·섹션 편집은 그 키만) · Word 는 뽑은 글(읽기만) · 그림 · 문서 안 링크', async (t) => {
+  const { sampleDocx } = await import('../fixtures/office.mjs');
+  await fs.mkdir(path.join(dir, 'config'), { recursive: true });
+  await fs.mkdir(path.join(dir, 'assets'), { recursive: true });
+  const yaml = '# 서비스 설정\nserver:\n  port: 8080\nretry:\n  max: 5\n  backoff: exp\n';
+  await fs.writeFile(path.join(dir, 'config/app.yaml'), yaml);
+  await fs.writeFile(path.join(dir, 'docs/계획.docx'), sampleDocx());
+  await fs.writeFile(path.join(dir, 'assets/p.png'), Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478da63f8cfc0f01f0005000201a5f4e0e50000000049454e44ae426082', 'hex'));
+  await fs.writeFile(path.join(dir, 'docs/링크.md'), '# 링크\n\n![그림](../assets/p.png)\n\n[설정](../config/app.yaml) · [없음](없는.md)\n');
+
+  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => { if (m.type() === 'error' && !/Failed to load resource/.test(m.text())) errors.push(m.text()); });
+  t.after(() => ctx.close());
+
+  // 개요: README 첫 문단이 목적, 구성에 오피스·그림, 깨진 링크 점검 → Claude 에게 맡길 초안
+  await page.goto(url + '#overview');
+  await page.locator('.db-ov .db-ov-purpose').waitFor();
+  const legend = await page.locator('.db-ov-legend').innerText();
+  assert.match(legend, /오피스/); assert.match(legend, /그림/);
+  const broken = page.locator('.db-ov-check[data-code="broken-links"]');
+  await broken.waitFor();
+  assert.match(await broken.innerText(), /docs\/링크\.md/);
+  const drafts0 = (await readFb()).filter((f) => f.status === 'draft').length;
+  await broken.locator('.db-btn').click();
+  await until(async () => (await readFb()).some((f) => f.docId === 'docs/링크.md' && f.status === 'draft' && f.target.kind === 'doc'), 5000);
+  assert.equal((await readFb()).filter((f) => f.status === 'draft').length, drafts0 + 1);
+
+  // YAML: 키마다 섹션(원문 규칙과 같은 키) · Claude 는 제안만이라고 보인다
+  await page.evaluate(() => { location.hash = encodeURIComponent('config/app.yaml'); });
+  await page.waitForSelector('.db-sec[data-key="retry"]');
+  assert.deepEqual(await page.locator('.db-sec').evaluateAll((els) => els.map((e) => e.dataset.key)), ['server', 'retry']);
+  assert.match(await page.locator('.db-fmt.claude').innerText(), /제안만/);
+  const f = await jot(page, 'retry', '재시도를 3회로');
+  assert.deepEqual(f.target.path, ['retry']);
+  // 섹션 편집 → 그 키의 글만 바뀐다(나머지 바이트 그대로)
+  const head = sec(page, 'retry').locator('> .db-sec-head');
+  await head.hover();
+  await head.locator('.db-act').nth(1).click();
+  const area = page.locator('.db-ed-area');
+  assert.equal(await area.inputValue(), 'retry:\n  max: 5\n  backoff: exp\n');
+  await area.fill('retry:\n  max: 3\n  backoff: exp\n');
+  await page.locator('.db-editor .db-btn.primary').click();
+  await until(async () => (await fs.readFile(path.join(dir, 'config/app.yaml'), 'utf8')) === yaml.replace('max: 5', 'max: 3'), 5000);
+
+  // Word: 뽑은 글(마크다운 섹션) · 읽기 전용 · 편집 단추 없음 · 원본 내려받기
+  await page.evaluate(() => { location.hash = encodeURIComponent('docs/계획.docx'); });
+  await page.locator('.db-notice', { hasText: 'Word 파일에서 뽑은 글' }).waitFor();
+  assert.ok(await page.locator('.db-sec[data-key="배포 계획 › 개요"]').count());
+  assert.equal(await page.locator('.db-toolbar .db-btn', { hasText: '문서 편집' }).count(), 0);
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.locator('.db-notice .db-btn', { hasText: '원본 내려받기' }).click()]);
+  // 내려받은 것은 원본 바이트 그대로 (이름은 헤드리스 Chromium 의 로캘에 따라 한글이 'download' 로 바뀔 수 있어 보지 않는다)
+  assert.ok((await fs.readFile(await dl.path())).equals(await fs.readFile(path.join(dir, 'docs/계획.docx'))));
+
+  // 마크다운 안의 상대 경로 그림은 작업 공간 파일로, 상대 링크는 작업대 안에서
+  await page.evaluate(() => { location.hash = encodeURIComponent('docs/링크.md'); });
+  const img = page.locator('.db-md img[alt="그림"]');
+  await until(async () => (await img.evaluate((e) => e.complete && e.naturalWidth)) > 0, 5000);
+  assert.match(await img.getAttribute('src'), /^blob:/);
+  await page.locator('.db-md a', { hasText: '없음' }).click();
+  await page.locator('.db-toast', { hasText: '찾지 못했습니다' }).waitFor();
+  await page.locator('.db-md a', { hasText: '설정' }).click();
+  await until(async () => decodeURIComponent(await page.evaluate(() => location.hash)) === '#config/app.yaml', 5000);
+  await page.waitForSelector('.db-sec[data-key="server"]');
+});
+
 test('브라우저 오류 없음', () => {
   assert.deepEqual(errors, []);
 });

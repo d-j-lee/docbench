@@ -32,7 +32,7 @@ export const $$ = <T extends Element = HTMLElement>(sel: string, root: ParentNod
 
 export const CARET = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M4 2l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
-export type IconName = 'caret' | 'close' | 'edit' | 'chat' | 'spark' | 'folder' | 'folderOpen' | 'doc' | 'history' | 'map' | 'refresh' | 'copy' | 'check' | 'stop' | 'clock' | 'warn' | 'eye' | 'pin' | 'file' | 'user' | 'plug' | 'down' | 'plus' | 'filter' | 'bubble';
+export type IconName = 'caret' | 'close' | 'edit' | 'chat' | 'spark' | 'folder' | 'folderOpen' | 'doc' | 'history' | 'map' | 'refresh' | 'copy' | 'check' | 'stop' | 'clock' | 'warn' | 'eye' | 'pin' | 'file' | 'user' | 'plug' | 'down' | 'plus' | 'filter' | 'bubble' | 'image' | 'table' | 'code' | 'pdf' | 'office' | 'overview' | 'link';
 
 export function icon(name: IconName): string {
   const s = (d: string, vb = '0 0 14 14') => `<svg viewBox="${vb}" aria-hidden="true">${d}</svg>`;
@@ -62,6 +62,13 @@ export function icon(name: IconName): string {
     case 'down': return s(`<path d="M3.4 5.4L7 9l3.6-3.6" ${st}/>`);
     case 'plus': return s(`<path d="M7 2.6v8.8M2.6 7h8.8" ${st}/>`);
     case 'filter': return s(`<path d="M1.8 2.6h10.4L8.2 7.4v3.8l-2.4 1.2v-5z" ${st}/>`);
+    case 'image': return s(`<rect x="1.8" y="2.4" width="10.4" height="9.2" rx="1.2" ${st}/><circle cx="5" cy="5.6" r="1.1" ${st}/><path d="M2.4 10.6l3.2-3 2.2 2 1.6-1.4 2.6 2.4" ${st}/>`);
+    case 'table': return s(`<rect x="1.8" y="2.4" width="10.4" height="9.2" rx="1" ${st}/><path d="M1.8 5.4h10.4M1.8 8.4h10.4M5.4 2.4v9.2" ${st}/>`);
+    case 'code': return s(`<path d="M5 3.8L1.8 7 5 10.2M9 3.8L12.2 7 9 10.2M8 2.6L6 11.4" ${st}/>`);
+    case 'pdf': return s(`<path d="M3.2 1.8h5l2.6 2.6v7.8H3.2zM8.2 1.8v2.6h2.6" ${st}/><path d="M4.8 9.6h4.4M4.8 7.4h4.4" ${st}/><rect x="4.4" y="4.4" width="2.4" height="1.6" rx=".3" fill="currentColor"/>`);
+    case 'office': return s(`<path d="M3.2 1.8h5l2.6 2.6v7.8H3.2zM8.2 1.8v2.6h2.6" ${st}/><path d="M4.8 6.6l.8 3.2 1.4-2.4 1.4 2.4.8-3.2" ${st}/>`);
+    case 'overview': return s(`<rect x="1.8" y="1.8" width="4.4" height="4.4" rx="1" ${st}/><rect x="7.8" y="1.8" width="4.4" height="4.4" rx="1" ${st}/><rect x="1.8" y="7.8" width="4.4" height="4.4" rx="1" ${st}/><path d="M7.8 8.6h4.4M7.8 10.8h3" ${st}/>`);
+    case 'link': return s(`<path d="M6 8a2.6 2.6 0 0 0 3.7.2l1.8-1.8a2.6 2.6 0 0 0-3.7-3.7l-.9.9M8 6a2.6 2.6 0 0 0-3.7-.2L2.5 7.6a2.6 2.6 0 0 0 3.7 3.7l.9-.9" ${st}/>`);
     case 'bubble': return s(`<path d="M3 2.2h8a1.4 1.4 0 0 1 1.4 1.4v4.4A1.4 1.4 0 0 1 11 9.4H7.4L4.6 11.8V9.4H3A1.4 1.4 0 0 1 1.6 8V3.6A1.4 1.4 0 0 1 3 2.2z" ${st}/>`);
   }
 }

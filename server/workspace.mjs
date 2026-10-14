@@ -16,9 +16,10 @@
  *
  * 서버와 CLI 가 같은 클래스를 쓴다. 서버가 꺼져 있어도 CLI 만으로 일관되게 기록된다.
  */
-import { promises as fs, watch as fsWatch, existsSync } from 'node:fs';
+import { promises as fs, watch as fsWatch, existsSync, createReadStream } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import zlib from 'node:zlib';
 import { decode, encode, hashBytes, atomicWrite, readJson, writeJson, canEncodeLegacy, EncodingReadOnlyError } from './textio.mjs';
 import crypto from 'node:crypto';
 import { gitInfo, gitShowHead, gitStatus } from './git.mjs';
@@ -38,6 +39,24 @@ export class BadRequestError extends Error { constructor(msg) { super(msg); this
 
 const safeName = core.safeName;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+/** 오피스·한글 파일의 압축 풀기(deflate-raw) — 뽑은 글(core/derive)에 넘긴다 @param {Uint8Array} b */
+/**
+ * deflate-raw 풀기 — max 를 넘으면 zlib 이 멈춘다(압축 폭탄). 비동기(스레드 풀)라 큰 오피스 파일을 푸는 동안에도 서버가 다른 요청을 받는다
+ * @param {Uint8Array} b @param {number} max @returns {Promise<Uint8Array>}
+ */
+const inflate = (b, max) => new Promise((resolve, reject) => zlib.inflateRaw(b, { maxOutputLength: max }, (e, out) => (e ? reject(e) : resolve(new Uint8Array(out)))));
+/** 파일 바이트의 판(sha256 앞 16자) — 큰 파일은 흘려 읽으며 @param {string} abs @returns {Promise<string>} */
+const hashFile = (abs) => new Promise((resolve, reject) => {
+  const h = crypto.createHash('sha256');
+  createReadStream(abs).on('data', (c) => h.update(c)).on('error', reject).on('end', () => resolve(h.digest('hex').slice(0, 16)));
+});
+/** 파일 앞부분 n 바이트 @param {string} abs @param {number} n */
+async function readHead(abs, n) {
+  const fh = await fs.open(abs, 'r');
+  try { const { buffer, bytesRead } = await fh.read(Buffer.alloc(n), 0, n, 0); return buffer.subarray(0, bytesRead); } finally { await fh.close(); }
+}
+/** 앞부분만 보일 때: 마지막 줄바꿈까지(글자가 끊기지 않게) @param {Buffer} b */
+const cutAtLine = (b) => { const nl = b.lastIndexOf(0x0a); return nl > 0 ? b.subarray(0, nl + 1) : b; };
 
 /** 기록 보관함 기본 자리 — 이 PC 의 설정 폴더 아래 data/ @param {string} pcConfigFile */
 export const defaultDataHome = (pcConfigFile) => path.join(path.dirname(pcConfigFile), 'data');
@@ -278,7 +297,7 @@ export class Workspace {
     this.actor = opts.actor;
     /** @type {import('../dist/core.mjs').WorkspaceConfig} */
     this.config = core.mergeConfig({}, path.basename(this.root));
-    /** @type {Map<string, { abs: string, size: number, mtimeMs: number, title?: string, titleMtime?: number }>} */
+    /** @type {Map<string, { abs: string, size: number, mtimeMs: number, title?: string, meta?: Record<string, string | string[]>, titleMtime?: number }>} */
     this.docs = new Map();
     /** @type {{ prefix: string } | null | undefined} */
     this.git = undefined;
@@ -299,6 +318,8 @@ export class Workspace {
     this.lastVisits = 0;
     /** 나무(tree)에서 찾은 문서 — 한도에 닿은 큰 폴더에서도 목록에 남긴다 @type {Set<string>} */
     this.fromTree = new Set();
+    /** 판 → 뽑은 글 (Word·한글 … 같은 판을 다시 뽑지 않게, 최근 40개) @type {Map<string, string>} */
+    this.derived = new Map();
   }
 
   /** 작은 폴더(다 훑었고 항목이 적다) — 재귀 감시·통째로 다시 훑기를 해도 되는 크기 */
@@ -407,7 +428,8 @@ export class Workspace {
         const st = await fs.stat(abs).catch(() => null);
         if (!st) continue;
         const prev = this.docs.get(rel);
-        found.set(rel, { abs, size: st.size, mtimeMs: st.mtimeMs, title: prev?.titleMtime === st.mtimeMs ? prev.title : undefined, titleMtime: prev?.titleMtime });
+        const same = prev?.titleMtime === st.mtimeMs;
+        found.set(rel, { abs, size: st.size, mtimeMs: st.mtimeMs, title: same ? prev.title : undefined, meta: same ? prev.meta : undefined, titleMtime: prev?.titleMtime });
       }
       if (visits > lim.visits || Date.now() - started > lim.ms) { capped = queue.length > 0; break; }
     }
@@ -517,11 +539,79 @@ export class Workspace {
     return { abs, buf, st, ...decode(buf), version: hashBytes(buf) };
   }
 
+  /**
+   * 문서의 지금 모양 — 판과 보일 글 (형식마다, D87). 판은 늘 파일 바이트의 해시다(바깥 편집을 잡는다).
+   *  글(마크다운·구조 글·글): 바이트 → 글(인코딩 보존 규칙). 한도(TEXT_MAX_BYTES)보다 크면 앞부분만 — 읽기 전용(too-large)
+   *  뽑은 글(Word·한글·Jupyter …): 원본에서 글을 뽑는다(같은 판은 기억한 글) — 읽기 전용(format)
+   *  미리보기(그림·PDF): 글 없음 — 읽기 전용(format)
+   * @param {string} id
+   */
+  /** @param {string} id @param {{ knownVersion?: string }} [o] knownVersion = 맞춰 보기만 할 때 알던 판 — 같으면 뽑은 글을 다시 만들지 않는다 */
+  async snapshot(id, o = {}) {
+    const fmt = core.formatFor(id);
+    if (fmt.kind === 'markdown' || fmt.kind === 'outline' || fmt.kind === 'text') {
+      const abs = await this.realDoc(id);
+      const st = await fs.stat(abs);
+      if (st.size <= core.TEXT_MAX_BYTES) { const r = await this.readRaw(id); return { ...r, fmt, kind: 'text' }; }
+      const head = cutAtLine(await readHead(abs, core.TEXT_PREVIEW_BYTES));
+      const d = decode(head);
+      // 큰 글의 판은 크기·시각(core.bigVersion) — 단일 HTML 과 같은 규칙, 통째로 읽지 않는다
+      return { abs, st, fmt, kind: 'large', text: d.text, encoding: d.encoding, eol: d.eol, bom: d.bom, version: core.bigVersion(st.size, st.mtimeMs), truncated: { bytes: head.length, total: st.size } };
+    }
+    const abs = await this.realDoc(id);
+    const st = await fs.stat(abs);
+    if (fmt.kind === 'binary' || st.size > core.DERIVE_MAX_BYTES) return { abs, st, fmt, kind: fmt.kind, text: '', version: st.size <= core.BYTES_MAX ? await hashFile(abs) : core.bigVersion(st.size, st.mtimeMs), ...(fmt.kind === 'derived' ? { deriveError: 'too-large' } : {}) };
+    const buf = await fs.readFile(abs);
+    const version = hashBytes(buf);
+    if (o.knownVersion === version && !this.derived.has(version)) return { abs, st, fmt, kind: 'derived', text: '', version, unchanged: true };
+    let text = this.derived.get(version);
+    /** @type {string | undefined} */
+    let deriveError;
+    if (text == null) {
+      try { text = (await core.deriveText(buf, fmt, { inflate, locale: /** @type {any} */ (this.config).locale === 'en' ? 'en' : 'ko' })) ?? ''; } catch (e) { text = ''; deriveError = /** @type {any} */ (e)?.reason || 'broken'; }
+      if (!deriveError) { this.derived.set(version, text); if (this.derived.size > 40) this.derived.delete(/** @type {string} */ (this.derived.keys().next().value)); }
+    }
+    return { abs, st, fmt, kind: 'derived', text, version, deriveError };
+  }
+
+  /** 문서 id → 실제 경로 (작업 폴더 밖을 가리키는 링크·정션은 거부) @param {string} id */
+  async realDoc(id) {
+    const abs = this.resolve(id);
+    const real = await fs.realpath(abs).catch((e) => { if (e.code === 'ENOENT') throw new NotFoundError(id); throw e; });
+    this.realRoot ??= await fs.realpath(this.root);
+    if (!isInside(real, this.realRoot)) throw new BadRequestError('작업 폴더 밖 경로');
+    return abs;
+  }
+
+  /** 문서 파일의 바이트 그대로 (그림·PDF 미리보기, 원본 내려받기). 한도(BYTES_MAX)를 넘으면 null @param {string} id */
+  async readBytes(id) {
+    id = this.canonId(id);
+    const abs = await this.realDoc(id);
+    const st = await fs.stat(abs);
+    if (st.size > core.BYTES_MAX) return null;
+    return fs.readFile(abs);
+  }
+
+  /**
+   * 작업 폴더 안 파일의 앞부분 글 — 문서가 아니어도(README.txt 를 설정이 문서에서 뺐어도) 개요가 읽는다. 링크·작업 폴더 밖은 거부
+   * @param {string} rel @param {number} [n]
+   */
+  async readHeadText(rel, n = 8192) {
+    const norm = core.normalizeDocId(rel);
+    if (!norm || norm.split('/').some((seg) => seg.startsWith('.'))) throw new BadRequestError('잘못된 경로');
+    const abs = path.resolve(this.root, norm);
+    const real = await fs.realpath(abs);
+    this.realRoot ??= await fs.realpath(this.root);
+    if (!isInside(real, this.realRoot)) throw new BadRequestError('작업 폴더 밖 경로');
+    return decode(cutAtLine(await readHead(abs, n))).text;
+  }
+
   /** @param {string} id */
   async readDoc(id) {
     id = this.canonId(id);
-    const r = await this.readRaw(id);
-    await this.storeBlob(r.version, r.text);
+    const r = /** @type {any} */ (await this.snapshot(id));
+    // 본 판의 글을 둔다 — 글과 뽑은 글만(그림·PDF·앞부분만 보인 큰 글은 바뀐 섹션을 셀 글이 없다)
+    if (r.kind === 'text' || (r.kind === 'derived' && !r.deriveError)) await this.storeBlob(r.version, r.text);
     // 연 문서부터 따라간다(D64) — 처음 열면 판을 적어 두어 그 뒤 바깥 편집을 이력에 남긴다. 알던 판은 덮지 않는다
     if (!(await this.known()).docs?.[id]) await this.withLock(core.lockKey.state, async () => {
       const s = await this.known();
@@ -531,11 +621,17 @@ export class Workspace {
     });
     const over = this.config.docs?.[id] || {};
     const cfgRO = !!this.config.readOnly || !!over.readOnly;
+    const text = r.kind === 'text';
+    const formatRO = r.kind === 'derived' || r.kind === 'binary';
     return {
-      id, md: r.text, version: r.version, encoding: r.encoding, eol: r.eol, bom: r.bom, mixedEol: r.mixed || undefined,
-      updatedAt: new Date(r.st.mtimeMs).toISOString(), size: r.st.size,
-      readOnly: !r.writable || cfgRO || undefined,
-      readOnlyReason: !r.writable ? r.readOnlyReason : cfgRO ? 'config' : undefined,
+      id, md: r.text, version: r.version, updatedAt: new Date(r.st.mtimeMs).toISOString(), size: r.st.size,
+      format: r.fmt.kind !== 'markdown' ? r.fmt.id : undefined,
+      encoding: formatRO ? undefined : r.encoding, eol: formatRO ? undefined : r.eol, bom: formatRO ? undefined : r.bom, mixedEol: (text && r.mixed) || undefined,
+      readOnly: (text ? !r.writable || cfgRO : true) || undefined,
+      readOnlyReason: text ? (!r.writable ? r.readOnlyReason : cfgRO ? 'config' : undefined) : r.kind === 'large' ? 'too-large' : 'format',
+      truncated: r.kind === 'large' ? r.truncated : undefined,
+      binary: formatRO ? { mime: r.fmt.mime, size: r.st.size } : undefined,
+      deriveError: r.deriveError || undefined,
     };
   }
 
@@ -547,6 +643,10 @@ export class Workspace {
     id = this.canonId(id);
     if (this.config.readOnly || this.config.docs?.[id]?.readOnly) throw Object.assign(new Error('읽기 전용 문서'), { code: 'READ_ONLY', reason: 'config' });
     if (typeof md !== 'string') throw new BadRequestError('md 가 필요합니다');
+    // 뽑은 글(Word·한글 …)·미리보기(그림·PDF)는 원본을 고치지 않는다. 앞부분만 보인 큰 글도(나머지를 지운다)
+    if (!core.editableFormat(core.formatFor(id))) throw Object.assign(new Error('이 형식은 작업대에서 고치지 않습니다 — 원래 프로그램에서 고치세요'), { code: 'READ_ONLY', reason: 'format' });
+    const st0 = await fs.stat(this.resolve(id)).catch(() => null);
+    if (st0 && st0.size > core.TEXT_MAX_BYTES) throw Object.assign(new Error('글이 커서 앞부분만 보이는 문서는 작업대에서 고치지 않습니다'), { code: 'READ_ONLY', reason: 'too-large' });
     return this.withLock(core.lockKey.doc(id), () => this.writeDocLocked(id, md, o));
   }
 
@@ -566,7 +666,7 @@ export class Workspace {
     await this.storeBlob(cur.version, cur.text);
     await this.storeBlob(version, text);
     const updatedAt = new Date().toISOString();
-    const ds = core.diffSections(cur.text, text);
+    const ds = core.diffSections(cur.text, text, id);
     // 문서 쓰기와 그 이력 줄은 한 덩어리 — 이력 잠금을 먼저 잡고 쓴다. 잠금을 못 잡으면 문서도 쓰지 않는다
     // (나중에 잡다 실패하면 문서는 바뀌었는데 이력이 없고 '실패'로 보고됐다 — 독립 검토 재현). 잠금 순서: 문서 → 이력 → 상태
     await this.withLock(core.lockKey.changes, async () => {
@@ -590,6 +690,89 @@ export class Workspace {
     return { version, updatedAt };
   }
 
+  /**
+   * 새 문서를 만든다(D88 — 개요의 README 만들기, 새 문서). 이미 있으면 ConflictError(지금 글), 폴더는 있어야 한다(만들지 않는다).
+   * 글로 고칠 수 있는 형식만. UTF-8·LF 로 쓰고 이력에 남긴다(fromVersion 없음). 잠금 순서는 쓰기와 같다: 문서 → 이력 → 상태
+   * @param {string} id @param {string} md @param {{ summary?: string, by?: any }} [o]
+   */
+  async createDoc(id, md, o = {}) {
+    if (this.config.readOnly) throw Object.assign(new Error('읽기 전용 작업 폴더'), { code: 'READ_ONLY', reason: 'config' });
+    if (typeof md !== 'string') throw new BadRequestError('md 가 필요합니다');
+    const norm = core.normalizeDocId(id);
+    if (!norm) throw new BadRequestError('잘못된 문서 경로');
+    const fmt = core.formatOf(norm);
+    if (!fmt || !core.editableFormat(fmt)) throw new BadRequestError('작업대에서 만들 수 없는 형식입니다: ' + norm);
+    // Claude 는 바로 고칠 수 있는 형식만 새로 만든다 — 새 설정 파일도 도구가 저절로 읽는다(docker-compose.override.yml …, D87)
+    const by = o.by || this.actor;
+    if (by?.kind === 'assistant' && !core.claudeChanges(fmt).includes('edit')) throw Object.assign(new Error(`${fmt.label} 파일은 ${by.name || 'Claude'} 가 만들지 않습니다 — 사람이 만들거나 제안으로`), { code: 'READ_ONLY', reason: 'format' });
+    const abs = this.resolve(norm);
+    const parent = path.dirname(abs);
+    const pst = await fs.stat(parent).catch(() => null);
+    if (!pst?.isDirectory()) throw new BadRequestError('폴더가 없습니다: ' + (path.posix.dirname(norm) === '.' ? '/' : path.posix.dirname(norm)));
+    this.realRoot ??= await fs.realpath(this.root);
+    const realParent = await fs.realpath(parent);
+    if (!isInside(realParent, this.realRoot) && !samePath(realParent, this.realRoot)) throw new BadRequestError('작업 폴더 밖 경로');
+    return this.withLock(core.lockKey.doc(norm), async () => {
+      const text = md.replace(/\r\n?/g, '\n');
+      const buf = Buffer.from(text, 'utf8');
+      try {
+        const fh = await fs.open(abs, 'wx');
+        try { await fh.writeFile(buf); } finally { await fh.close(); }
+      } catch (e) {
+        if (/** @type {any} */ (e).code === 'EEXIST') { const cur = await this.readDoc(norm); throw new ConflictError(cur); }
+        throw e;
+      }
+      const version = hashBytes(buf);
+      await this.storeBlob(version, text);
+      const at = new Date().toISOString();
+      await this.withLock(core.lockKey.changes, async () => {
+        await this.setKnown(norm, version);
+        this.noteOwnWrite(norm, version);
+        await fs.appendFile(this.changesFile, core.changeLine({ at, docId: norm, by: o.by || this.actor || this.me, summary: o.summary || undefined, toVersion: version, sections: core.sectionSources(text, norm).map((x) => x.key) }));
+      });
+      const st = await fs.stat(abs);
+      this.docs.set(norm, { abs, size: st.size, mtimeMs: st.mtimeMs });
+      if (!this.small) this.fromTree.add(norm);
+      return { id: norm, version, updatedAt: at };
+    });
+  }
+
+  /**
+   * 작업 공간 개요(D88) — 폴더 지도의 항목 + 매니페스트(제목·앞머리) + README 앞부분 + 문서 사이 링크(작은 작업 공간만) → core.computeOverview
+   */
+  async overview() {
+    await this.manifest();
+    const inv = await this.inventory();
+    const items = /** @type {any[]} */ (inv.items);
+    const capped = items.length >= this.config.maxInventory;
+    /** @type {Record<string, { id: string, text: string }>} */
+    const readmes = {};
+    for (const [dir, id] of Object.entries(core.pickReadmes(items))) {
+      const text = await this.readHeadText(id).catch(() => null);
+      if (text != null) readmes[dir] = { id, text };
+    }
+    /** @type {{ from: string, to: string[] }[] | undefined} */
+    let links;
+    const md = [...this.docs.keys()].filter((id) => core.isMarkdownPath(id));
+    if (this.index.complete && !capped && md.length <= core.OVERVIEW_LINK_LIMITS.docs) {
+      links = [];
+      let total = 0;
+      for (const id of md) {
+        total += this.docs.get(id)?.size || 0;
+        if (total > core.OVERVIEW_LINK_LIMITS.bytes) { links = undefined; break; }
+        const r = await this.readRaw(id).catch(() => null);
+        if (r) links.push({ from: id, to: core.relativeLinks(r.text, id) });
+      }
+    }
+    /** @type {Record<string, Record<string, string | string[]>>} */
+    const meta = {};
+    for (const [id, d] of this.docs) if (d.meta) meta[id] = d.meta;
+    return core.computeOverview({
+      root: path.basename(this.root) || this.root, items, complete: this.index.complete && !capped, reason: capped ? 'many' : this.index.reason,
+      isDoc: (p) => this.isDoc(p), meta, config: { purpose: this.config.purpose, folders: this.config.folders }, readmes, links, git: !!this.git,
+    });
+  }
+
   /** @param {string} id @param {string} v */
   async docVersion(id, v) {
     id = this.canonId(id);
@@ -603,8 +786,16 @@ export class Workspace {
     id = this.canonId(id);
     this.resolve(id);
     if (!this.git) return null;
+    const fmt = core.formatFor(id);
+    if (fmt.kind === 'binary') return null;
     const buf = await gitShowHead(this.root, this.git.prefix, id);
     if (!buf) return null;
+    if (fmt.kind === 'derived') {
+      if (buf.length > core.DERIVE_MAX_BYTES) return null;
+      const md = await core.deriveText(buf, fmt, { inflate }).catch(() => null);
+      return md == null ? null : { md, label: '커밋(HEAD)' };
+    }
+    if (buf.length > core.TEXT_MAX_BYTES) return null;
     return { md: decode(buf).text, label: '커밋(HEAD)' };
   }
 
@@ -631,16 +822,19 @@ export class Workspace {
    * @param {string} id @returns {Promise<boolean>} 바뀌었으면 true
    */
   async reconcile(id) {
-    let r;
-    try { r = await this.readRaw(id); } catch { return false; }
+    /** @type {any} */
     const prev = (await this.known()).docs[id];
-    await this.storeBlob(r.version, r.text);
+    let r;
+    try { r = await this.snapshot(id, { knownVersion: prev }); } catch { return false; }
+    if (r.unchanged) return false;
+    const hasText = r.kind === 'text' || (r.kind === 'derived' && !r.deriveError);
+    if (hasText) await this.storeBlob(r.version, r.text);
     if (prev === r.version) return false;
     await this.setKnown(id, r.version);
     if (!prev) return false;
     if (await this.hasChangeTo(id, r.version)) return true;
-    const old = await this.docVersion(id, prev);
-    const ds = old ? core.diffSections(old.md, r.text) : null;
+    const old = hasText ? await this.docVersion(id, prev) : null;
+    const ds = old ? core.diffSections(old.md, r.text, id) : null;
     await this.appendChange({ at: new Date(r.st.mtimeMs).toISOString(), docId: id, by: { kind: 'external' }, fromVersion: prev, toVersion: r.version, sections: ds ? [...ds.changed, ...ds.added] : undefined, removed: ds?.removed.length ? ds.removed : undefined });
     return true;
   }
@@ -694,9 +888,11 @@ export class Workspace {
   /** @param {string} id */
   async titleOf(id) {
     const d = this.docs.get(id);
-    if (!d) return path.posix.basename(id);
+    if (!d) return core.docStem(id);
     if (d.title && d.titleMtime === d.mtimeMs) return d.title;
     let title = core.titleFromText('', id);
+    // 제목을 글에서 찾지 않는 형식(코드·데이터·오피스·그림)은 파일 이름 — 열지 않는다
+    if (!core.titledFormat(core.formatFor(id))) { d.title = title; d.titleMtime = d.mtimeMs; return title; }
     try {
       const fh = await fs.open(d.abs, 'r');
       const { buffer, bytesRead } = await fh.read(Buffer.alloc(8192), 0, 8192, 0);
@@ -708,20 +904,26 @@ export class Workspace {
           try { new TextDecoder('utf-8', { fatal: true }).decode(head.subarray(0, head.length - k)); head = head.subarray(0, head.length - k); break; } catch { /* 한 바이트 더 */ }
         }
       }
-      title = core.titleFromText(decode(head).text, id);
+      const text = decode(head).text;
+      title = core.titleFromText(text, id);
+      // 앞머리 YAML 의 값(상태·담당·꼬리표·검토일) — 개요와 문서 머리에 보인다(D88)
+      if (core.isMarkdownPath(id)) { const m = core.frontMatterData(text); d.meta = Object.keys(m).length ? m : undefined; }
     } catch { /* 이름으로 */ }
     d.title = title; d.titleMtime = d.mtimeMs;
     return title;
   }
 
   async manifest() {
-    /** @type {Map<string, { title: string, size?: number, mtimeMs?: number }>} */
+    /** @type {Map<string, { title: string, size?: number, mtimeMs?: number, meta?: Record<string, string | string[]> }>} */
     const info = new Map();
-    // 제목(첫 # 줄)은 앞 8 KB 를 읽어야 한다 — 한 번에 300개만 새로 읽고 나머지는 파일 이름(다음에 채운다)
+    // 제목(첫 # 줄)은 앞 8 KB 를 읽어야 한다 — 한 번에 300개만 새로 읽고 나머지는 파일 이름(다음에 채운다).
+    // 제목을 글에서 찾지 않는 형식(코드·데이터·오피스 …)은 읽지 않으므로 세지 않는다
     let budget = 300;
     for (const [id, d] of this.docs) {
       const cached = d.title && d.titleMtime === d.mtimeMs;
-      info.set(id, { title: cached || budget-- > 0 ? await this.titleOf(id) : core.titleFromText('', id), size: d.size, mtimeMs: d.mtimeMs });
+      const titled = core.titledFormat(core.formatFor(id));
+      const title = cached || !titled || budget-- > 0 ? await this.titleOf(id) : core.titleFromText('', id);
+      info.set(id, { title, size: d.size, mtimeMs: d.mtimeMs, meta: d.meta });
     }
     const m = core.buildManifest(this.config, [...this.docs.keys()], (id) => info.get(id), this.root, CI, { folders: this.folders, rootName: path.basename(this.root) || this.root });
     m.project.storage = this.dataMode === 'inside' ? path.basename(this.root) + '/.docbench' : this.dir;

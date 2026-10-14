@@ -1,0 +1,32 @@
+# 서비스 배포 설정 — 맨 위 주석(머리말)
+
+apiVersion: apps/v1
+kind: Deployment
+# 메타데이터: 이름과 꼬리표
+metadata:
+  name: docbench
+  labels:
+    app: docbench
+    tier: "web: front"
+spec:
+  replicas: 3
+  # 컨테이너 목록
+  template:
+    spec:
+      containers:
+        - name: app
+          image: docbench:0.9
+          args: ["--port", "4317"]
+  description: |
+    여러 줄 글 안의
+    key: 이것은 키가 아니다
+    metadata:
+  strategy: &rolling
+    type: RollingUpdate
+"quoted key": 1
+'single: quoted': 2
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: docbench-svc

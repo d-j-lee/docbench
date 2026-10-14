@@ -1,11 +1,11 @@
 ---
 name: docbench-setup
-description: DocBench(사람과 AI 가 같은 마크다운 문서를 접어 보고·피드백하고·고치는 작업대)를 지금 이 웹 대시보드나 로컬 문서 폴더에 붙이거나 갱신한다. 기본은 이 PC 의 DocBench 앱을 켜고 host.js 로 대시보드 탭에 끼우는 길(백엔드 언어 무관 — 백엔드는 열쇠 파일을 읽어 페이지에 넣기만). 대시보드를 먼저 살펴 방식을 고르고, 받기(판 고정)·연결·Windows 설정·Claude 연동·실제 확인·정리·기록까지 한다. "문서 작업대 붙여", "문서 탭", "docbench 이식/설치/업데이트", "대시보드에 문서 패널", "/docbench-setup" 이라고 할 때 쓴다. Use to integrate or update DocBench in any web dashboard (any backend language — DocBench app + host.js tab by default) or a local docs folder.
+description: DocBench(사람과 AI 가 같은 문서 — 마크다운·설정·표·오피스까지 — 를 접어 보고·피드백하고·고치고, 작업 공간의 목적·구성·점검을 개요로 보여 주는 작업대)를 지금 이 웹 대시보드나 로컬 문서 폴더에 붙이거나 갱신한다. 기본은 이 PC 의 DocBench 앱을 켜고 host.js 로 대시보드 탭에 끼우는 길(백엔드 언어 무관 — 백엔드는 열쇠 파일을 읽어 페이지에 넣기만). 대시보드를 먼저 살펴 방식을 고르고, 받기(판 고정)·연결·Windows 설정·Claude 연동·실제 확인·정리·기록까지 한다. "문서 작업대 붙여", "문서 탭", "docbench 이식/설치/업데이트", "대시보드에 문서 패널", "/docbench-setup" 이라고 할 때 쓴다. Use to integrate or update DocBench in any web dashboard (any backend language — DocBench app + host.js tab by default) or a local docs folder.
 ---
 
 # DocBench 붙이기
 
-DocBench 는 문서 폴더의 `.md` 를 제목 깊이별로 접어 보고, 섹션·문구에 피드백을 달고, 섹션 단위로 고치는 작업대다.
+DocBench 는 문서 폴더의 문서를 제목(설정 파일은 키) 깊이별로 접어 보고, 섹션·문구에 피드백을 달고, 섹션 단위로 고치는 작업대다. 마크다운에 더해 YAML·JSON·TOML·INI·CSV·글·로그·HTML·그림·PDF·Word·PowerPoint·Excel·한글(HWPX)·Jupyter 를 연다(오피스는 뽑은 글로 읽기만, 설정·코드는 Claude 가 제안만 — 받은 판 `docs/ARCHITECTURE.md` "여러 형식"). 처음 열면 작업 공간 **개요**(목적·폴더 역할·구성·메타데이터·살펴볼 것)가 뜬다.
 피드백·이력은 사람이 읽는 파일로 **기록 폴더**에 남는다 — 기본은 문서 폴더 밖(기록 보관함/<문서 폴더 이름>, 문서 폴더에는 문서만), 팀이 git 으로 함께 쓰면 문서 폴더 안 `.docbench/`.
 대시보드에는 기본으로 **DocBench 앱**(`docbench app` — 이 PC 에 하나 도는 작은 서비스)을 켜 두고, 대시보드 탭이 앱의 `/host.js` 로 `DocBenchHost.mount(el, { root, key })` 를 부른다. 백엔드는 언어와 상관없이 이 PC 의 설정 폴더에서 열쇠 파일을 읽어 페이지에 넣기만 한다.
 사람은 읽으며 초안을 모으고 한 번에 보낸다(검토 회차 — 결과는 "볼 것"에서 확인·되돌리기). Claude 는 세 길로 처리한다: 화면 아래 **Claude 작업**(앱·서버가 띄우는 백그라운드 `claude -p`, 모델·노력 선택, 진행 로그 — 읽기만 하고 반영은 DocBench 가 판 비교로), **터미널 한 줄**(설치 없음 — 기록 폴더에서 Claude Code 를 켜면 결과 파일을 남기고 화면·앱이 반영), 또는 켜 둔 Claude Code 가 `docbench` CLI 로.
@@ -32,7 +32,7 @@ DocBench 는 문서 폴더의 `.md` 를 제목 깊이별로 접어 보고, 섹�
 | 미들웨어 순서(인증·본문 파서·압축), 라우터가 받는 HTTP 메서드 | B·C — DocBench 는 GET·POST·PUT·PATCH·DELETE 를 쓴다 |
 | 대시보드 테마(밝게 고정 / 어둡게 고정 / OS 따라감 / 사용자가 바꿈) | `theme`·`setTheme` |
 | 터미널의 Claude: 어디서(현재 폴더) 시작하나, 시작 환경 변수를 고칠 수 있나, 입력을 밀어 넣는 API 가 있나(Enter 포함 여부, 교차 사이트 요청 막힘 여부), docbench 플러그인이 깔렸나 | `onHandoff`(셸이면 `command`, 켜진 Claude 대화면 `prompt`)·`DOCBENCH_ROOT`·보내기(§5) |
-| 문서 폴더: 경로, 문서 수, 인코딩(CP949·UTF-16·BOM·CRLF), **대시보드 저장소 안인가**, git 인가, 프로젝트 폴더들이 한 폴더 아래 있나 | 기록 자리·커밋 정책·작업 공간 범위·확인 대상 |
+| 문서 폴더: 경로, 문서 수, 형식(마크다운만인가 — 오피스·설정·코드가 섞였나), 인코딩(CP949·UTF-16·BOM·CRLF), **대시보드 저장소 안인가**, git 인가, 프로젝트 폴더들이 한 폴더 아래 있나, 맨 위 README(개요의 목적) | 기록 자리·커밋 정책·작업 공간 범위·`include`(코드는 기본으로 빠짐 — 마크다운만 원하면 `["**/*.md"]`)·확인 대상 |
 | 사용자가 여럿인가 | T 는 사람마다 자기 PC 의 앱. B·C 는 모든 쓰기가 한 사람(이 PC 의 설정 `user`, 없으면 OS 사용자)으로 기록되고 Claude 작업이 서버 PC 의 claude(그 계정)로 돈다 — 여럿이면 끈다(§5) |
 | 이미 있는 DocBench: `node <cli> app --status`(켜져 있나·판·작업 공간), 이 PC 의 설정 폴더의 `app.json`·`config.json` | 다시 켜면 돌던 Claude 작업이 끊긴다, 이미 더한 작업 공간과 겹치는지 |
 | 환경: `node -v`(실행 20.11+, 사본에서 시험까지 돌리려면 22.22+), `npm config get registry`, `git ls-remote https://github.com/d-j-lee/docbench HEAD`, `where.exe claude`(macOS·Linux 는 `which claude`) + `claude --version` + `claude --help` 에 `--restricted`·`--safe-mode` 가 있는지 + `claude auth status` | 받기·Claude 작업(그 둘이 없는 판이면 실행하지 않는다 → `claude update`, 로그인 안 됨 → `/login`) |

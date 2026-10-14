@@ -46,6 +46,7 @@ description: DocBench 작업 폴더에서 사람이 보낸 문서 피드백을 �
    - **되묻는다** (정보가 없거나 요청이 모호할 때)
      `docbench fb reply <id> -m "<구체적인 질문>" --ask`
    - 하지 않는 게 맞다고 보면 이유와 함께 `--decline`.
+   - **형식이 정하는 한도**(`fb show` 첫 줄의 형식): 마크다운·글·CSV·AsciiDoc·rST·Org 는 위 셋 다. **YAML·JSON·TOML·INI·코드·HTML·SQL** 은 실행되거나 도구가 읽는 파일이라 **제안만**(`doc write` 는 종료 4 — `fb propose`; 문서 전체 피드백이면 문서 전체 새 글로). **로그·Word·PowerPoint·Excel·한글(HWPX)·Jupyter·PDF·그림**은 고치지 않고 답·되묻기만 — 오피스 글은 `docbench doc show <docId>` 가 DocBench 가 뽑은 글로 주고, PDF·그림은 Read 도구로 파일을 직접 본다.
    - **종류**: `fb show` 에 "종류: 없음"이면 회신에 `--category <종류>` 를 붙인다 — `typo`(오탈자) `fact`(사실·수치) `conflict`(충돌) `duplicate`(중복) `gap`(누락) `structure`(구조) `clarity`(표현) `risk`(위험) `direction`(방향) 중 문제의 종류 하나. 이미 있으면 바꾸지 않는다.
 4. **마무리**: 처리 건수와 되물은 것을 사용자에게 짧게 알리고, `docbench inbox --clear` 로 요청함을 비운다.
 
@@ -65,7 +66,8 @@ description: DocBench 작업 폴더에서 사람이 보낸 문서 피드백을 �
 - 제목 줄은 바꾸라는 요청이 없으면 그대로. 제목이 바뀌면 그 섹션에 달린 다른 피드백이 떨어져 나간다.
 - 근거 표기(`[실측]` `[문서]` `[추정]` `[미확인]` 등)는 지우거나 올리지 않는다. 확인 못 한 사실은 지어내지 말고 `[미확인]` 으로 두거나 되묻는다.
 - 종료 코드 3 = 그 사이 문서가 바뀜 → `fb show` 로 다시 읽고 고친다. 덮어쓰지 않는다.
-- 종료 코드 4 = 읽기 전용(CP949 인데 iconv-lite 없음 등) → 사람에게 UTF-8 변환 저장(`--convert-utf8`) 여부를 묻는다.
+- 종료 코드 4 = 읽기 전용 → 인코딩(CP949 인데 iconv-lite 없음 등)이면 사람에게 UTF-8 변환 저장(`--convert-utf8`) 여부를 묻는다. 형식(설정·코드는 제안만, 뽑은 글·로그·그림은 답만, 5 MB 넘는 글)이면 `fb propose` 또는 `fb reply` 로. Edit 도구로 우회하지 않는다.
+- 구조 글의 섹션은 키다 — YAML `server › tls`, TOML `[database]`, JSON 맨 위 키. 새 섹션 글은 그 키 줄부터(들여쓰기 그대로, YAML 은 탭 없이), JSON 은 저장 뒤에도 읽혀야 한다(쉼표·괄호).
 - 섹션 키는 `docbench doc sections <docId>` 로 확인한다. 같은 이름 제목이 여럿이면 키 끝에 ` #2` 가 붙는다.
 - 기록 폴더의 `feedback/*.json` 을 손으로 고치지 않는다(판 번호). 회신·제안은 `fb reply`·`fb propose` 로.
 - 볼 것에 "못 함"(`result.kind: failed`)으로 올라온 것은 사람이 다시 보낼 때까지 손대지 않는다(`fb list --waiting assistant` 에 나오지 않는다).

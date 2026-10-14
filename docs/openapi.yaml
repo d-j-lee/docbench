@@ -91,6 +91,7 @@ components:
         assistantName: { type: string }
         folders: { type: object, additionalProperties: { type: object, properties: { files: { type: integer } } }, description: "작업 폴더의 폴더 나무 — 상대 경로('' = 맨 위) → 바로 아래 문서가 아닌 파일 수. 있으면 화면이 탐색기처럼 그린다(선택)" }
         rootName: { type: string, description: 작업 폴더 이름 (선택) }
+        purpose: { type: string, description: '이 작업 공간이 무엇을 위한 곳인가 — 설정 purpose (D88, 선택). 없으면 개요가 맨 위 README 의 첫 문단을 쓴다' }
         index:
           type: object
           description: '문서 목록(docs)을 얼마나 찾았나 (D64, 선택). 열 때 한도(들른 항목 2만·2.5초, 문서 수 maxDocs) 안에서만 찾는다 — 나머지는 GET /tree 로 펼칠 때 목록에 더해진다'
@@ -122,6 +123,8 @@ components:
         notice: { type: object, properties: { text: { type: string }, tone: { type: string } } }
         source: { type: object }
         readOnly: { type: boolean }
+        format: { type: string, description: '형식 이름(core/formats — yaml·json·csv·docx·image …, D87). 마크다운이면 없다(예전 매니페스트와 같게)' }
+        meta: { type: object, additionalProperties: { oneOf: [{ type: string }, { type: array, items: { type: string } }] }, description: '앞머리 YAML 의 단순 키(소문자, 20개·값 200자까지) — status·owner·tags·review … (D88)' }
       required: [title]
     DocContent:
       type: object
@@ -135,8 +138,39 @@ components:
         eol: { enum: [lf, crlf] }
         bom: { type: boolean }
         readOnly: { type: boolean }
-        readOnlyReason: { enum: [encoding, invalid-utf8, config], description: 'encoding = 바이트 그대로 다시 쓸 수 없는 인코딩, invalid-utf8 = 깨진 바이트가 섞인 UTF-8' }
+        readOnlyReason: { enum: [encoding, invalid-utf8, config, folder, format, too-large], description: 'encoding = 바이트 그대로 다시 쓸 수 없는 인코딩, invalid-utf8 = 깨진 바이트가 섞인 UTF-8, format = 뽑은 글·미리보기(원본 형식은 고치지 않는다), too-large = 글이 커서 앞부분만 (D87)' }
+        format: { type: string, description: '형식 이름 (D87). 마크다운이면 없다' }
+        truncated: { type: object, properties: { bytes: { type: integer }, total: { type: integer } }, description: '글이 5 MB 를 넘어 앞부분(bytes, 줄 경계)만 실었다 — 판은 파일 전체(total)의 해시' }
+        binary: { type: object, properties: { mime: { type: string }, size: { type: integer } }, description: '그림·PDF·오피스 원본 — 바이트는 GET /raw. 뽑은 글(Word 등)이면 md 가 뽑은 마크다운' }
+        deriveError: { enum: [not-zip, broken, unsupported, too-large], description: '글을 뽑지 못한 까닭 (md 는 빈 글)' }
       required: [id, md, version]
+    WorkspaceOverview:
+      type: object
+      description: src/types.ts WorkspaceOverview (D88). 점검 문구는 화면 사전(overview.check.<code>)이 정한다
+      properties:
+        asof: { type: string, format: date-time }
+        root: { type: string }
+        purpose: { type: object, properties: { text: { type: string }, from: { enum: [config, readme] }, docId: { type: string } } }
+        scope: { type: object, properties: { complete: { type: boolean }, items: { type: integer }, reason: { enum: [big-root, many] } } }
+        totals: { type: object, properties: { files: { type: integer }, dirs: { type: integer }, bytes: { type: integer }, docs: { type: integer }, recent7: { type: integer }, newest: { type: string } } }
+        groups: { type: array, items: { type: object, properties: { group: { enum: [doc, data, code, office, image, pdf, media, archive, other] }, files: { type: integer }, bytes: { type: integer } } } }
+        folders: { type: array, items: { type: object, properties: { path: { type: string, description: "맨 위 폴더 ('' = 맨 위의 파일들)" }, files: { type: integer }, docs: { type: integer }, bytes: { type: integer }, modified: { type: string }, role: { type: string }, roleFrom: { enum: [config, readme] }, readme: { type: string } } } }
+        recent: { type: array, items: { type: object, properties: { path: { type: string }, modified: { type: string }, size: { type: integer }, doc: { type: boolean } } } }
+        large: { type: array, items: { type: object, properties: { path: { type: string }, size: { type: integer }, doc: { type: boolean } } } }
+        meta: { type: object, properties: { docs: { type: integer }, status: { type: object, additionalProperties: { type: integer } }, owners: { type: object, additionalProperties: { type: integer } }, tags: { type: object, additionalProperties: { type: integer } }, due: { type: array, items: { type: object, properties: { docId: { type: string }, field: { type: string }, date: { type: string } } } } } }
+        ai: { type: array, items: { type: object, properties: { path: { type: string }, kind: { enum: [claude, agents, gemini, cursor, copilot, mcp, skill, prompt] } } } }
+        git: { type: object, properties: { modified: { type: integer }, untracked: { type: integer }, added: { type: integer } } }
+        links: { type: object, properties: { docs: { type: integer }, links: { type: integer } } }
+        checks:
+          type: array
+          items:
+            type: object
+            properties:
+              code: { enum: [secrets, huge-files, no-readme, review-due, broken-links, version-copies, temp-files, empty-folders, folder-no-readme, same-name, long-paths, stale-docs, orphan-docs, git-uncommitted] }
+              level: { enum: [risk, action, tidy, info] }
+              n: { type: integer }
+              paths: { type: array, items: { type: string }, description: 앞의 40개까지 }
+      required: [asof, root, scope, totals, groups, folders, recent, large, meta, ai, checks]
     Feedback:
       type: object
       description: src/types.ts Feedback. 예전 모양도 받아 normalizeFeedback 으로 맞춘다.
@@ -338,7 +372,7 @@ paths:
                   notify: { type: [object, 'null'], properties: { label: { type: string } } }
                   identity: { enum: [pc, host], description: '사람이 어디서 왔나. pc = 이 PC 의 로그인 — 화면의 "나"에서 표시 이름을 바꾼다(PUT /me). host 또는 없음 = 대시보드 로그인처럼 호스트가 정한 사람 — 이름 바꾸기를 숨긴다. docbench serve·앱은 pc, 대시보드에 끼운 처리기는 기본 host(createDocBenchHandler 의 identity 옵션)' }
                   workspace: { type: object, description: '서버 방식(docbench serve·처리기)만', properties: { root: { type: string, description: 문서 폴더 }, git: { type: boolean }, data: { type: object, properties: { mode: { enum: [inside, outside], description: 'inside = 문서 폴더 안 .docbench, outside = 문서 폴더 밖 기록 폴더(D57)' }, dir: { type: string, description: 기록 폴더 } } } } }
-                  features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean }, runs: { type: boolean, description: 'Claude 작업(/runs) — 없거나 false 면 화면이 작업 창을 숨긴다. docbench serve 는 기본 켬(--no-claude 로 끔), 대시보드에 끼우는 처리기는 기본 끔(runs: true 로 켬), 앱은 작업 공간의 엔진이 켜졌으면 켬' }, tree: { type: boolean, description: '펼친 폴더만 읽기(GET /tree) — 없거나 false 면 화면이 manifest.docs 로만 목록을 그린다(예전 방식)' }, terminal: { type: boolean, description: '터미널 한 줄(POST /runs/terminal, D76)' }, instructions: { type: boolean, description: '늘 지킬 지시(GET·PUT /instructions)' } } }
+                  features: { type: object, properties: { base: { type: boolean }, versions: { type: boolean }, inventory: { type: boolean }, changes: { type: boolean }, runs: { type: boolean, description: 'Claude 작업(/runs) — 없거나 false 면 화면이 작업 창을 숨긴다. docbench serve 는 기본 켬(--no-claude 로 끔), 대시보드에 끼우는 처리기는 기본 끔(runs: true 로 켬), 앱은 작업 공간의 엔진이 켜졌으면 켬' }, tree: { type: boolean, description: '펼친 폴더만 읽기(GET /tree) — 없거나 false 면 화면이 manifest.docs 로만 목록을 그린다(예전 방식)' }, terminal: { type: boolean, description: '터미널 한 줄(POST /runs/terminal, D76)' }, instructions: { type: boolean, description: '늘 지킬 지시(GET·PUT /instructions)' }, raw: { type: boolean, description: '파일 바이트(GET /raw — 그림·원본 내려받기, D87·D89)' }, overview: { type: boolean, description: '작업 공간 개요(GET /overview, D88)' }, create: { type: boolean, description: '새 문서(POST /doc) — 읽기 전용 작업 공간이면 false' } } }
   /me:
     put:
       tags: [workspace]
@@ -398,7 +432,45 @@ paths:
       responses:
         '200': { description: 저장됨, content: { application/json: { schema: { type: object, properties: { version: { type: string }, updatedAt: { type: string }, unchanged: { type: boolean } } } } } }
         '409': { description: 'CONFLICT 그 사이 바뀜 — current 에 지금 본문 / BUSY 다른 프로세스가 같은 문서를 쓰는 중', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
-        '422': { description: '읽기 전용 (reason encoding | unrepresentable | invalid-utf8 | config). convertTo utf-8 로 다시 보내면 UTF-8 로 저장', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: '읽기 전용 (reason encoding | unrepresentable | invalid-utf8 | config | folder | format | too-large). encoding·unrepresentable·invalid-utf8 이면 convertTo utf-8 로 다시 보내 UTF-8 로 저장. format = 뽑은 글·그림·PDF 원본(고치지 않는다), too-large = 앞부분만 보이는 큰 글', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    post:
+      tags: [workspace]
+      summary: 새 문서 (D88 — 개요의 README 만들기, CLI doc new)
+      description: |
+        글로 고칠 수 있는 형식(마크다운·구조 글·글)만, 대상 경로(include·exclude·바닥 규칙)만, UTF-8 LF 로 만든다. 폴더는 있어야 한다(만들지 않는다).
+        이미 있으면 덮지 않고 409 + 지금 글. Claude(작성자 assistant)는 바로 고칠 수 있는 형식만 만든다 — 설정·코드는 422.
+        이력에 남기고(fromVersion 없음) manifest·doc·changes 이벤트를 낸다.
+      parameters: [{ $ref: '#/components/parameters/DocId' }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, properties: { md: { type: string }, summary: { type: string, maxLength: 200 } }, required: [md] } } }
+      responses:
+        '201': { description: 만듦, content: { application/json: { schema: { type: object, properties: { id: { type: string }, version: { type: string }, updatedAt: { type: string } }, required: [id, version] } } } }
+        '400': { description: '폴더가 없음·작업 폴더 밖·대상 아님·만들 수 없는 형식 (BAD_REQUEST)' }
+        '409': { description: 'CONFLICT — 이미 있음, current 에 지금 글', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+        '422': { description: '읽기 전용 작업 공간(config) · 이 작성자가 만들 수 없는 형식(format)', content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  /raw:
+    get:
+      tags: [workspace]
+      summary: 문서 파일의 바이트 그대로 (그림·PDF 미리보기, 원본 내려받기 — session.features.raw, D87·D89)
+      description: |
+        문서(바닥 규칙·include 를 지난 파일)만, 40 MB 까지. 내려받기로만 내준다 — 화면이 형식에 맞춰 Blob 을 만든다.
+        같은 출처에서 HTML·SVG 가 페이지로 열리지 않게 `Content-Type: application/octet-stream`, `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: sandbox`.
+      parameters: [{ $ref: '#/components/parameters/DocId' }]
+      responses:
+        '200': { description: 바이트, content: { application/octet-stream: { schema: { type: string, format: binary } } } }
+        '400': { description: 작업 폴더 밖·대상 아님 }
+        '404': { description: 없음 }
+        '413': { description: '40 MB 넘음 (TOO_LARGE)' }
+  /overview:
+    get:
+      tags: [workspace]
+      summary: 작업 공간 개요 (session.features.overview, D88)
+      description: |
+        폴더 지도 항목 + 매니페스트(앞머리) + README 앞부분 + 문서 사이 상대 링크(문서 400개·8 MB 까지)로 계산한다(core.computeOverview).
+        내용은 열지 않는다 — 비밀로 보이는 파일도 이름으로만. 큰 폴더면 scope.complete 가 false 이고 다 봐야 아는 점검(빈 폴더·깨진 링크)은 하지 않는다.
+      responses:
+        '200': { description: 'src/types.ts WorkspaceOverview', content: { application/json: { schema: { $ref: '#/components/schemas/WorkspaceOverview' } } } }
   /doc/version:
     get:
       tags: [workspace]

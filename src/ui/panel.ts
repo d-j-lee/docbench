@@ -575,8 +575,8 @@ export class Panel {
     try {
       const [a, b] = await Promise.all([app.ad.docs.loadVersion(ch.docId, ch.from), app.ad.docs.loadVersion(ch.docId, ch.to)]);
       if (!a || !b) throw new Error('version');
-      const before = ch.section ? getSectionText(a.md, ch.section) ?? a.md : a.md;
-      const after = ch.section ? getSectionText(b.md, ch.section) ?? b.md : b.md;
+      const before = ch.section ? getSectionText(a.md, ch.section, ch.docId) ?? a.md : a.md;
+      const after = ch.section ? getSectionText(b.md, ch.section, ch.docId) ?? b.md : b.md;
       slot.replaceChildren(renderDiff(lineDiff(before, after), this.t));
     } catch { slot.replaceChildren(h('span', { class: 'db-hint', text: this.t('result.diff.none') })); }
   }
@@ -662,7 +662,7 @@ export class Panel {
     try {
       const [from, to, cur] = await Promise.all([app.ad.docs.loadVersion(ch.docId, ch.from), app.ad.docs.loadVersion(ch.docId, ch.to), app.ad.docs.load(ch.docId)]);
       if (!from || !to) { app.toast(t('result.revert.none')); return false; }
-      const plan = planRevert(cur.md, from.md, to.md, ch.section);
+      const plan = planRevert(cur.md, from.md, to.md, ch.section, ch.docId);
       if ('problem' in plan) {
         app.toast(t('result.revert.changed'), { sticky: true, action: t('result.diff'), onAction: () => { this.diffOpen.add(f.id); void this.jump(f); this.render(); } });
         return false;

@@ -58,6 +58,41 @@ export function frontMatterLength(md: string): number {
   return 0;
 }
 
+/**
+ * 앞머리 YAML 의 값 — 문서 메타데이터(상태·담당·꼬리표·검토일 …)로 보인다(D88). 간단한 모양만 읽는다:
+ * `키: 값`, `키: [가, 나]`, `키:` 아래 `- 항목` 목록. 키는 소문자로, 값은 따옴표를 떼고 200자까지, 키 20개까지.
+ * 중첩 매핑·여러 줄 글은 건너뛴다(YAML 파서 없이 — 서버 의존성 0). 앞머리가 없으면 빈 객체.
+ */
+export function frontMatterData(md: string): Record<string, string | string[]> {
+  const lf = toLF(md);
+  const fm = frontMatterLength(lf);
+  const out: Record<string, string | string[]> = {};
+  if (!fm) return out;
+  const body = lf.slice(0, fm).replace(/^﻿?---[ \t]*\n/, '').replace(/\n?(---|\.\.\.)[ \t]*\n?$/, '');
+  const clean = (v: string) => {
+    let s = v.replace(/\s+#.*$/, '').trim();
+    if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) s = s.slice(1, -1);
+    return s.slice(0, 200);
+  };
+  let list: string | null = null;
+  for (const line of body.split('\n')) {
+    if (Object.keys(out).length >= 20 && !list) break;
+    const item = /^[ \t]+-[ \t]+(.+)$/.exec(line) || /^-[ \t]+(.+)$/.exec(line);
+    if (item && list) { const arr = out[list] as string[]; if (arr.length < 30) arr.push(clean(item[1])); continue; }
+    const m = /^([A-Za-z0-9_][\w.-]*)[ \t]*:(?:[ \t]+(.*))?$/.exec(line);
+    list = null;
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    const v = (m[2] || '').trim();
+    if (!v) { out[key] = []; list = key; continue; }
+    if (/^[|>]/.test(v)) continue;
+    const flow = /^\[(.*)\]$/.exec(v);
+    out[key] = flow ? flow[1].split(',').map(clean).filter(Boolean).slice(0, 30) : clean(v);
+  }
+  for (const [k, v] of Object.entries(out)) if (Array.isArray(v) && !v.length) delete out[k];
+  return out;
+}
+
 const escHTML = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
 
 /** 공백을 한 칸으로 접고 앞뒤를 자른다. 앵커·키 비교의 기준 */

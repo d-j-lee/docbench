@@ -13,6 +13,7 @@
  * Claude 는 결과를 runs/<id>.result.json 한 파일로만 쓰고, 반영은 그 계정의 DocBench(화면·앱)가 같은 규칙(apply.ts)으로 한다.
  * 이 파일의 글은 서버·CLI(Workspace)와 단일 HTML(FolderWorkspace)이 같이 쓴다 — 한 벌의 규칙.
  */
+import { documentPatterns } from './formats';
 import type { RunStartInput } from '../types';
 import { REVIEW_SCHEMA, RUN_SCHEMA, runFiles, safeFolderName } from './runs';
 
@@ -104,9 +105,15 @@ export function roomClaudeMd(r: RoomInfo): string {
  * 허용(allow)은 Claude Code 의 작업 공간 신뢰 창에서 사람이 한 번 확인한 뒤에야 쓰인다.
  */
 export function roomSettings(r: RoomInfo): string {
-  // 문서 폴더는 문서(.md·.markdown)만 막는다 — 기록이 문서 폴더 안(.docbench)이면 폴더째 막는 규칙이 결과 파일까지 막는다
-  // (거부가 허용보다 먼저이고 허용으로 예외를 낼 수 없다). 경로 규칙의 절대 경로는 '//' + 유닉스 꼴(Windows 는 //c/…)
+  // 문서 폴더는 문서 형식(core/formats — .md·.yaml·.docx …, D87)만 막는다 — 기록이 문서 폴더 안(.docbench)이면 폴더째 막는 규칙이
+  // 결과 파일까지 막는다(거부가 허용보다 먼저이고 허용으로 예외를 낼 수 없다). 같은 까닭으로 그때는 .json 을 막지 않는다
+  // (결과 파일 runs/<id>.result.json 이 문서 폴더 안에 생긴다). 경로 규칙의 절대 경로는 '//' + 유닉스 꼴(Windows 는 //c/…)
   const docs = r.docsPath ? '/' + ruleAbs(r.docsPath) : '';
+  const pat = documentPatterns();
+  const docRules = !docs ? [] : [
+    ...pat.exts.filter((e) => !(r.inside && (e === 'json' || e === 'jsonc'))).map((e) => `Edit(${docs}/**/*.${e})`),
+    ...pat.names.map((n) => `Edit(${docs}/**/${n})`),
+  ];
   const excludes = parentClaudeMd(r);
   const s = {
     _docbench: ROOM_SETTINGS_VERSION,
@@ -116,7 +123,7 @@ export function roomSettings(r: RoomInfo): string {
       // 기록과 요청(지시·맥락)은 Claude 가 고치지 못한다 — 맥락을 고쳐 허용 처리를 넓히거나 다른 요청을 꾸미지 않게
       deny: ['Edit(/feedback/**)', 'Edit(/changes.jsonl)', 'Edit(/blobs/**)', 'Edit(/state.json)', 'Edit(/runners/**)', 'Edit(/CLAUDE.md)', 'Edit(/.claude/**)', 'Edit(/instructions.md)',
         'Edit(/runs/*.req.json)', 'Edit(/runs/*.ctx.json)', 'Edit(/runs/*.prompt.md)', 'Edit(/runs/*.log.jsonl)', 'Edit(/config.json)', 'Edit(/docbench-data.json)',
-        ...(docs ? [`Edit(${docs}/**/*.md)`, `Edit(${docs}/**/*.markdown)`] : [])],
+        ...docRules],
       ...(r.docsPath ? { additionalDirectories: [r.docsPath] } : {}),
     },
   };

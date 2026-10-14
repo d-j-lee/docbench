@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import { mergeRecords, rebaseViewState } from '../../src/core/records';
 import { looksBigRoot, toTreeEntries, mergeConfig, pcSettingsFor, isDocPath } from '../../src/core/workspace';
+import { claudeChanges, formatFor } from '../../src/core/formats';
 import { pickRunner, runnerIsMine } from '../../src/core/runs';
 import { fsFromMemory } from '../../src/adapters/folder-fs';
 import type { RunnerInfo } from '../../src/types';
@@ -126,16 +127,22 @@ describe('실행기 고르기 (D63·D67)', () => {
   });
 });
 
-describe('문서가 될 수 있는 것 (D71)', () => {
-  it('함께 쓰는 설정이 include 를 넓혀도 마크다운·숨김 아닌 곳만', () => {
+describe('문서가 될 수 있는 것 (D71 → D87)', () => {
+  it('함께 쓰는 설정이 include 를 넓혀도 등록된 형식·숨김 아닌 곳만 — 실행·설정 파일은 문서여도 Claude 는 제안만', () => {
     const wide = { include: ['**/*'], exclude: [] };
     expect(isDocPath('docs/a.md', wide)).toBe(true);
     expect(isDocPath('.git/hooks/post-checkout', wide)).toBe(false);
     expect(isDocPath('.git/notes.md', wide)).toBe(false);
-    expect(isDocPath('package.json', wide)).toBe(false);
-    expect(isDocPath('scripts/run.ps1', wide)).toBe(false);
     expect(isDocPath('node_modules/x/README.md', wide)).toBe(false);
     expect(isDocPath('.vscode/a.md', wide)).toBe(false);
+    expect(isDocPath('.env', wide)).toBe(false);
+    expect(isDocPath('keys/deploy.pem', wide)).toBe(false);
+    expect(isDocPath('bin/tool.exe', wide)).toBe(false);
     expect(isDocPath('dist/guide.MARKDOWN', wide)).toBe(true);
+    // 0.9 부터 문서지만(보고·검토용) 무인 실행이 바로 고치지 못한다 — 제안만(사람이 차이를 보고 적용)
+    expect(isDocPath('package.json', wide)).toBe(true);
+    expect(isDocPath('scripts/run.ps1', wide)).toBe(true);
+    expect(claudeChanges(formatFor('package.json'))).toEqual(['propose']);
+    expect(claudeChanges(formatFor('scripts/run.ps1'))).toEqual(['propose']);
   });
 });

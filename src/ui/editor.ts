@@ -6,6 +6,9 @@ import { diffSections, getSectionText, replaceSection, KEY_SEP } from '../core/s
 import { lineDiff, type DiffResult } from '../core/diff';
 import { toLF, norm } from '../core/markdown';
 import { renderMarkdown, decorate, type Section } from './render';
+import { renderDoc } from './viewers';
+import { formatFor, markdownLike } from '../core/formats';
+import { jsonReadable } from '../core/outline';
 import { h } from './dom';
 import type { T } from './i18n';
 import type { DocView } from './docview';
@@ -62,7 +65,7 @@ export class Editor {
     this.init = init;
     const t = view.t;
     const md = view.content.md;
-    this.base = sec ? (getSectionText(md, sec.key) ?? '') : md;
+    this.base = sec ? (getSectionText(md, sec.key, view.id) ?? '') : md;
     this.baseVersion = view.content.version;
     this.draftKey = `docbench:draft:${view.app.manifest.project.name}:${view.id}:${this.key ?? '*'}`;
     this.area = h('textarea', { class: 'db-ed-area', spellcheck: 'false', 'aria-label': t('edit.title') }) as HTMLTextAreaElement;
@@ -123,7 +126,7 @@ export class Editor {
   externalChanged(fresh: DocContent): void {
     const t = this.view.t;
     this.pendingFresh = fresh;
-    const theirs = this.key != null ? getSectionText(fresh.md, this.key) : fresh.md;
+    const theirs = this.key != null ? getSectionText(fresh.md, this.key, this.view.id) : fresh.md;
     if (this.key != null && theirs != null && norm(theirs) === norm(this.base)) { this.note(t('edit.ext.other'), 'warn'); return; }
     const box = h('div', {},
       renderDiff(lineDiff(theirs ?? '', toLF(this.area.value)), t, t('edit.ext.diffLabel')),
@@ -151,7 +154,9 @@ export class Editor {
     this.area.hidden = m !== 'edit';
     this.pane.hidden = m === 'edit';
     if (m === 'preview') {
-      const art = renderMarkdown(this.area.value);
+      // 형식 그대로 미리보기 — 마크다운은 마크다운, 구조 글·표·HTML 은 그 형식의 화면
+      const v = this.view;
+      const art = markdownLike(formatFor(v.id)) ? renderMarkdown(this.area.value) : renderDoc({ ...v.content, md: toLF(this.area.value) }, { t: v.t });
       art.className = 'db-md';
       decorate(art, this.view.app.rules);
       this.pane.replaceChildren(art);
@@ -177,7 +182,7 @@ export class Editor {
   private compose(md: string): string | null {
     const text = toLF(this.area.value);
     if (this.key == null) return text;
-    return replaceSection(md, this.key, text);
+    return replaceSection(md, this.key, text, this.view.id);
   }
 
   async save(convertTo?: 'utf-8', against?: DocContent): Promise<void> {
@@ -187,6 +192,8 @@ export class Editor {
     const baseDoc = against || this.view.content;
     const next = this.compose(baseDoc.md);
     if (next == null) { this.note(t('edit.conflict.overlap'), 'bad'); return; }
+    // JSON 은 저장한 뒤에도 읽을 수 있어야 한다(도구가 읽는 파일) — 깨지면 한 번 묻는다
+    if (formatFor(this.view.id).id === 'json' && jsonReadable(baseDoc.md) && !jsonReadable(next) && !(await app.dialogs.confirm(t('edit.json.broken'), t('edit.json.saveAnyway')))) return;
     this.saveBtn.disabled = true;
     this.saveBtn.textContent = t('edit.saving');
     try {
@@ -200,7 +207,7 @@ export class Editor {
       this.saved = true;
       this.close();
       // 내 것 = 이 저장이 바꾼 섹션(바탕 판 → 저장한 글). 더 새 판에 끼워 저장했으면 그 사이 남의 변경은 표시된다
-      const d = diffSections(baseDoc.md, next);
+      const d = diffSections(baseDoc.md, next, this.view.id);
       this.view.rerender(fresh, this.index ?? undefined, against ? { mine: new Set([...d.changed, ...d.added, ...d.removed]) } : true);
       this.view.markSeen(res.version);
       app.saveState();
@@ -227,7 +234,7 @@ export class Editor {
     const t = this.view.t;
     const who = current.updatedBy?.name ? ` (${current.updatedBy.name})` : '';
     if (this.key != null) {
-      const theirs = getSectionText(current.md, this.key);
+      const theirs = getSectionText(current.md, this.key, this.view.id);
       if (theirs != null && theirs.replace(/\n+$/, '') === this.base.replace(/\n+$/, '')) {
         // 내 섹션은 그대로 — 최신본에 다시 적용
         this.note(t('edit.conflict', { who }), 'warn');
@@ -235,7 +242,7 @@ export class Editor {
         return;
       }
     }
-    const theirs = this.key != null ? getSectionText(current.md, this.key) ?? '' : current.md;
+    const theirs = this.key != null ? getSectionText(current.md, this.key, this.view.id) ?? '' : current.md;
     const box = h('div', {},
       renderDiff(lineDiff(theirs, toLF(this.area.value)), t),
       h('div', { class: 'db-row' },
@@ -262,10 +269,10 @@ export async function applyProposal(app: App, f: Feedback): Promise<void> {
   };
   // 문서 전체 제안(path 가 비었음 — Claude 가 문서를 통째로 고친 글)이면 문서 전체를 견준다
   const whole = !p.path.length;
-  const cur = whole ? view.content.md : getSectionText(view.content.md, key);
+  const cur = whole ? view.content.md : getSectionText(view.content.md, key, f.docId);
   const sec = whole ? null : view.findSec(key);
   if (cur != null && cur.replace(/\n+$/, '') === p.before.replace(/\n+$/, '')) {
-    const next = whole ? p.after : replaceSection(view.content.md, key, p.after)!;
+    const next = whole ? p.after : replaceSection(view.content.md, key, p.after, f.docId)!;
     try {
       const res = await app.ad.docs.save!(f.docId, next, { baseVersion: view.content.version, summary: f.title || f.body.slice(0, 60), feedbackIds: [f.id] });
       view.rerender({ ...view.content, md: next, version: res.version, updatedAt: res.updatedAt, updatedBy: app.me }, sec?.index, true);

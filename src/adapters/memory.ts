@@ -2,10 +2,13 @@
  * 메모리 어댑터 — 데모·테스트·오프라인 미리보기용. persist 를 주면 브라우저 저장소에 남긴다.
  * 실제 운영 저장소를 붙이기 전에 화면을 시험할 때 쓴다.
  */
-import { DocConflictError, type Assistant, type ChangeEntry, type DocBenchAdapters, type DocContent, type DocEvent, type Feedback, type Inventory, type Manifest, type Person, type ViewState } from '../types';
+import { DocConflictError, type Assistant, type ChangeEntry, type DocBenchAdapters, type DocContent, type DocEvent, type Feedback, type Inventory, type InventoryItem, type Manifest, type Person, type ViewState } from '../types';
 import { normalizeFeedback, newFeedbackId } from '../core/feedback';
-import { diffSections, } from '../core/source';
-import { toLF } from '../core/markdown';
+import { diffSections, sectionSources } from '../core/source';
+import { toLF, frontMatterData } from '../core/markdown';
+import { formatOf, isMarkdownPath, editableFormat } from '../core/formats';
+import { computeOverview, isReadmeName, relativeLinks } from '../core/overview';
+import { titleFromText } from '../core/workspace';
 
 export interface MemoryInit {
   manifest: Manifest;
@@ -51,7 +54,7 @@ export function createMemoryAdapters(init: MemoryInit): DocBenchAdapters & { con
   const write = (id: string, md: string, by: Person, summary?: string, feedbackIds?: string[]) => {
     const prev = docs[id];
     const v = prev.version + 1;
-    const ds = diffSections(prev.md, md);
+    const ds = diffSections(prev.md, md, id);
     docs[id] = { md, version: v, updatedAt: new Date().toISOString(), updatedBy: by };
     (hist[id] ||= {})[v] = md;
     changes.push({ at: docs[id].updatedAt!, docId: id, by, summary, fromVersion: String(prev.version), toVersion: String(v), feedbackIds, sections: [...ds.changed, ...ds.added] });
@@ -81,6 +84,42 @@ export function createMemoryAdapters(init: MemoryInit): DocBenchAdapters & { con
       changes: async () => changes.slice(),
       inventory: init.inventory ? async () => init.inventory! : undefined,
       subscribe: (cb) => { docSubs.add(cb); return () => docSubs.delete(cb); },
+      // 개요(D88) — 메모리의 문서만으로: 폴더·크기·앞머리·README·링크
+      overview: async () => {
+        const items: InventoryItem[] = [];
+        const dirs = new Set<string>();
+        const enc = new TextEncoder();
+        for (const [id, d] of Object.entries(docs)) {
+          const parts = id.split('/');
+          for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join('/'));
+          items.push({ id, parent: parts.length > 1 ? parts.slice(0, -1).join('/') + '/' : '', name: parts[parts.length - 1], folder: false, kind: (id.split('.').pop() || '').toLowerCase(), size: enc.encode(d.md).length, modified: d.updatedAt || new Date().toISOString(), docId: id });
+        }
+        for (const p of dirs) items.push({ id: p + '/', parent: p.includes('/') ? p.slice(0, p.lastIndexOf('/') + 1) : '', name: p.split('/').pop()!, folder: true });
+        const readmes: Record<string, { id: string; text: string }> = {};
+        for (const [id, d] of Object.entries(docs)) { const dir = id.includes('/') ? id.slice(0, id.lastIndexOf('/')) : ''; if (isReadmeName(id.split('/').pop()!) && !dir.includes('/')) readmes[dir] = { id, text: d.md }; }
+        const meta: Record<string, Record<string, string | string[]>> = {};
+        for (const [id, d] of Object.entries(docs)) if (isMarkdownPath(id) || !formatOf(id)) { const m = frontMatterData(d.md); if (Object.keys(m).length) meta[id] = m; }
+        const links = Object.entries(docs).filter(([id]) => isMarkdownPath(id) || !formatOf(id)).map(([id, d]) => ({ from: id, to: relativeLinks(d.md, id) }));
+        return computeOverview({ root: init.manifest.rootName || init.manifest.project.name, items, complete: true, isDoc: (p) => p in docs, meta, readmes, links, config: { purpose: init.manifest.purpose } });
+      },
+      // 새 문서 — 메모리에만(시작하기에서 README 만들기를 해 볼 수 있게)
+      create: async (id, md, o) => {
+        if (docs[id]) throw new DocConflictError(content(id));
+        const f = formatOf(id);
+        if (f && !editableFormat(f)) throw new Error('이 형식은 만들 수 없습니다: ' + id);
+        const text = toLF(md);
+        docs[id] = { md: text, version: 1, updatedAt: new Date().toISOString(), updatedBy: me };
+        (hist[id] ||= {})[1] = text;
+        changes.push({ at: docs[id].updatedAt!, docId: id, by: me, summary: o?.summary, toVersion: '1', sections: sectionSources(text, id).map((s) => s.key) });
+        init.manifest.docs[id] = { title: titleFromText(text, id), source: { path: id } };
+        // 목록에도 — 맨 위 폴더의 묶음(buildManifest 의 dir: 묶음)에
+        const top = id.includes('/') ? id.split('/')[0] : '';
+        const g = init.manifest.groups.find((x) => x.id === 'dir:' + (top || '.'));
+        if (g) g.docs.push(id); else init.manifest.groups.push({ id: 'dir:' + (top || '.'), label: top || '문서', docs: [id] });
+        save('docs', docs); save('hist', hist); save('changes', changes);
+        emitDoc({ type: 'manifest' }); emitDoc({ type: 'changes' });
+        return { version: '1', updatedAt: docs[id].updatedAt };
+      },
     },
     feedback: {
       subscribe(cb) { fbSubs.add(cb); queueMicrotask(() => cb(rows.map((r) => ({ ...r })))); return () => fbSubs.delete(cb); },

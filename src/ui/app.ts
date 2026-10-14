@@ -11,6 +11,10 @@ import { Panel } from './panel';
 import { Dialogs } from './dialogs';
 import { renderMap, revealItems } from './mapview';
 import { renderChanges } from './changes';
+import { renderOverview, invalidateOverview } from './overview';
+import { groupIcon } from './viewers';
+import { formatOf, formatFor } from '../core/formats';
+import { docStem, isReadme } from '../core/workspace';
 import { RunDock } from './runs';
 import { Hover } from './hover';
 import { Explorer } from './explorer';
@@ -132,7 +136,8 @@ export class App {
   private async startView(cands: (string | undefined)[]): Promise<string> {
     for (const v of cands) {
       if (!v) continue;
-      if (v === 'map' || v === 'changes' || v === 'home') return v;
+      if (v === 'map' || v === 'changes') return v;
+      if (v === 'home' || v === 'overview') return this.hasOverview() ? 'overview' : 'home';
       // 범위(대시보드 탭의 프로젝트)를 벗어난 문서는 열지 않는다 — 지난 문서가 다른 탭의 것일 수 있다
       if (!this.inScope(v)) continue;
       if (v in this.manifest.docs) return v;
@@ -140,7 +145,41 @@ export class App {
       const dir = v.includes('/') ? v.slice(0, v.lastIndexOf('/')) : '';
       try { if ((await this.ad.docs.tree!(dir))?.some((e) => e.path === v && e.doc)) return v; } catch { /* 다음 후보 */ }
     }
-    return this.firstDoc();
+    // 처음 여는 작업 공간: 개요가 있으면 개요부터(D88) — 무엇을 위한 곳이고 무엇이 들었는지
+    return this.hasOverview() ? 'overview' : this.firstDoc();
+  }
+
+  /** 작업 공간 개요를 보일 수 있나 (저장소가 주고, 호스트가 끄지 않았고, 범위가 작업 공간 전부일 때) */
+  hasOverview(): boolean { return !!this.ad.docs.overview && this.opts.features?.overview !== false && !this.scope; }
+
+  /** 목록을 다시 받는다 (새 문서를 만든 뒤 등) */
+  async reloadManifest(): Promise<void> {
+    try {
+      const m = await this.ad.docs.manifest();
+      if (this.view && this.manifest.docs[this.view] && !m.docs[this.view]) m.docs[this.view] = this.manifest.docs[this.view];
+      this.manifest = m; this.rules = compileRules(m.render); this.explorer?.invalidate(); this.renderRail();
+    } catch { /* 다음 이벤트 때 */ }
+  }
+
+  /**
+   * 문서 안 링크·개요에서 파일 열기 — 목록에 있거나 나무에서 문서로 보이면 열고(hash = 그 섹션의 GitHub 식 이름),
+   * 아니면(문서가 아닌 파일·없는 파일) 그 폴더를 펼쳐 보이고 알린다
+   */
+  async openPath(path: string, hash = ''): Promise<void> {
+    let ok = path in this.manifest.docs;
+    /** 있기는 한 파일인가 (나무로 확인 — 문서가 아닌 파일과 없는 파일의 안내가 다르다) */
+    let exists = ok;
+    if (!ok && this.explorer && this.inScope(path)) {
+      const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+      try { const e = (await this.ad.docs.tree!(dir))?.find((x) => x.path === path); exists = !!e; ok = !!e?.doc; } catch { ok = false; }
+    }
+    if (!ok) {
+      this.toast(this.t(exists ? 'link.notDoc' : 'link.missing', { path }));
+      if (this.explorer) void this.revealFolder(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '');
+      return;
+    }
+    if (this.view !== path) await this.navigate(path);
+    if (hash && this.doc?.id === path) this.doc.revealSlug(hash);
   }
 
   // ------------------------------------------------------------ 범위·고정·최근
@@ -179,11 +218,10 @@ export class App {
   /** 목록에 없던 문서(큰 폴더에서 나무로 찾은 것)도 열 수 있게 자리를 만든다 */
   private ensureDocMeta(id: string): void {
     if (this.manifest.docs[id]) return;
-    const file = id.split('/').pop() || id;
-    this.manifest.docs[id] = { title: file.replace(/\.(md|markdown)$/i, ''), source: { path: id } };
+    this.manifest.docs[id] = { title: docStem(id), source: { path: id } };
   }
   /** 문서처럼 보이는 id (나무가 있는 어댑터에서 목록 밖 문서를 열 때) */
-  private looksDoc(id: string): boolean { return !!this.explorer && /\.(md|markdown)$/i.test(id) && !/(^|\/)\.\.(\/|$)/.test(id); }
+  private looksDoc(id: string): boolean { return !!this.explorer && !!formatOf(id) && !/(^|\/)\.\.(\/|$)/.test(id); }
 
   /** 사람 이름 — 내 것이면 "나"(또는 내 별명), 남이면 별명, 없으면 "사용자 xxxx" */
   personLabel(p: Person | undefined): string {
@@ -270,6 +308,7 @@ export class App {
   private onDocEvent(ev: DocEvent): void {
     if (this.destroyed) return;
     if (ev.type === 'manifest') {
+      invalidateOverview(this);
       void this.ad.docs.manifest().then((m) => {
         // 나무로 찾아 연 문서(목록 밖)는 자리를 남긴다
         if (this.view && this.manifest.docs[this.view] && !m.docs[this.view]) m.docs[this.view] = this.manifest.docs[this.view];
@@ -320,7 +359,9 @@ export class App {
   private async countTodos(): Promise<void> {
     const all = Object.keys(this.manifest.docs).filter((d) => this.inScope(d));
     const tracked = new Set([...Object.keys(this.state.docs || {}), ...this.fb.map((f) => f.docId).filter(Boolean), ...(this.state.pins || []), ...(this.state.recent || [])]);
-    const ids = (all.length <= 60 ? all : all.filter((d) => tracked.has(d))).slice(0, 300);
+    // 글 형식만 — 뽑은 글(오피스)·그림·PDF 는 열 때 무겁고 빈칸 표기를 쓰지 않는다
+    const cheap = (d: string) => { const k = formatFor(d).kind; return k === 'markdown' || k === 'outline' || k === 'text'; };
+    const ids = (all.length <= 60 ? all : all.filter((d) => tracked.has(d))).filter(cheap).slice(0, 300);
     let next = 0;
     const worker = async () => {
       while (next < ids.length && !this.destroyed) {
@@ -343,7 +384,7 @@ export class App {
     this.todoQueue.clear();
     void Promise.all(ids.map((id) => this.ad.docs.load(id).then((d) => { this.todo[id] = countPlaceholders(d.md, this.rules); }).catch(() => undefined))).then(() => this.renderRail());
   }, 600);
-  private todoDirty(id: string): void { this.todoQueue.add(id); this.todoFlush(); }
+  private todoDirty(id: string): void { const k = formatFor(id).kind; if (k === 'derived' || k === 'binary') return; this.todoQueue.add(id); this.todoFlush(); }
 
   // ------------------------------------------------------------ 이동
   async navigate(view: string, opts: { section?: string; compareFrom?: string; feedbackId?: string } = {}): Promise<void> {
@@ -354,8 +395,10 @@ export class App {
       if (!ok) return;
     }
     if (!(view in this.manifest.docs) && this.looksDoc(view)) this.ensureDocMeta(view);
-    if (!(view in this.manifest.docs) && view !== 'map' && view !== 'changes' && view !== 'home') view = this.firstDoc();
-    const same = view === this.view && (this.doc || view === 'home');
+    if ((view === 'home' || view === 'overview') && this.hasOverview()) view = 'overview';
+    else if (view === 'overview') view = this.firstDoc();
+    if (!(view in this.manifest.docs) && view !== 'map' && view !== 'changes' && view !== 'home' && view !== 'overview') view = this.firstDoc();
+    const same = view === this.view && (this.doc || view === 'home' || view === 'overview');
     this.root.classList.remove('rail-open');
     this.els.selbtn.hidden = true;
     if (!same) {
@@ -370,6 +413,7 @@ export class App {
       if (view === 'map') renderMap(this);
       else if (view === 'changes') await renderChanges(this);
       else if (view === 'home') this.renderHome();
+      else if (view === 'overview') await renderOverview(this);
       else {
         this.explorer?.reveal(view);
         this.doc = new DocView(this, view);
@@ -731,10 +775,11 @@ export class App {
     const docRow = (id: string, depth: number, o: { pin?: boolean } = {}) => {
       const meta = this.manifest.docs[id];
       const file = id.split('/').pop() || id;
-      const stem = file.replace(/\.(md|markdown)$/i, '');
+      const stem = docStem(id);
       const title = meta?.title || stem;
-      const b = h('button', { class: 'db-nav', type: 'button', style: `--d:${depth}`, title: id, role: 'treeitem', 'aria-current': this.view === id ? 'page' : null, onclick: () => void this.navigate(id) },
-        h('span', { class: 'ic', html: icon('doc') }),
+      const fmt = formatOf(id);
+      const b = h('button', { class: 'db-nav', type: 'button', style: `--d:${depth}`, title: id, role: 'treeitem', 'aria-current': this.view === id ? 'page' : null, 'data-group': fmt?.group || 'doc', onclick: () => void this.navigate(id) },
+        h('span', { class: 'ic', html: icon(fmt ? groupIcon(fmt.group) : 'doc') }),
         h('span', { class: 't' }, h('span', { text: title }), title !== stem ? h('small', { text: file }) : null),
         dots(id));
       const row = o.pin === false ? b : h('div', { class: 'db-tree-row', style: `--d:${depth}` }, b, this.explorer ? this.explorer.pinButton(id, this.isPinned(id)) : null);
@@ -767,6 +812,8 @@ export class App {
     const tool = (key: string, ic: Parameters<typeof icon>[0], label: string, onclick: () => void, pressed: boolean, extra?: HTMLElement | null) =>
       h('button', { class: 'db-tool', type: 'button', 'aria-pressed': String(pressed), 'data-tool': key, onclick }, h('span', { class: 'ic', html: icon(ic) }), h('span', { class: 't', text: label }), extra || null);
     const tools = h('div', { class: 'db-tools', role: 'group', 'aria-label': t('rail.tools') }, h('div', { class: 'db-rail-h', text: t('rail.tools') }));
+    // 개요가 맨 위 — 작업 공간 전체를 보는 곳(D88)
+    if (this.hasOverview()) tools.append(tool('overview', 'overview', t('overview.title'), () => void this.navigate('overview'), this.view === 'overview'));
     if (this.dock) {
       const a = this.dock.activeRun();
       const av = this.dock.availability;
@@ -927,7 +974,7 @@ export class App {
         if (!closed) walk(c, depth + 1);
       }
       for (const id of n.docs.sort((a, b) => {
-        const ra = /(^|\/)readme\.md$/i.test(a) ? 0 : 1, rb = /(^|\/)readme\.md$/i.test(b) ? 0 : 1;
+        const ra = isReadme(a) ? 0 : 1, rb = isReadme(b) ? 0 : 1;
         return ra - rb || this.manifest.docs[a].title.localeCompare(this.manifest.docs[b].title, 'ko');
       })) box.append(...docRow(id, depth));
     };

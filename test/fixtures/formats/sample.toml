@@ -1,0 +1,22 @@
+# 머리말 주석
+title = "DocBench"
+ports = [
+  8000,
+  [1, 2]
+]
+
+# 서버 설정
+[server]
+host = "127.0.0.1"
+desc = """
+[not.a.table]
+"""
+
+[[plugins]]
+name = "a"
+
+[[plugins]]
+name = "b"
+
+[database.main]
+url = "x"

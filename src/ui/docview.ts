@@ -7,8 +7,12 @@ import { locate, makeSelector } from '../core/selectors';
 import { norm } from '../core/markdown';
 import { turnOf, countTurns, lensMatch, lensFilters } from '../core/feedback';
 import { lineDiff } from '../core/diff';
-import { titleFromText } from '../core/workspace';
-import { renderMarkdown, decorate, sectionize, textIndex, selectedSpan, wrapRange, type Section } from './render';
+import { titleFromText, docStem } from '../core/workspace';
+import { formatFor, markdownLike, editableFormat, claudeChanges } from '../core/formats';
+import { frontMatterData } from '../core/markdown';
+import { docMetaOf, resolveRelative } from '../core/overview';
+import { decorate, sectionize, textIndex, selectedSpan, wrapRange, type Section } from './render';
+import { renderDoc, releaseDoc, hasSourceToggle, downloadButton } from './viewers';
 import { h, $$, icon, fmtBytes, fmtTime, debounce, relTime } from './dom';
 import { Editor, renderDiff } from './editor';
 import { markSectionChanges, clearChangeMarks } from './track';
@@ -27,6 +31,10 @@ function selRect(sel: Selection, main: HTMLElement): DOMRect {
   const r = f.getClientRects()[0] || (sel.focusNode.nodeType === 1 ? (sel.focusNode as Element) : sel.focusNode.parentElement)?.getBoundingClientRect();
   return r && (r.width || r.height) ? r : whole;
 }
+
+/** GitHub 식 제목 이름 — 소문자, 글자·숫자·_·- 만, 빈칸은 - */
+export const slugOf = (s: string): string => s.trim().toLowerCase().replace(/[^\p{L}\p{N}\s_-]/gu, '').replace(/\s/g, '-');
+const decodeURIComponentSafe = (s: string): string => { try { return decodeURIComponent(s); } catch { return s; } };
 
 export class DocView {
   readonly app: App;
@@ -66,6 +74,7 @@ export class DocView {
   destroy(): void {
     this.destroyed = true;
     this.editor?.close(true);
+    releaseDoc(this.article);
     clearInterval(this.freshT);
     for (const c of this.cleanup.splice(0)) c();
   }
@@ -84,8 +93,7 @@ export class DocView {
     if (this.destroyed) return false;
     // 목록에 이름만 있던 문서(탐색기에서 처음 연 것)는 읽은 김에 제목을 채운다 — 설정에 적은 제목은 그대로
     const meta = this.app.manifest.docs[this.id];
-    const stem = (this.id.split('/').pop() || this.id).replace(/\.(md|markdown)$/i, '');
-    if (meta && meta.title === stem) meta.title = titleFromText(this.content.md, this.id);
+    if (meta && meta.title === docStem(this.id)) meta.title = titleFromText(this.content.md, this.id);
     this.renderAll();
     const st = this.app.docState(this.id);
     const since = compareFrom || (st.lastSeen && st.lastSeen !== this.content.version ? st.lastSeen : null);
@@ -97,6 +105,7 @@ export class DocView {
     this.showGuide();
     this.bindScroll();
     this.bindSelection();
+    this.bindLinks();
     return true;
   }
 
@@ -140,7 +149,12 @@ export class DocView {
     if (src?.eol === 'crlf') meta.append(h('span', { text: 'CRLF' }));
     if (src?.label) meta.append(h('span', { class: 'ok', text: src.label }));
     if (src?.url) meta.append(h('a', { href: src.url, target: '_blank', rel: 'noopener noreferrer', text: this.t('doc.open') }));
-    if (c.readOnly) meta.append(h('span', { class: 'db-trust tone-warn', text: this.t('doc.readonly') }));
+    if (c.readOnly) meta.append(h('span', { class: 'db-trust tone-warn', title: c.readOnlyReason === 'format' ? this.t('doc.readonly.format.hint') : '', text: this.t('doc.readonly') }));
+    // 형식과 Claude 가 이 형식에 할 수 있는 일(D87) — 바로 고치기 · 제안만 · 읽기만
+    const f = this.fmt;
+    if (f.kind !== 'markdown') meta.append(h('span', { class: 'db-fmt', text: f.label }));
+    const cc = claudeChanges(f);
+    if (cc.length < 2 && this.app.ad.runs) meta.append(h('span', { class: 'db-fmt claude', title: this.t(cc.length ? 'doc.claude.propose.hint' : 'doc.claude.read.hint', { ai: this.app.ai }), text: this.t(cc.length ? 'doc.claude.propose' : 'doc.claude.read', { ai: this.app.ai }) }));
     // 디스크와 맞춰 본 때 + 다시 읽기 — 도구 밖(에디터·터미널의 Claude)에서 고쳐도 화면이 최신인지 보이게
     this.els.fresh = h('span', { class: 'db-fresh' });
     meta.append(this.els.fresh, h('button', { class: 'db-btn ghost sm db-refresh', type: 'button', title: this.t('doc.refresh.hint'), onclick: () => void this.refresh(), html: icon('refresh') + ' ' + this.t('doc.refresh') }));
@@ -148,7 +162,23 @@ export class DocView {
     clearInterval(this.freshT);
     this.freshT = setInterval(() => this.paintFresh(), 4000);
     if (meta.childNodes.length) head.append(meta);
+    // 앞머리 메타데이터 — 상태·담당·꼬리표·기한 (개요와 같은 규칙)
+    if (markdownLike(this.fmt) && c.md.startsWith('---')) {
+      const dm = docMetaOf(frontMatterData(c.md));
+      const chips = h('div', { class: 'db-fm' });
+      if (dm.status) chips.append(h('span', { class: 'db-fm-c status', title: 'status', text: dm.status }));
+      for (const o of dm.owners) chips.append(h('span', { class: 'db-fm-c owner', html: icon('user') }, o));
+      for (const tg of dm.tags) chips.append(h('span', { class: 'db-fm-c tag', text: '#' + tg }));
+      for (const d of dm.dates) chips.append(h('span', { class: 'db-fm-c date' + (d.past ? ' past' : ''), title: d.past ? this.t('doc.meta.past') : '', html: icon('clock') }, `${d.field} ${d.date}`));
+      if (chips.childNodes.length) head.append(chips);
+    }
     if (m.notice) head.append(h('p', { class: 'db-notice tone-' + (m.notice.tone || 'warn'), text: m.notice.text }));
+    // 뽑은 글·잘린 글·못 뽑은 글 — 무엇을 보고 있는지 + 원본 내려받기
+    const dl = () => (this.app.ad.docs.loadBytes ? downloadButton(this.id, { t: this.t, loadBytes: (id) => this.app.ad.docs.loadBytes!(id) }, head, this.t('view.download.original')) : null);
+    if (f.kind === 'derived' && c.deriveError) head.append(h('div', { class: 'db-notice tone-warn db-row' }, h('span', { text: this.t('doc.derive.fail.' + (['too-large', 'not-zip', 'unsupported'].includes(c.deriveError) ? c.deriveError : 'broken'), { fmt: f.label }) }), dl()));
+    else if (f.kind === 'derived') head.append(h('div', { class: 'db-notice tone-info db-row' }, h('span', { text: this.t('doc.derived', { fmt: f.label }) }), dl()));
+    else if (c.truncated) head.append(h('div', { class: 'db-notice tone-warn db-row' }, h('span', { text: this.t('doc.truncated', { shown: fmtBytes(c.truncated.bytes), total: fmtBytes(c.truncated.total) }) }), dl()));
+    else if (f.kind === 'binary' && f.view === 'image') meta.append(dl() || '');
     if (c.readOnly && (c.readOnlyReason === 'encoding' || c.readOnlyReason === 'invalid-utf8')) head.append(h('p', { class: 'db-notice tone-warn', text: this.t('doc.readonly.' + c.readOnlyReason, { enc: (enc || '').toUpperCase() }) }));
     this.els.head = head;
     return head;
@@ -175,6 +205,12 @@ export class DocView {
       }).catch(() => tb.querySelector('.db-btn.sm')?.remove());
     }
     if (this.canEdit()) tb.append(h('button', { class: 'db-btn sm', type: 'button', onclick: () => this.openEditor(null), html: icon('edit') }, this.t('doc.editAll')));
+    // 표·HTML·SVG: 원문 보기 ↔ 그려 보기
+    if (hasSourceToggle(this.fmt)) tb.append(h('button', { class: 'db-btn sm db-srcbtn', type: 'button', 'aria-pressed': String(this.sourceView), onclick: (e: Event) => {
+      this.sourceView = !this.sourceView;
+      (e.currentTarget as HTMLElement).setAttribute('aria-pressed', String(this.sourceView));
+      this.rerender(this.content, undefined, true);
+    }, html: icon('code') }, this.t('doc.source')));
     // 양방향: 내가 다 읽기 전에 Claude 에게 먼저 — 제안·질문 받기, 읽기 정리(접기·먼저 볼 곳)
     if (this.app.canReview()) tb.append(h('button', { class: 'db-btn sm db-review-btn', type: 'button', title: this.t('review.btn.hint'), onclick: () => void this.app.reviewMenu(), html: icon('spark') }, this.t('review.btn')));
     if (this.app.can('feedback.create')) tb.append(h('button', { class: 'db-btn sm', type: 'button', title: this.t('doc.feedback.whole.hint'), onclick: (e: Event) => this.app.composer.open({ docId: this.id, whole: true }, e.currentTarget as HTMLElement), html: icon('chat') }, this.t('doc.feedback.whole')));
@@ -189,13 +225,22 @@ export class DocView {
   }
 
   /** 인코딩 때문에 읽기 전용인 문서는 편집을 열어 두고, 저장 때 UTF-8 변환 동의를 받는다 */
-  canEdit(): boolean { return this.app.can('doc.edit') && !this.meta.readOnly && !(this.content?.readOnly && !['encoding', 'invalid-utf8'].includes(this.content.readOnlyReason || '')); }
+  canEdit(): boolean {
+    // 뽑은 글·미리보기·앞부분만 보인 큰 글은 고치지 않는다(D87)
+    if (!editableFormat(this.fmt) || this.content?.truncated) return false;
+    return this.app.can('doc.edit') && !this.meta.readOnly && !(this.content?.readOnly && !['encoding', 'invalid-utf8'].includes(this.content.readOnlyReason || ''));
+  }
+  /** 이 문서의 형식 (core/formats) */
+  get fmt() { return formatFor(this.id); }
+  /** 표·HTML·SVG 를 원문으로 보는 중 */
+  private sourceView = false;
 
   private renderedVersion = '';
   private renderBody(): void {
     this.renderedVersion = this.content.version;
-    const art = renderMarkdown(this.content.md);
-    art.className = 'db-md';
+    releaseDoc(this.article);
+    const docs = this.app.ad.docs;
+    const art = renderDoc(this.content, { t: this.t, loadBytes: docs.loadBytes ? (id) => docs.loadBytes!(id) : undefined, source: this.sourceView });
     decorate(art, this.app.rules);
     this.secs = sectionize(art);
     this.article = art as unknown as HTMLElement;
@@ -261,22 +306,22 @@ export class DocView {
     this.renderBody();
     old.replaceWith(this.article);
     if (!own && prev && prev.md !== content.md && !this.changed) {
-      this.changed = diffSections(prev.md, content.md);
+      this.changed = diffSections(prev.md, content.md, this.id);
       this.changedFrom = prev.version;
       this.changedOldMd = prev.md;
     }
     if (typeof own === 'object' && prev && prev.md !== content.md) {
-      const d = diffSections(prev.md, content.md);
+      const d = diffSections(prev.md, content.md, this.id);
       const theirs = [...d.changed, ...d.added, ...d.removed].some((k) => !own.mine.has(k));
       if (theirs && (!this.changed || this.changedOldMd == null)) { this.changedFrom = prev.version; this.changedOldMd = prev.md; }
       if (this.changedOldMd != null && (theirs || this.changed)) {
-        const all = diffSections(this.changedOldMd, content.md);
+        const all = diffSections(this.changedOldMd, content.md, this.id);
         const keep = (ks: string[]) => ks.filter((k) => !own.mine.has(k));
         this.changed = { ...all, changed: keep(all.changed), added: keep(all.added), removed: keep(all.removed) };
       }
     } else if (own && this.changed && this.changedOldMd != null) {
       // 내가 고친 섹션은 표시에서 뺀다 — 남이 바꾼 것만 남는다
-      const mine = diffSections(prev?.md || '', content.md);
+      const mine = diffSections(prev?.md || '', content.md, this.id);
       const drop = new Set([...mine.changed, ...mine.added]);
       this.changed = { ...this.changed, changed: this.changed.changed.filter((k) => !drop.has(k)), added: this.changed.added.filter((k) => !drop.has(k)) };
     }
@@ -304,7 +349,7 @@ export class DocView {
       const prev = this.content;
       // 이미 보여 주던 바뀜이 있으면 그 기준(마지막으로 본 판)을 지킨다 — 두 번 바뀌어도 "본 뒤로 바뀐 것" 전부가 보이게
       if (!this.changed || this.changedOldMd == null) { this.changedFrom = prev.version; this.changedOldMd = prev.md; }
-      this.changed = this.dropAcked(diffSections(this.changedOldMd, fresh.md), fresh.md);
+      this.changed = this.dropAcked(diffSections(this.changedOldMd, fresh.md, this.id), fresh.md);
       this.rerender(fresh);
       this.markSeen(fresh.version);
       await this.loadChangeInfo();
@@ -351,7 +396,7 @@ export class DocView {
     let old: DocContent | null = null;
     try { old = await this.app.ad.docs.loadVersion(this.id, version); } catch { old = null; }
     if (!old || this.destroyed) return;
-    this.changed = this.dropAcked(diffSections(old.md, this.content.md), this.content.md);
+    this.changed = this.dropAcked(diffSections(old.md, this.content.md, this.id), this.content.md);
     this.changedFrom = version;
     this.changedOldMd = old.md;
     this.markChanged();
@@ -413,8 +458,10 @@ export class DocView {
     this.bigChange.clear();
     this.article.classList.toggle('db-show-chg', this.app.state.showChanges !== false);
     if (!this.changed || this.changedOldMd == null || this.app.state.showChanges === false) return;
+    // 글 안의 더한·지운 글 표시는 마크다운 화면에서만 — 구조 글·글·표는 섹션(·문서) 단위 표시와 차이 보기로
+    if (!markdownLike(this.fmt)) return;
     const oldMd = this.changedOldMd.replace(/\r\n?/g, '\n');
-    const olds = new Map(sectionSources(oldMd).map((x) => [x.key, oldMd.slice(x.start, x.bodyEnd)]));
+    const olds = new Map(sectionSources(oldMd, this.id).map((x) => [x.key, oldMd.slice(x.start, x.bodyEnd)]));
     for (const key of this.changed.changed) {
       const s = this.secs.find((x) => x.key === key);
       const before = olds.get(key);
@@ -471,8 +518,8 @@ export class DocView {
     return !!c && this.changedOldMd != null && (c.changed.length + c.added.length + c.removed.length + (c.preamble ? 1 : 0)) > 0;
   }
   /** 섹션 글의 지문(확인한 섹션을 다시 열어도 기억 — 글이 또 바뀌면 지문이 달라 다시 보인다) */
-  private static mark(md: string, key: string): string {
-    const s = getSectionText(md, key) ?? '';
+  private static mark(md: string, key: string, id?: string): string {
+    const s = getSectionText(md, key, id) ?? '';
     let x = 0x811c9dc5;
     for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 0x01000193) >>> 0; }
     return s.length.toString(36) + '.' + x.toString(36);
@@ -481,7 +528,7 @@ export class DocView {
   private dropAcked(d: SectionDiff, md: string): SectionDiff {
     const acked = this.app.docState(this.id).acked;
     if (!acked) return d;
-    const keep = (ks: string[]) => ks.filter((k) => acked[k] == null || acked[k] !== DocView.mark(md, k));
+    const keep = (ks: string[]) => ks.filter((k) => acked[k] == null || acked[k] !== DocView.mark(md, k, this.id));
     return { ...d, changed: keep(d.changed), added: keep(d.added) };
   }
   /** 아직 확인하지 않은 바뀐 섹션 키 — 읽기 정리가 이 섹션(과 그 위 섹션)은 접지 않는다 */
@@ -518,7 +565,7 @@ export class DocView {
     // 다시 열어도 기억 — 본 판(lastSeen)은 남은 바뀜 때문에 그대로라 섹션마다 지문을 남긴다
     const st = this.app.docState(this.id);
     const acked = { ...(st.acked || {}) };
-    for (const k of [...this.changed.changed, ...this.changed.added]) if (hit(k)) acked[k] = DocView.mark(this.content.md, k);
+    for (const k of [...this.changed.changed, ...this.changed.added]) if (hit(k)) acked[k] = DocView.mark(this.content.md, k, this.id);
     st.acked = acked;
     this.changed = { ...this.changed, changed: this.changed.changed.filter((k) => !hit(k)), added: this.changed.added.filter((k) => !hit(k)) };
     this.markChanged();
@@ -932,6 +979,39 @@ export class DocView {
     btn.addEventListener('mousedown', onDown);
     btn.addEventListener('click', onClick);
     this.cleanup.push(() => { document.removeEventListener('selectionchange', onChange); btn.removeEventListener('mousedown', onDown); btn.removeEventListener('click', onClick); btn.hidden = true; });
+  }
+
+  // ------------------------------------------------------------ 문서 안 링크
+  /**
+   * 문서 안 상대 링크는 작업대 안에서 연다 — 그대로 두면 화면 주소 기준으로 나가 작업대를 떠난다(단일 HTML 은 file:// 로).
+   * `#제목` 은 그 섹션으로(GitHub 식 이름), `다른.md#제목` 은 그 문서를 열고 그 섹션으로. 바깥 주소는 새 창(decorate)
+   */
+  private bindLinks(): void {
+    const onClick = (e: MouseEvent) => {
+      const a = (e.target as Element)?.closest?.('a[href]') as HTMLAnchorElement | null;
+      if (!a || !this.article.contains(a) || e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey) return;
+      const href = a.getAttribute('href') || '';
+      if (/^[a-z][a-z0-9+.-]*:/i.test(href) || href.startsWith('//')) return;
+      e.preventDefault();
+      const hash = href.includes('#') ? decodeURIComponentSafe(href.slice(href.indexOf('#') + 1)) : '';
+      const path = href.startsWith('#') ? null : resolveRelative(this.id, href);
+      if (path == null && hash) { this.revealSlug(hash); return; }
+      if (!path) return;
+      if (path.endsWith('/')) { void this.app.revealFolder(path.slice(0, -1)); return; }
+      void this.app.openPath(path, hash);
+    };
+    // 본문은 다시 그릴 때마다 바뀐다 — 문서 화면(page)에 건다
+    const page = this.app.els.page;
+    page.addEventListener('click', onClick);
+    this.cleanup.push(() => page.removeEventListener('click', onClick));
+  }
+
+  /** GitHub 식 제목 이름(#설치-방법)으로 섹션 찾아 보이기 — 없으면 아무것도 하지 않는다 */
+  revealSlug(slug: string): boolean {
+    const want = slugOf(slug);
+    const s = this.secs.find((x) => slugOf(x.title) === want);
+    if (s) this.reveal(s.key);
+    return !!s;
   }
 
   // ------------------------------------------------------------ 편집
