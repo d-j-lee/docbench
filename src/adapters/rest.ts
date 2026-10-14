@@ -145,7 +145,7 @@ export function createRestAdapters(o: RestOptions = {}): DocBenchAdapters & { re
         if (!r.ok) throw new HttpError(r.status, await r.json().catch(() => null));
         return new Blob([await r.arrayBuffer()], { type: formatFor(id).mime || 'application/octet-stream' });
       },
-      overview: async () => { try { return await call<WorkspaceOverview>('GET', '/overview'); } catch (e) { if (e instanceof HttpError && e.status === 404) return null; throw e; } },
+      overview: async (o) => { try { return await call<WorkspaceOverview>('GET', '/overview' + (o?.scope ? '?scope=' + encodeURIComponent(o.scope) : '')); } catch (e) { if (e instanceof HttpError && e.status === 404) return null; throw e; } },
       create: (id, md, opts) => call<{ version: string; updatedAt?: string }>('POST', '/doc', { md, ...(opts?.summary ? { summary: opts.summary } : {}) }, { id }).catch(mapDocErr),
     },
     instructions: {

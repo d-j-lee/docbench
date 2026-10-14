@@ -147,7 +147,7 @@ export function createDocBenchHandler(ws, opts = {}) {
       res.end(buf);
       return;
     }
-    if (m === 'GET' && p === '/overview') return send(res, 200, await ws.overview());
+    if (m === 'GET' && p === '/overview') return send(res, 200, await ws.overview({ scope: url.searchParams.get('scope') || undefined }));
     if (m === 'GET' && p === '/doc/version') { const d = await ws.docVersion(q('id'), q('v')); return d ? send(res, 200, d) : send(res, 404, { error: 'NOT_FOUND' }); }
     if (m === 'GET' && p === '/doc/base') { const d = await ws.docBase(q('id')); return d ? send(res, 200, d) : send(res, 404, { error: 'NOT_FOUND' }); }
     if (m === 'GET' && p === '/changes') return send(res, 200, { items: await ws.changes(Number(q('limit')) || 300) });

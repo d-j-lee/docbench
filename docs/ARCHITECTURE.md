@@ -118,6 +118,8 @@ core.computeOverview  →  WorkspaceOverview { purpose, scope, totals, groups, f
 - **목적**: 팀 규칙 `purpose` → 기록 폴더 설정 `purpose` → 맨 위 README 의 첫 문단(앞머리 `description`·배지·표·코드 블록은 건너뜀). **폴더 역할**: 팀 규칙·설정 `folders.<맨 위 폴더>.role` → 그 폴더 README 의 첫 문단.
 - **점검**(`checks` — 문구는 `core/checktext` 의 `overview.check.<code>`, 화면 사전이 펼쳐 넣고 CLI 도 같은 글): 주의 `secrets`(비밀로 보이는 이름 — 내용은 열지 않는다) · 할 일 `huge-files`(50 MB 이상 — git 저장소면 할 일, 아니면 참고) `no-readme` `review-due`(앞머리 날짜가 지남) `broken-links`(다 훑었을 때만) · 정리 `version-copies`(_v2·최종·(1)·복사본) `temp-files`(~$·.DS_Store …) `empty-folders` `folder-no-readme`(파일 8개 이상) `same-name` `long-paths`(160자) · 참고 `stale-docs`(1년) `orphan-docs`(링크가 쓰이는 곳에서만) `git-uncommitted`.
 - **바로 할 일**: README 만들기(빈칸 표시 `[작업 후 기입]`/`TODO` 를 넣은 틀 — `DocSource.create`, 만들고 편집기로), Claude 에게 맡길 초안(깨진 링크·검토 기한·오래된 문서는 문서마다 문서 전체 피드백, 고아 문서는 README 에 하나 — Claude 가 고치거나 제안할 수 있는 형식만). 지우기·옮기기는 하지 않는다(사람이 고른다).
+- **범위**(D93): `overview({ scope })` — 대시보드 탭·넓은 작업 공간 안의 폴더로 연 화면. `computeOverview({ base })` 가 그 폴더를 맨 위로 다시 계산하고(목적은 그 폴더 README → 팀 규칙·설정의 그 폴더 역할, 작업 공간 전체 목적이 아니다) 경로를 작업 공간 기준으로 돌린다. 팀 규칙의 패턴은 작업 공간 기준 그대로 견주고, `require` 는 범위 안 패턴만. 범위 밖을 가리키는 링크는 작업 공간에 있으면 깨지지 않은 것. README 고르기는 `pickReadmes(items, base)`.
+- **메타데이터로 보기**(S28): 상태·담당·꼬리표 칩을 누르면 그 값의 문서(매니페스트의 앞머리, 같은 `docMetaOf` — 상태는 대소문자 무시), 30일 안의 기한은 "다가오는 기한". 고른 값은 작업 공간마다 기억한다(개요를 다시 그려도).
 - 큰 폴더(D64)는 훑은 데까지(`scope.complete: false`)라고 밝히고, 빈 폴더·깨진 링크처럼 다 봐야 아는 점검은 하지 않는다. 화면은 30초 동안 결과를 기억하고 목록·문서가 바뀌면 다시 계산한다. 깨진 링크는 폴더 지도가 들어가지 않는 폴더(`.docbench`·`node_modules`·`dist` …) 안을 가리키면 세지 않는다(있는지 알 수 없다).
 
 ### 팀 규칙 (`core/rules`, D90–D92)

@@ -7,6 +7,7 @@
 import type { FeedbackCategory, FileGroup, OverviewCheck, WorkspaceOverview } from '../types';
 import { formatFor, claudeChanges, formatOf } from '../core/formats';
 import { RULES_FILE, rulesTemplate } from '../core/rules';
+import { docMetaOf, type DocFrontMeta } from '../core/overview';
 import { h, icon, fmtBytes, fmtTime, relTime } from './dom';
 import { groupIcon } from './viewers';
 import type { App } from './app';
@@ -41,7 +42,7 @@ export async function renderOverview(app: App, force = false): Promise<void> {
   if (!cache || force || Date.now() - cache.at > FRESH_MS) {
     if (!cache) page.replaceChildren(h('p', { class: 'db-loading', text: t('overview.loading') }));
     try {
-      const ov = await app.ad.docs.overview();
+      const ov = await app.ad.docs.overview(app.scope ? { scope: app.scope } : undefined);
       if (!ov) { page.replaceChildren(h('p', { class: 'db-empty', text: t('overview.none') })); return; }
       cache = { at: Date.now(), ov };
       caches.set(app.ad.docs, cache);
@@ -116,7 +117,7 @@ function paint(app: App, ov: WorkspaceOverview): void {
   if (ov.folders.length) {
     const tb = h('tbody');
     for (const f of ov.folders) {
-      const name = f.path ? f.path + '/' : t('overview.folder.top');
+      const name = f.path ? rel(app, f.path) + '/' : t('overview.folder.top');
       tb.append(h('tr', {},
         h('td', {}, f.path ? h('button', { class: 'db-linkbtn', type: 'button', onclick: () => void app.revealFolder(f.path) }, h('span', { class: 'ic', html: icon('folder') }), name) : h('span', { class: 'db-hint', text: name })),
         h('td', { class: 'role' }, f.role ? h('span', { title: f.roleFrom === 'config' ? t('overview.role.config') : t('overview.role.readme') }, f.role)
@@ -136,15 +137,7 @@ function paint(app: App, ov: WorkspaceOverview): void {
   const m = ov.meta;
   root.append(h('h2', { class: 'db-ov-h', text: t('overview.meta') }));
   if (!m.docs) root.append(h('p', { class: 'db-hint', text: t('overview.meta.none') }));
-  else {
-    const chips = (rec: Record<string, number>, cls: string, prefix = '') => Object.entries(rec).sort((a, b) => b[1] - a[1]).slice(0, 16)
-      .map(([k, n]) => h('span', { class: 'db-fm-c ' + cls }, prefix + k, h('b', { text: n })));
-    root.append(h('div', { class: 'db-ov-meta' },
-      h('p', { class: 'db-hint', text: t('overview.meta.lead', { n: m.docs }) }),
-      Object.keys(m.status).length ? h('div', { class: 'row' }, h('span', { class: 'k', text: t('overview.meta.status') }), h('div', { class: 'db-fm' }, ...chips(m.status, 'status'))) : null,
-      Object.keys(m.owners).length ? h('div', { class: 'row' }, h('span', { class: 'k', text: t('overview.meta.owners') }), h('div', { class: 'db-fm' }, ...chips(m.owners, 'owner'))) : null,
-      Object.keys(m.tags).length ? h('div', { class: 'row' }, h('span', { class: 'k', text: t('overview.meta.tags') }), h('div', { class: 'db-fm' }, ...chips(m.tags, 'tag', '#'))) : null));
-  }
+  else root.append(metaBlock(app, ov));
 
   // ---- AI 협업 파일
   root.append(h('h2', { class: 'db-ov-h', text: t('overview.ai') }));
@@ -177,6 +170,63 @@ function rulesLine(app: App, ov: WorkspaceOverview): HTMLElement {
     canCreate(app) ? h('button', { class: 'db-btn sm', type: 'button', title: t('overview.rules.make.hint'), onclick: () => void createRules(app) }, t('overview.rules.make')) : null);
 }
 
+type MetaField = 'status' | 'owners' | 'tags';
+/** 앞머리로 보기를 고른 값 — 개요를 다시 그려도 남는다(작업 공간마다) */
+const metaPicks = new WeakMap<object, { k: MetaField; v: string } | null>();
+/** 다가오는 기한으로 보일 날 수 */
+const UPCOMING_DAYS = 30;
+/** 고른 값의 문서를 보일 수 */
+const PICK_SHOWN = 60;
+
+/**
+ * 문서 메타데이터 (S28) — 상태·담당·꼬리표 칩을 누르면 그 값의 문서들, 다가오는 기한(30일 안). 문서마다 앞머리는 매니페스트에서
+ * (개요의 수와 같은 docMetaOf 규칙 — 상태는 대소문자 무시)
+ */
+function metaBlock(app: App, ov: WorkspaceOverview): HTMLElement {
+  const t = app.t;
+  const m = ov.meta;
+  const now = Date.now();
+  const docs = Object.entries(app.manifest.docs).filter(([id, d]) => app.inScope(id) && d.meta).map(([id, d]) => ({ id, title: d.title, dm: docMetaOf(d.meta!, now) }));
+  const box = h('div', { class: 'db-ov-pick', 'aria-live': 'polite' });
+  const label: Record<MetaField, string> = { status: t('overview.meta.status'), owners: t('overview.meta.owners'), tags: t('overview.meta.tags') };
+  const matches = (dm: DocFrontMeta, k: MetaField, v: string) => (k === 'status' ? (dm.status || '').toLowerCase() === v : k === 'owners' ? dm.owners.includes(v) : dm.tags.includes(v));
+  const buttons: HTMLElement[] = [];
+  const show = () => {
+    const sel = metaPicks.get(app.ad.docs) || null;
+    for (const b of buttons) b.setAttribute('aria-pressed', String(!!sel && b.dataset.k === sel.k && b.dataset.v === sel.v));
+    if (!sel) { box.replaceChildren(); box.hidden = true; return; }
+    const hits = docs.filter((d) => matches(d.dm, sel.k, sel.v)).sort((a, b) => a.id.localeCompare(b.id, 'ko'));
+    box.hidden = false;
+    box.replaceChildren(...[
+      h('div', { class: 'hd' }, h('b', { text: t('overview.meta.pick', { k: label[sel.k], v: (sel.k === 'tags' ? '#' : '') + sel.v, n: hits.length }) }),
+        h('button', { class: 'db-btn ghost sm', type: 'button', onclick: () => { metaPicks.set(app.ad.docs, null); show(); } }, t('overview.meta.clear'))),
+      hits.length ? h('div', { class: 'db-ov-files' }, ...hits.slice(0, PICK_SHOWN).map((d) => fileRow(app, d.id, d.title !== d.id ? d.title : '', true))) : h('p', { class: 'db-hint', text: t('overview.meta.pick.none') }),
+      hits.length > PICK_SHOWN ? h('p', { class: 'db-hint', text: t('overview.meta.more', { n: hits.length - PICK_SHOWN }) }) : null,
+    ].filter((x) => x != null) as HTMLElement[]);
+  };
+  const chips = (rec: Record<string, number>, cls: string, k: MetaField, prefix = '') => Object.entries(rec).sort((a, b) => b[1] - a[1]).slice(0, 16).map(([v, n]) => {
+    const b = h('button', { class: 'db-fm-c ' + cls, type: 'button', 'data-k': k, 'data-v': v, 'aria-pressed': 'false', title: t('overview.meta.pick.hint'),
+      onclick: () => { const cur = metaPicks.get(app.ad.docs); metaPicks.set(app.ad.docs, cur && cur.k === k && cur.v === v ? null : { k, v }); show(); } }, prefix + v, h('b', { text: n }));
+    buttons.push(b);
+    return b;
+  });
+  const row = (k: MetaField, cls: string, prefix = '') => (Object.keys(m[k]).length ? h('div', { class: 'row' }, h('span', { class: 'k', text: label[k] }), h('div', { class: 'db-fm' }, ...chips(m[k], cls, k, prefix))) : null);
+  // 다가오는 기한 — 지난 것은 점검(검토 기한 지남)에 있다
+  const soon = docs.flatMap((d) => d.dm.dates.filter((x) => !x.past && Date.parse(x.date) - now <= UPCOMING_DAYS * 864e5).map((x) => ({ ...x, id: d.id, title: d.title })))
+    .sort((a, b) => a.date.localeCompare(b.date)).slice(0, 8);
+  const out = h('div', { class: 'db-ov-meta' },
+    h('p', { class: 'db-hint', text: t('overview.meta.lead', { n: m.docs }) }),
+    row('status', 'status'), row('owners', 'owner'), row('tags', 'tag', '#'),
+    soon.length ? h('div', { class: 'row' }, h('span', { class: 'k', text: t('overview.meta.upcoming') }), h('div', { class: 'db-fm' },
+      ...soon.map((x) => h('button', { class: 'db-fm-c date', type: 'button', title: x.id, onclick: () => void app.navigate(x.id), html: icon('clock') }, `${x.date} · ${x.field} · ${x.title}`)))) : null,
+    box);
+  show();
+  return out;
+}
+
+/** 범위로 연 화면에서는 범위 안 경로로 보인다(누르면 작업 공간 경로로 연다) */
+const rel = (app: App, p: string) => (app.scope && p.startsWith(app.scope + '/') ? p.slice(app.scope.length + 1) : p);
+
 const stat = (v: string | number, k: string, sub: string) => h('div', { class: 'db-stat' }, h('div', { class: 'v', text: v }), h('div', { class: 'k', text: k }), sub ? h('div', { class: 'k sub', text: sub }) : null);
 
 /** 파일 한 줄 — 문서면 누르면 열고, 아니면 그 폴더를 펼친다 */
@@ -184,7 +234,7 @@ function fileRow(app: App, path: string, note: string, doc?: boolean): HTMLEleme
   const isDoc = doc ?? path in app.manifest.docs;
   const f = formatOf(path);
   return h('button', { class: 'db-ov-file' + (isDoc ? '' : ' nodoc'), type: 'button', title: path, onclick: () => void (isDoc ? app.navigate(path) : app.revealFolder(path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '')) },
-    h('span', { class: 'ic', html: icon(groupIcon(f ? f.group : 'other')) }), h('span', { class: 't', text: path }), h('small', { text: note }));
+    h('span', { class: 'ic', html: icon(groupIcon(f ? f.group : 'other')) }), h('span', { class: 't', text: rel(app, path) }), h('small', { text: note }));
 }
 
 /** 점검 한 줄 — 수준 · 무엇 · 왜 · 경로 · 바로 할 일 */
@@ -203,7 +253,7 @@ function checkRow(app: App, ov: WorkspaceOverview, c: OverviewCheck): HTMLElemen
       const dir = p.endsWith('/') ? p.slice(0, -1) : null;
       const note = c.notes?.[p];
       return h('button', { class: 'db-chip', type: 'button', title: note ? `${p} — ${note}` : p, onclick: () => void (isDoc ? app.navigate(p) : app.revealFolder(dir ?? (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : ''))) },
-        p, note ? h('small', { class: 'nt', text: note }) : null);
+        rel(app, p), note ? h('small', { class: 'nt', text: note }) : null);
     }));
     if (!all && c.paths.length > PATHS_SHOWN) paths.append(h('button', { class: 'db-chip all', type: 'button', onclick: () => showPaths(true) }, t('overview.paths.more', { n: c.paths.length - PATHS_SHOWN })));
     if (c.n > c.paths.length) paths.append(h('span', { class: 'db-hint', text: t('overview.paths.cut', { n: c.n }) }));
@@ -289,10 +339,13 @@ const canCreate = (app: App) => !!app.ad.docs.create && app.can('doc.edit');
  */
 async function createReadme(app: App, ov: WorkspaceOverview, dir: string): Promise<void> {
   const t = app.t;
+  // 맨 위 = 범위로 열었으면 그 폴더
+  const top = !dir || dir === app.scope;
+  if (!dir) dir = app.scope;
   const id = (dir ? dir + '/' : '') + 'README.md';
   let md: string;
-  if (!dir) {
-    const rows = ov.folders.filter((f) => f.path).map((f) => `| \`${f.path}/\` | ${f.role || t('overview.readme.roleTodo')} |`);
+  if (top) {
+    const rows = ov.folders.filter((f) => f.path).map((f) => `| \`${rel(app, f.path)}/\` | ${f.role || t('overview.readme.roleTodo')} |`);
     md = `# ${ov.root || app.manifest.project.name}\n\n${t('overview.readme.purposeTodo')}\n` +
       (rows.length ? `\n## ${t('overview.readme.folders')}\n\n| ${t('overview.col.folder')} | ${t('overview.col.role')} |\n|---|---|\n${rows.join('\n')}\n` : '') +
       `\n## ${t('overview.readme.rules')}\n\n- ${t('overview.readme.rulesTodo')}\n`;

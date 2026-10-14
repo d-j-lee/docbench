@@ -974,6 +974,15 @@
 .docbench .db-ov-meta .row { display: flex; gap: 10px; align-items: baseline; }
 .docbench .db-ov-meta .row .k { flex: none; width: 4.5em; font-size: 12px; color: var(--db-ink-3); }
 .docbench .db-ov-meta .db-fm { margin: 0; }
+.docbench button.db-fm-c { border: 1px solid transparent; font-family: inherit; cursor: pointer; }
+.docbench button.db-fm-c.tag { border-color: var(--db-line); }
+.docbench button.db-fm-c:hover { border-color: var(--db-line-2); }
+.docbench button.db-fm-c:focus-visible { outline: 2px solid var(--db-go); outline-offset: 1px; }
+.docbench button.db-fm-c[aria-pressed="true"] { background: var(--db-ink); border-color: var(--db-ink); color: var(--db-surface); }
+.docbench button.db-fm-c[aria-pressed="true"] b { color: inherit; opacity: .8; }
+.docbench .db-ov-pick { margin-top: 6px; padding: 10px; border: 1px solid var(--db-line); border-radius: 9px; background: var(--db-sunk); }
+.docbench .db-ov-pick .hd { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 13px; }
+.docbench .db-ov-pick .db-hint { margin: 6px 0 0; font-size: 12.5px; }
 .docbench .db-ov-files { display: flex; flex-direction: column; border: 1px solid var(--db-line); border-radius: 9px; background: var(--db-surface); overflow: hidden; }
 .docbench .db-ov-file { display: flex; align-items: center; gap: 8px; padding: 5px 10px; border: 0; border-bottom: 1px solid var(--db-line); background: none; color: var(--db-ink); font: 12.5px/1.5 var(--db-font-mono); text-align: left; cursor: pointer; }
 .docbench .db-ov-file:last-child { border-bottom: 0; }

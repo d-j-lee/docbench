@@ -769,10 +769,12 @@ export class Workspace {
   /**
    * 작업 공간 개요(D88) — 폴더 지도의 항목 + 매니페스트(제목·앞머리) + README 앞부분 + 문서 사이 링크(작은 작업 공간만) +
    * 팀 규칙(D90, docbench.json) → core.computeOverview.
-   * full = CI 점검(`docbench check`): 마크다운 문서의 앞머리를 한도 없이 모두 읽고, 점검마다 경로를 모두 담고, git 이력을 넉넉히 기다린다
-   * @param {{ full?: boolean }} [o]
+   * full = CI 점검(`docbench check`): 마크다운 문서의 앞머리를 한도 없이 모두 읽고, 점검마다 경로를 모두 담고, git 이력을 넉넉히 기다린다.
+   * scope = 이 폴더만(대시보드 탭·넓은 작업 공간 안의 폴더) — 결과 경로는 작업 공간 기준
+   * @param {{ full?: boolean, scope?: string }} [o]
    */
   async overview(o = {}) {
+    const scope = o.scope ? this.scopePath(o.scope) : '';
     if (o.full) await this.readAllMeta();
     await this.manifest();
     const inv = await this.inventory();
@@ -780,13 +782,13 @@ export class Workspace {
     const capped = items.length >= this.config.maxInventory;
     /** @type {Record<string, { id: string, text: string }>} */
     const readmes = {};
-    for (const [dir, id] of Object.entries(core.pickReadmes(items))) {
+    for (const [dir, id] of Object.entries(core.pickReadmes(items, scope))) {
       const text = await this.readHeadText(id).catch(() => null);
       if (text != null) readmes[dir] = { id, text };
     }
     /** @type {{ from: string, to: string[] }[] | undefined} */
     let links;
-    const md = [...this.docs.keys()].filter((id) => core.isMarkdownPath(id));
+    const md = [...this.docs.keys()].filter((id) => core.isMarkdownPath(id) && (!scope || id.startsWith(scope + '/')));
     if (this.index.complete && !capped && (o.full || md.length <= core.OVERVIEW_LINK_LIMITS.docs)) {
       links = [];
       let total = 0;
@@ -808,7 +810,18 @@ export class Workspace {
       root: path.basename(this.root) || this.root, items, complete: this.index.complete && !capped, reason: capped ? 'many' : this.index.reason,
       isDoc: (p) => this.isDoc(p), meta, config: { purpose: this.config.purpose, folders: this.config.folders }, readmes, links, git: !!this.git,
       ...(rules ? { rules } : {}), ...(changed ? { changed: Object.fromEntries(changed.times) } : {}), ci: CI, ...(o.full ? { pathsMax: Infinity } : {}),
+      ...(scope ? { base: scope } : {}),
     });
+  }
+
+  /** 범위(작업 공간 안 폴더) — 상대 경로로 고르고, 밖이면 거부 @param {string} scope */
+  scopePath(scope) {
+    const s = String(scope).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    if (!s) return '';
+    const norm = path.posix.normalize(s);
+    if (norm === '.' ) return '';
+    if (norm.startsWith('../') || norm === '..' || path.isAbsolute(norm) || /^[a-zA-Z]:/.test(norm) || s.includes('\0')) throw new BadRequestError('잘못된 범위');
+    return norm;
   }
 
   /**

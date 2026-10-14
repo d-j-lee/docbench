@@ -264,6 +264,8 @@ export interface RulesContext {
   now: number;
   pathsMax: number;
   ignored: (p: string) => boolean;
+  /** 범위로 계산할 때 앞에 붙일 경로('<범위>/') — 규칙의 패턴은 작업 공간 기준이다 */
+  prefix?: string;
 }
 
 const baseOf = (p: string) => p.replace(/\/$/, '').split('/').pop() || p;
@@ -280,7 +282,8 @@ const filled = (v: string | string[] | undefined) => (Array.isArray(v) ? v.some(
 export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unchecked: number } {
   const out: OverviewCheck[] = [];
   const unread = new Set<string>();
-  const inRule = (r: RuleSpec, id: string) => !ctx.ignored(id) && matchPath(id, r.paths, ctx.ci) && !matchPath(id, r.except, ctx.ci);
+  const pre = ctx.prefix || '';
+  const inRule = (r: RuleSpec, id: string) => !ctx.ignored(id) && matchPath(pre + id, r.paths, ctx.ci) && !matchPath(pre + id, r.except, ctx.ci);
   ctx.spec.rules.forEach((r, i) => {
     const index = r.at ?? i;
     const paths: string[] = [];
@@ -370,8 +373,10 @@ export function evaluateRules(ctx: RulesContext): { checks: OverviewCheck[]; unc
         const all = [...ctx.dirs, ...ctx.files];
         for (const pat of r.paths) {
           if (r.except && matchAny(pat, r.except, ctx.ci)) continue;
-          const found = all.some((it) => matchPath(it.id, [pat], ctx.ci));
-          if (!found) hit(pat);
+          // 범위로 볼 때는 그 범위 안의 패턴만 — 작업 공간 다른 곳의 약속은 여기서 말할 수 없다
+          if (pre && !pat.startsWith(pre)) continue;
+          const found = all.some((it) => matchPath(pre + it.id, [pat], ctx.ci));
+          if (!found) hit(pre ? pat.slice(pre.length) : pat);
         }
         break;
       }

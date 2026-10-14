@@ -25,7 +25,7 @@
  *   docbench doc show <docId> [--section KEY] [--json]
  *   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
  *   docbench doc new <docId> [--file F | --stdin] [-m 요약]
- *   docbench overview [--json]                 작업 공간 개요·점검
+ *   docbench overview [--scope 폴더] [--json]  작업 공간 개요·점검 (--scope = 작업 공간 안 그 폴더만)
  *   docbench check [폴더] [--rules 파일] [--fail-on risk|action|tidy|info|never] [--format text|json|github] [--lang ko|en]
  *                                              팀 규칙(docbench.json)과 늘 하는 점검 — CI·pre-commit 용(기록 폴더 없어도 됨, 걸리면 5)
  *   docbench log <docId> -m 요약 [--fb id,id]   마지막 변경에 요약 덧붙이기 (직접 편집한 뒤)
@@ -90,7 +90,8 @@ const HELP = `docbench CLI — 사람과 터미널의 Claude Code 가 같은 작
   docbench doc write <docId> (--file F | --stdin) [--section KEY --base VER] [-m 요약] [--fb id,id] [--rename] [--force] [--convert-utf8]
   docbench doc new <docId> [--file F | --stdin] [-m 요약]
                                              새 문서 (UTF-8, 이력에 남김). 이미 있으면 3, 폴더는 있어야 한다
-  docbench overview [--json]                 작업 공간 개요 — 목적·구성·폴더 역할·문서 메타데이터·AI 협업 파일·점검(비밀·사본·임시 파일·깨진 링크 …)
+  docbench overview [--scope 폴더] [--json]  작업 공간 개요 — 목적·구성·폴더 역할·문서 메타데이터·AI 협업 파일·점검(비밀·사본·임시 파일·깨진 링크 …).
+                                             --scope = 작업 공간 안 그 폴더만(그 폴더의 README·역할, 경로는 작업 공간 기준)
   docbench check [폴더] [--rules 파일] [--fail-on risk|action|tidy|info|never] [--format text|json|github] [--lang ko|en]
                                              팀 규칙(문서 폴더 맨 위 docbench.json — 앞머리 키·폴더 README·이름·검토 주기·두지 않을 파일·크기·
                                              있어야 할 파일)과 늘 하는 점검. CI·pre-commit 용 — 기록 폴더가 없어도 되고 아무것도 쓰지 않는다.
@@ -716,7 +717,9 @@ async function main() {
   }
 
   if (cmd === 'overview') {
-    const o = await ws.overview();
+    if (a.scope === true) die('--scope 에 작업 공간 안 폴더를 주세요');
+    let o;
+    try { o = await ws.overview(a.scope ? { scope: String(a.scope) } : {}); } catch (e) { die(e.message); }
     out(a, o, () => overviewText(o));
     return;
   }

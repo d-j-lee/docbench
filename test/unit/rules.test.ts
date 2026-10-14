@@ -275,3 +275,46 @@ describe('스키마(docs/docbench.schema.json)와 코드의 목록이 같다', (
     expect(schema.definitions.rule.allOf.slice(1).map((x: { if: { properties: { kind: { const: string } } } }) => x.if.properties.kind.const)).toEqual([...RULE_KINDS]);
   });
 });
+
+describe('범위 개요 (대시보드 탭·넓은 작업 공간 안의 폴더)', () => {
+  const items = [
+    file('README.md'), dir('projects'), dir('projects/a'), file('projects/a/README.md'), dir('projects/a/docs'), file('projects/a/docs/plan.md'), file('projects/a/docs/spec_v2.md'),
+    file('projects/a/docs/spec_v3.md'), file('projects/a/.env'), dir('projects/b'), file('projects/b/x.md'), file('shared/glossary.md'),
+  ];
+  const base = { root: 'ws', items, complete: true, isDoc: (p: string) => /\.md$/.test(p), now: NOW };
+  it('그 폴더를 맨 위로 계산하고 경로는 작업 공간 기준으로 돌린다', () => {
+    const ov = computeOverview({
+      ...base, base: 'projects/a',
+      readmes: { '': { id: 'projects/a/README.md', text: '# A\n\n알림 서비스 A 의 문서.\n' } },
+      meta: { 'projects/a/docs/plan.md': { status: 'review' }, 'projects/b/x.md': { status: 'done' } },
+      links: [{ from: 'projects/a/docs/plan.md', to: ['shared/glossary.md', 'shared/none.md', 'projects/a/docs/spec_v3.md', 'projects/a/.docbench/x.json'] }],
+      rules: { file: 'docbench.json', ...parseRulesText(JSON.stringify({ purpose: '작업 공간 전체 목적', rules: [
+        { kind: 'front-matter', paths: 'projects/a/docs/**', keys: ['owner'] }, { kind: 'front-matter', paths: 'docs/**', keys: ['nope'] },
+        { kind: 'require', paths: ['projects/a/CHANGELOG.md', 'CHANGELOG.md'] }, { kind: 'nope' },
+      ] })) },
+    });
+    expect(ov.root).toBe('a');
+    expect(ov.purpose).toEqual({ text: '알림 서비스 A 의 문서.', from: 'readme', docId: 'projects/a/README.md' });
+    expect(ov.totals.files).toBe(5);
+    expect(ov.folders.map((f) => f.path)).toEqual(['projects/a/docs', '']);
+    expect(ov.meta.status).toEqual({ review: 1 });
+    expect(pick(ov, 'secrets')!.paths).toEqual(['projects/a/.env']);
+    expect(pick(ov, 'version-copies')!.paths).toEqual(['projects/a/docs/spec_v2.md', 'projects/a/docs/spec_v3.md']);
+    // 범위 밖을 가리키는 링크: 있으면 깨지지 않았고, 없으면 깨졌다 · 기록 폴더 안은 모른다
+    expect(pick(ov, 'broken-links')).toMatchObject({ n: 1, paths: ['projects/a/docs/plan.md'] });
+    // 팀 규칙은 작업 공간 기준 패턴으로 — 범위 안 패턴만, 문제 점검의 경로(규칙 파일)는 그대로
+    expect(ov.checks.filter((c) => c.code === 'rule-front-matter').map((c) => c.paths)).toEqual([['projects/a/docs/plan.md']]);
+    expect(pick(ov, 'rule-front-matter')!.notes).toEqual({ 'projects/a/docs/plan.md': 'owner' });
+    expect(ov.rules!.unchecked).toBe(2);
+    expect(pick(ov, 'rule-require')!.paths).toEqual(['projects/a/CHANGELOG.md']);
+    expect(pick(ov, 'rules-invalid')!.paths).toEqual(['docbench.json']);
+  });
+  it('README 가 없으면 그 폴더의 역할(팀 규칙 folders)이 목적 · pickReadmes 의 키는 그 폴더 기준', async () => {
+    const { pickReadmes } = await import('../../src/core/overview');
+    expect(pickReadmes(items, 'projects/a')).toEqual({ '': 'projects/a/README.md' });
+    expect(pickReadmes(items, 'projects')).toEqual({ a: 'projects/a/README.md' });
+    const ov = computeOverview({ ...base, base: 'projects/b', rules: { file: 'docbench.json', ...parseRulesText('{"folders":{"projects/b":"B 팀 메모"}}') } });
+    expect(ov.purpose).toEqual({ text: 'B 팀 메모', from: 'config' });
+    expect(pick(ov, 'no-readme')).toBeTruthy();
+  });
+});

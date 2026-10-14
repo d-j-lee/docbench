@@ -131,6 +131,23 @@ test('앱 화면: 열쇠 없이는 여는 방법 → 처음 연 주소의 열쇠
   assert.deepEqual(errors, []);
 });
 
+test('범위 개요: 넓은 작업 공간 안의 폴더(scope)로 열어도 그 폴더의 개요 — 팀 규칙·점검, 경로는 그 폴더 기준으로 보이고 누르면 연다', async (t) => {
+  const { page, errors } = await newPage(t);
+  await call('POST', '/api/app/workspaces', { path: dir });
+  await page.goto(`${base}/embed?root=${encodeURIComponent(dir)}&scope=docs&t=${app.token}&lang=ko`);
+  await page.locator('.db-ov').waitFor();
+  assert.equal(await page.locator('.db-ov .db-doctitle').innerText(), 'docs');
+  // 예제의 팀 규칙(docs/** 앞머리) — 작업 공간 기준 패턴이 범위 안 문서에 걸린다
+  const fm = page.locator('.db-ov-check[data-code="rule-front-matter"]');
+  await fm.waitFor();
+  const chips = await fm.locator('.db-chip').allInnerTexts();
+  assert.ok(chips.some((c) => c.startsWith('설계-노트.md')), chips.join(' | '));
+  assert.ok(!chips.some((c) => c.startsWith('docs/')), '범위 안 경로로 보인다');
+  await fm.locator('.db-chip', { hasText: '설계-노트.md' }).click();
+  await page.locator('.db-doctitle', { hasText: '설계' }).waitFor();
+  assert.deepEqual(errors, []);
+});
+
 test('대시보드 탭: host.js 로 끼우면 어두운 테마·할 일 수·이동이 오가고, 모은 초안은 한 번에 대시보드 터미널로(본문 없이), 허용 안 한 출처는 못 끼운다', async (t) => {
   const { page, errors } = await newPage(t);
   // 보낸(Claude 가 처리할) 피드백 하나

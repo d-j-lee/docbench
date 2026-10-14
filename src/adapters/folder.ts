@@ -878,18 +878,19 @@ export class FolderWorkspace {
   /**
    * 작업 공간 개요(D88 — 서버 overview 와 같은 재료): 폴더 지도 항목 + 매니페스트(제목·앞머리) + README 앞부분 + 문서 사이 링크(작은 작업 공간만)
    */
-  async overview(): Promise<WorkspaceOverview> {
+  async overview(o: { scope?: string } = {}): Promise<WorkspaceOverview> {
+    const scope = (o.scope || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
     await this.manifest();
     const inv = await this.inventory();
     const capped = inv.items.length >= this.config.maxInventory;
     const readmes: Record<string, { id: string; text: string }> = {};
-    for (const [dir, id] of Object.entries(pickReadmes(inv.items))) {
+    for (const [dir, id] of Object.entries(pickReadmes(inv.items, scope))) {
       if (id.split('/').some((seg) => seg.startsWith('.'))) continue;
       const f = await this.fs.read(id, 8192).catch(() => null);
       if (f) readmes[dir] = { id, text: decodeBytes(cutAtLine(f.bytes), this.legacy).text };
     }
     let links: { from: string; to: string[] }[] | undefined;
-    const md = [...this.docs.keys()].filter(isMarkdownPath);
+    const md = [...this.docs.keys()].filter((id) => isMarkdownPath(id) && (!scope || id.startsWith(scope + '/')));
     if (this.index.complete && !capped && md.length <= OVERVIEW_LINK_LIMITS.docs) {
       links = [];
       let total = 0;
@@ -907,7 +908,7 @@ export class FolderWorkspace {
     return computeOverview({
       root: this.fs.name, items: inv.items, complete: this.index.complete && !capped, reason: capped ? 'many' : this.index.reason,
       isDoc: (p) => isDocPath(p, this.config, this.ci), meta, config: { purpose: this.config.purpose, folders: this.config.folders }, readmes, links,
-      ...(rules ? { rules } : {}), ci: this.ci,
+      ...(rules ? { rules } : {}), ci: this.ci, ...(scope ? { base: scope } : {}),
     });
   }
 

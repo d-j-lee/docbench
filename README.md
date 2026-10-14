@@ -101,7 +101,8 @@ node bin/docbench.mjs serve examples/sample-workspace   # 또는 폴더 하나�
 - 모양은 글·마크다운이어도 도구·에이전트가 읽는 파일 — 의존성 목록(`requirements*.txt`)·`CODEOWNERS`·MDX·AI 지시 파일(`CLAUDE.md`·`AGENTS.md`·`SKILL.md` …) — 은 Claude 가 제안만 한다. 비밀로 보이는 파일(`.env`·`credentials.json`·`secrets.yaml`·키 …)은 문서가 되지 않는다(개요가 이름으로만 짚는다).
 - 기본으로 **코드는 문서 목록에서 빠진다**(코드 저장소에서 문서가 코드에 묻히지 않게). 코드까지 다루려면 기록 폴더 `config.json` 에 `"include": ["**/*"]` — 그래도 Claude 는 제안만. 마크다운만 보려면 `"include": ["**/*.md"]`.
 - 문서 안 상대 경로 그림(`![](img/a.png)`)은 작업 공간 파일로 보이고(단일 HTML 도), 상대 링크는 작업대 안에서 열린다(`#제목` 은 그 섹션으로).
-- 문서 맨 앞 앞머리(`---` 로 감싼 `status: review` · `owner: 김철수` · `tags: [api]` · `review: 2026-12-01`)는 문서 머리의 칩과 개요의 메타데이터가 된다. 검토 기한이 지나면 개요의 "살펴볼 것"에 뜬다.
+- 문서 맨 앞 앞머리(`---` 로 감싼 `status: review` · `owner: 김철수` · `tags: [api]` · `review: 2026-12-01`)는 문서 머리의 칩과 개요의 메타데이터가 된다 — 개요의 상태·담당·꼬리표 칩을 누르면 그 문서들이, 30일 안의 기한은 "다가오는 기한"으로 모인다. 검토 기한이 지나면 "살펴볼 것"에 뜬다.
+- 넓은 작업 공간 안의 폴더를 따로 열면(앱에 하위 폴더 더하기·대시보드 탭의 `scope`) 개요도 **그 폴더의 개요**다 — 그 폴더 README 가 목적, 점검·팀 규칙은 그 안만.
 - 이 작업 공간의 목적·폴더 역할은 README 로 충분하다(맨 위 README 의 첫 문단 · 폴더 README 의 첫 문단). 따로 적으려면 팀 규칙 파일 `docbench.json` 에 `"purpose": "…"`, `"folders": { "data": "원천 데이터 — 고치지 않는다" }` (README 보다 먼저).
 
 ## 팀 규칙과 CI 점검
@@ -168,7 +169,7 @@ docbench link <폴더> [--data 기록폴더] [--owner 계정] [--force]
 docbench status [--json]
 docbench fb list|show|add|reply|propose …
 docbench doc list|sections|show|write|new …
-docbench overview [--json]        # 작업 공간 개요 — 목적·구성·폴더 역할·메타데이터·점검
+docbench overview [--scope 폴더] [--json]   # 작업 공간 개요 — 목적·구성·폴더 역할·메타데이터·점검
 docbench check [폴더] [--fail-on 수준] [--format text|json|github] [--rules 파일] [--lang en]   # 팀 규칙·점검 (CI, 걸리면 5)
 docbench log <문서> -m 요약 [--fb id]
 docbench inbox [--clear]

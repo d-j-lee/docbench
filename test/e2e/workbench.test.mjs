@@ -542,6 +542,36 @@ test('팀 규칙(D90): 개요가 docbench.json 으로도 점검 → 앞머리 �
   await fs.writeFile(rulesFile, good);
 });
 
+test('메타데이터로 보기(S28): 개요의 상태·담당·꼬리표 칩을 누르면 그 문서들, 다가오는 기한', async (t) => {
+  const soon = new Date(Date.now() + 10 * 864e5).toISOString().slice(0, 10);
+  await fs.writeFile(path.join(dir, 'docs/배포-계획.md'), `---\nstatus: Review\nowner: dj\ntags: [api, 배포]\nreview: ${soon}\n---\n# 배포 계획\n\n글\n`);
+  await fs.writeFile(path.join(dir, 'docs/롤백.md'), '---\nstatus: review\nowner: kim\n---\n# 롤백\n');
+  const ctx = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => errors.push(e.message));
+  t.after(() => ctx.close());
+  await page.goto(url + '#overview');
+  const meta = page.locator('.db-ov-meta');
+  await until(async () => (await page.locator('.db-ov-meta button.db-fm-c.status', { hasText: 'review' }).count()) > 0 || (await page.locator('.db-ov .db-meta .db-btn').click(), false), 8000);
+  // 상태는 대소문자를 가리지 않고 모인다(Review·review) → 누르면 두 문서
+  const chip = meta.locator('button.db-fm-c.status', { hasText: 'review' });
+  assert.match(await chip.innerText(), /review\s*2/);
+  await chip.click();
+  assert.equal(await chip.getAttribute('aria-pressed'), 'true');
+  const box = page.locator('.db-ov-pick');
+  assert.match(await box.locator('.hd').innerText(), /상태 review — 문서 2개/);
+  assert.deepEqual((await box.locator('.db-ov-file .t').allInnerTexts()).sort(), ['docs/롤백.md', 'docs/배포-계획.md']);
+  // 꼬리표로 바꾸면 그 값만 · 다시 누르면 닫힌다(키보드로도)
+  await meta.locator('button.db-fm-c.tag', { hasText: '#api' }).click();
+  assert.deepEqual(await box.locator('.db-ov-file .t').allInnerTexts(), ['docs/배포-계획.md']);
+  await meta.locator('button.db-fm-c.tag', { hasText: '#api' }).focus();
+  await page.keyboard.press('Enter');
+  assert.equal(await box.isHidden(), true);
+  // 다가오는 기한(30일 안) → 누르면 그 문서
+  await meta.locator('button.db-fm-c.date', { hasText: soon }).click();
+  await page.locator('.db-doctitle', { hasText: '배포 계획' }).waitFor();
+});
+
 test('브라우저 오류 없음', () => {
   assert.deepEqual(errors, []);
 });

@@ -484,7 +484,10 @@ paths:
       description: |
         폴더 지도 항목 + 매니페스트(앞머리) + README 앞부분 + 문서 사이 상대 링크(문서 400개·8 MB 까지) + 팀 규칙(문서 폴더 맨 위 docbench.json, D90)
         + 마지막 커밋 시각(git, 작은 폴더만 — D92)으로 계산한다(core.computeOverview).
+        scope 를 주면 작업 공간 안 그 폴더만(그 폴더를 맨 위로 — README·역할·점검, 경로는 작업 공간 기준, D93).
         내용은 열지 않는다 — 비밀로 보이는 파일도 이름으로만. 큰 폴더면 scope.complete 가 false 이고 다 봐야 아는 점검(빈 폴더·깨진 링크)은 하지 않는다.
+      parameters:
+        - { name: scope, in: query, required: false, schema: { type: string }, description: "작업 공간 안 폴더(상대 경로). '..'·절대 경로는 400" }
       responses:
         '200': { description: 'src/types.ts WorkspaceOverview', content: { application/json: { schema: { $ref: '#/components/schemas/WorkspaceOverview' } } } }
   /doc/version:

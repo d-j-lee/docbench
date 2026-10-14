@@ -150,7 +150,8 @@ export class App {
   }
 
   /** 작업 공간 개요를 보일 수 있나 (저장소가 주고, 호스트가 끄지 않았고, 범위가 작업 공간 전부일 때) */
-  hasOverview(): boolean { return !!this.ad.docs.overview && this.opts.features?.overview !== false && !this.scope; }
+  /** 개요 화면 — 범위(scope)로 열었으면 그 폴더의 개요 */
+  hasOverview(): boolean { return !!this.ad.docs.overview && this.opts.features?.overview !== false; }
 
   /** 목록을 다시 받는다 (새 문서를 만든 뒤 등) */
   async reloadManifest(): Promise<void> {

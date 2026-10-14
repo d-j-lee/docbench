@@ -45,6 +45,11 @@ export interface OverviewInput {
   pathsMax?: number;
   /** 경로 대소문자 무시 (Windows) */
   ci?: boolean;
+  /**
+   * 범위 — 작업 공간 안의 이 폴더만 본다(대시보드 탭·넓은 작업 공간 안의 폴더). 항목·메타데이터·링크는 작업 공간 기준 경로 그대로 주고,
+   * readmes 는 pickReadmes(items, base) 처럼 이 폴더 기준. 결과의 경로도 작업 공간 기준이다
+   */
+  base?: string;
   now?: number;
 }
 
@@ -199,8 +204,56 @@ function dateMs(v: string): number | null {
 
 // ---------------------------------------------------------------- 계산
 
-/** 개요를 만든다 — 입력은 메타데이터와 앞부분 글뿐 */
+/** 개요를 만든다 — 입력은 메타데이터와 앞부분 글뿐. base 가 있으면 그 폴더를 맨 위로 보고 계산한 뒤 경로를 작업 공간 기준으로 돌린다 */
 export function computeOverview(input: OverviewInput): WorkspaceOverview {
+  const base = (input.base || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!base) return computeAt(input, '');
+  const pre = base + '/';
+  const has = (id: string) => id.startsWith(pre) && id !== pre;
+  const strip = (id: string) => id.slice(pre.length);
+  const all = new Set(input.items.map((i) => i.id.replace(/\/$/, '').toLowerCase()));
+  const pick = <T>(rec: Record<string, T> | undefined): Record<string, T> | undefined =>
+    rec && Object.fromEntries(Object.entries(rec).filter(([k]) => has(k)).map(([k, v]) => [strip(k), v]));
+  const folderRoles = (rec: Record<string, { role?: string } | undefined> | undefined) => pick(rec as Record<string, { role?: string } | undefined>);
+  const spec = input.rules?.spec;
+  const scoped: OverviewInput = {
+    ...input,
+    root: base.split('/').pop() || base,
+    items: input.items.filter((i) => has(i.id)).map((i) => ({ ...i, id: strip(i.id), parent: i.parent.startsWith(pre) ? i.parent.slice(pre.length) : '', ...(i.docId ? { docId: has(i.docId) ? strip(i.docId) : i.docId } : {}) })),
+    isDoc: (p) => input.isDoc(pre + p),
+    meta: pick(input.meta),
+    // 이 폴더의 목적은 그 README → 팀 규칙·설정에 적은 그 폴더의 역할 (작업 공간 전체의 목적이 아니다)
+    config: { purpose: spec?.folders?.[base]?.role || input.config?.folders?.[base]?.role, folders: { ...folderRoles(input.config?.folders), ...folderRoles(spec?.folders) } },
+    readmes: input.readmes && Object.fromEntries(Object.entries(input.readmes).map(([k, v]) => [k, { ...v, id: has(v.id) ? strip(v.id) : v.id }])),
+    // 범위 밖을 가리키는 링크: 작업 공간에 있으면 뺀다(깨지지 않았다), 없으면 깨진 것으로 남긴다(\0 — 범위 안 이름과 겹치지 않게)
+    links: input.links?.filter((l) => has(l.from)).map((l) => ({ from: strip(l.from), to: l.to.flatMap((t) => (has(t) ? [strip(t)] : all.has(t.replace(/\/$/, '').toLowerCase()) || !t.split('/').slice(0, -1).every((x) => walkable(x)) ? [] : ['\0' + t])) })),
+    changed: pick(input.changed),
+    rules: input.rules && { ...input.rules, spec: spec ? { ...spec, purpose: undefined, folders: undefined } : null },
+    base: undefined,
+  };
+  return unbase(computeAt(scoped, pre), pre);
+}
+
+/** 범위로 계산한 개요의 경로를 작업 공간 기준으로 (규칙 파일·규칙 패턴처럼 이미 작업 공간 기준인 것은 그대로) */
+function unbase(ov: WorkspaceOverview, pre: string): WorkspaceOverview {
+  const up = (p: string) => pre + p;
+  return {
+    ...ov,
+    ...(ov.purpose ? { purpose: { ...ov.purpose, ...(ov.purpose.docId ? { docId: up(ov.purpose.docId) } : {}) } } : {}),
+    folders: ov.folders.map((f) => ({ ...f, path: f.path ? up(f.path) : f.path, ...(f.readme ? { readme: up(f.readme) } : {}) })),
+    recent: ov.recent.map((r) => ({ ...r, path: up(r.path) })),
+    large: ov.large.map((r) => ({ ...r, path: up(r.path) })),
+    ai: ov.ai.map((a) => ({ ...a, path: up(a.path) })),
+    meta: { ...ov.meta, due: ov.meta.due.map((d) => ({ ...d, docId: up(d.docId) })) },
+    checks: ov.checks.map((c) => (c.code === 'rules-invalid' ? c : {
+      ...c,
+      paths: c.paths.map(up),
+      ...(c.notes ? { notes: Object.fromEntries(Object.entries(c.notes).map(([k, v]) => [up(k), v])) } : {}),
+    })),
+  };
+}
+
+function computeAt(input: OverviewInput, prefix: string): WorkspaceOverview {
   const now = input.now ?? Date.now();
   const files = input.items.filter((i) => !i.folder);
   const dirs = input.items.filter((i) => i.folder);
@@ -215,7 +268,8 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
   const spec = input.rules?.spec || null;
   const ci = !!input.ci;
   const pathsMax = input.pathsMax ?? PATHS_MAX;
-  const ignored = (p: string) => !!spec?.ignore.length && matchPath(p, spec.ignore, ci);
+  /** 팀 규칙의 경로는 작업 공간 기준 — 범위로 계산할 때는 앞에 범위를 붙여 견준다 */
+  const ignored = (p: string) => !!spec?.ignore.length && matchPath(prefix + p, spec.ignore, ci);
 
   // 묶음
   const groups = new Map<FileGroup, { files: number; bytes: number }>();
@@ -389,7 +443,7 @@ export function computeOverview(input: OverviewInput): WorkspaceOverview {
     if (spec) {
       const r = evaluateRules({
         spec, files, dirs, complete: input.complete, isDoc, meta: input.meta || {}, changedAt, dateMs, isIndexName,
-        marked: (n) => versionFamily(n).marked || COPY_ALONE.test(n), ci, now, pathsMax, ignored,
+        marked: (n) => versionFamily(n).marked || COPY_ALONE.test(n), ci, now, pathsMax, ignored, prefix,
       });
       checks.push(...r.checks);
       unchecked = r.unchecked;
@@ -425,9 +479,15 @@ export const OVERVIEW_LINK_LIMITS = { docs: 400, bytes: 8 * 1024 * 1024 };
 export const OVERVIEW_README_MAX = 60;
 
 /**
- * 개요에 넣을 README 를 고른다 — 맨 위와 맨 위 폴더마다 하나(README.md 먼저). 항목 목록에서
+ * 개요에 넣을 README 를 고른다 — 맨 위와 맨 위 폴더마다 하나(README.md 먼저). 항목 목록에서.
+ * base(범위)를 주면 그 폴더를 맨 위로 — 키는 그 폴더 기준, 값(id)은 작업 공간 기준
  */
-export function pickReadmes(items: InventoryItem[]): Record<string, string> {
+export function pickReadmes(items: InventoryItem[], base = ''): Record<string, string> {
+  const pre = base ? base.replace(/^\/+|\/+$/g, '') + '/' : '';
+  if (pre) {
+    const rel = pickReadmes(items.filter((i) => i.id.startsWith(pre)).map((i) => ({ ...i, id: i.id.slice(pre.length) })));
+    return Object.fromEntries(Object.entries(rel).map(([k, v]) => [k, pre + v]));
+  }
   const out: Record<string, string> = {};
   const rank = (n: string) => (/\.md$/i.test(n) ? 0 : /\.(markdown|txt|rst|adoc)$/i.test(n) ? 1 : !n.includes('.') ? 2 : 3);
   for (const f of items) {

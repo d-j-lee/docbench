@@ -114,6 +114,12 @@ test('개요(서버·REST): 규칙 파일의 목적이 README 보다 먼저, 점
   assert.ok(ov.checks.some((c) => c.code === 'rule-front-matter' && c.rule.index === 0));
   // 규칙 파일도 문서(JSON) — 목록에서 열고 고친다
   assert.ok((await s.ws.manifest()).docs['docbench.json']);
+  // 범위(대시보드 탭·넓은 작업 공간 안 폴더) — 그 폴더를 맨 위로, 경로는 작업 공간 기준
+  const sc = await (await fetch(`http://127.0.0.1:${s.port}/api/overview?scope=docs`)).json();
+  assert.equal(sc.root, 'docs');
+  assert.ok(sc.totals.files >= 3 && sc.totals.files < ov.totals.files);
+  assert.ok(sc.checks.find((c) => c.code === 'rule-front-matter').paths.every((p) => p.startsWith('docs/')));
+  assert.equal((await fetch(`http://127.0.0.1:${s.port}/api/overview?scope=../x`)).status, 400);
 });
 
 test('기록이 없으면 다른 명령은 그대로 거부(2) — 읽기만 여는 것은 check 뿐', async (t) => {
@@ -148,4 +154,13 @@ test('git: 막 받은 저장소는 커밋 시각으로 검토 주기를 잰다 �
   await git(os.tmpdir(), ['clone', '-q', '--depth', '1', 'file://' + src.split(path.sep).join('/'), shallow]);
   const sr = await db(shallow, ['check']);
   assert.match(sr.stdout, /얕게 받은 저장소입니다/);
+});
+
+test('CLI overview --scope: 작업 공간 안 그 폴더만 · 밖이면 1', async (t) => {
+  const dir = await tempWorkspace();
+  t.after(() => rm(dir));
+  const o = JSON.parse((await db(dir, ['overview', '--scope', 'docs', '--json'])).stdout);
+  assert.equal(o.root, 'docs');
+  assert.ok(o.recent.every((r) => r.path.startsWith('docs/')));
+  assert.equal((await db(dir, ['overview', '--scope', '../x'])).code, 1);
 });

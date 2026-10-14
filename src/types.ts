@@ -201,8 +201,11 @@ export interface DocSource {
    * 글은 load 로 — 이것은 원본 그대로다
    */
   loadBytes?(id: string): Promise<Blob | null>;
-  /** 작업 공간 개요 — 구성·폴더 역할·메타데이터·점검 (D88). 없으면 개요 화면이 문서 목록만으로 간단히 그린다 */
-  overview?(): Promise<WorkspaceOverview | null>;
+  /**
+   * 작업 공간 개요 — 구성·폴더 역할·메타데이터·점검 (D88). 없으면 개요 화면이 문서 목록만으로 간단히 그린다.
+   * scope = 이 폴더만(대시보드 탭·넓은 작업 공간 안의 폴더) — 결과 경로는 작업 공간 기준 그대로
+   */
+  overview?(opts?: { scope?: string }): Promise<WorkspaceOverview | null>;
   /**
    * 새 문서를 만든다 — 이미 있으면 DocConflictError(지금 글). 폴더는 있어야 한다(없는 폴더를 만들지 않는다). 이력에 남긴다
    */
