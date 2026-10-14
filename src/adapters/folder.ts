@@ -897,8 +897,10 @@ export class FolderWorkspace {
       for (const id of md) {
         total += this.docs.get(id)?.size || 0;
         if (total > OVERVIEW_LINK_LIMITS.bytes) { links = undefined; break; }
-        const r = await this.readRaw(id).catch(() => null);
-        if (r) links.push({ from: id, to: relativeLinks(r.text, id) });
+        // 링크만 본다 — 판(해시)은 셈하지 않고, 아주 큰 글은 건너뛴다
+        if ((this.docs.get(id)?.size || 0) > TEXT_MAX_BYTES) continue;
+        const f = await this.fs.read(this.resolve(id)).catch(() => null);
+        if (f) links.push({ from: id, to: relativeLinks(decodeBytes(f.bytes, this.legacy).text, id) });
       }
     }
     const meta: Record<string, Record<string, string | string[]>> = {};

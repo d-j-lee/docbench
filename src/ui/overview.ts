@@ -119,17 +119,17 @@ function paint(app: App, ov: WorkspaceOverview): void {
     for (const f of ov.folders) {
       const name = f.path ? rel(app, f.path) + '/' : t('overview.folder.top');
       tb.append(h('tr', {},
-        h('td', {}, f.path ? h('button', { class: 'db-linkbtn', type: 'button', onclick: () => void app.revealFolder(f.path) }, h('span', { class: 'ic', html: icon('folder') }), name) : h('span', { class: 'db-hint', text: name })),
+        h('td', { class: 'nm' }, f.path ? h('button', { class: 'db-linkbtn', type: 'button', onclick: () => void app.revealFolder(f.path) }, h('span', { class: 'ic', html: icon('folder') }), name) : h('span', { class: 'db-hint', text: name })),
         h('td', { class: 'role' }, f.role ? h('span', { title: f.roleFrom === 'config' ? t('overview.role.config') : t('overview.role.readme') }, f.role)
           : f.path && canCreate(app) && f.files >= 3 ? h('button', { class: 'db-linkbtn soft', type: 'button', title: t('overview.role.add.hint'), onclick: () => void createReadme(app, ov, f.path) }, t('overview.role.add')) : h('span', { class: 'db-hint', text: '—' })),
         h('td', { class: 'n' }, String(f.files)),
         h('td', { class: 'n' }, String(f.docs)),
-        h('td', { class: 'n' }, fmtBytes(f.bytes)),
-        h('td', { class: 'n db-hint' }, f.modified ? relTime(f.modified, t) : '')));
+        h('td', { class: 'n sz' }, fmtBytes(f.bytes)),
+        h('td', { class: 'n md db-hint' }, f.modified ? relTime(f.modified, t) : '')));
     }
     root.append(h('h2', { class: 'db-ov-h', text: t('overview.folders') }),
       h('div', { class: 'db-tw', tabindex: '0' }, h('table', { class: 'db-ov-folders' },
-        h('thead', {}, h('tr', {}, h('th', { text: t('overview.col.folder') }), h('th', { text: t('overview.col.role') }), h('th', { class: 'n', text: t('overview.col.files') }), h('th', { class: 'n', text: t('overview.col.docs') }), h('th', { class: 'n', text: t('overview.col.size') }), h('th', { class: 'n', text: t('overview.col.modified') }))),
+        h('thead', {}, h('tr', {}, h('th', { text: t('overview.col.folder') }), h('th', { text: t('overview.col.role') }), h('th', { class: 'n', text: t('overview.col.files') }), h('th', { class: 'n', text: t('overview.col.docs') }), h('th', { class: 'n sz', text: t('overview.col.size') }), h('th', { class: 'n md', text: t('overview.col.modified') }))),
         tb)));
   }
 

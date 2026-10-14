@@ -793,10 +793,13 @@ export class Workspace {
       links = [];
       let total = 0;
       for (const id of md) {
-        total += this.docs.get(id)?.size || 0;
+        const size = this.docs.get(id)?.size || 0;
+        total += size;
         if (!o.full && total > core.OVERVIEW_LINK_LIMITS.bytes) { links = undefined; break; }
-        const r = await this.readRaw(id).catch(() => null);
-        if (r) links.push({ from: id, to: core.relativeLinks(r.text, id) });
+        // 링크만 본다 — 판(해시)은 셈하지 않고, 아주 큰 글(앞부분만 읽는 문서)은 건너뛴다
+        if (size > core.TEXT_MAX_BYTES) continue;
+        const buf = await fs.readFile(await this.realDoc(id)).catch(() => null);
+        if (buf) links.push({ from: id, to: core.relativeLinks(decode(buf).text, id) });
       }
     }
     /** @type {Record<string, Record<string, string | string[]>>} */
